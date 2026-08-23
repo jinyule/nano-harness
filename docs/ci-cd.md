@@ -16,7 +16,7 @@
 | Job | 责任 |
 |---|---|
 | `static` | gofmt、tidy、vet、架构、Agent Note、skills/workflow tools、submodule 完整性 |
-| `lint` | 固定版本 golangci-lint 与配置 schema |
+| `lint` | Go 1.26.x 下运行固定版本 golangci-lint 与配置 schema |
 | `test` | Go 1.26/1.27 兼容、race 和单元测试 |
 | `coverage` | 主版本 Linux 下执行逐产品源文件 100% 门槛 |
 | `build` | Linux/macOS/Windows 从真实 `cmd` 构建并运行 `version` |
@@ -27,6 +27,8 @@
 新增阻断 lane 必须加入汇总 job。观察性/昂贵信号若暂不阻断，应位于单独 workflow，不能用 `continue-on-error` 伪装成绿色阻断项。
 
 Go matrix 包含 `go.mod` 最低版本和 `.go-version` 主版本。最低版本使用 `GOTOOLCHAIN=local`，确保没有自动下载更高工具链掩盖兼容错误。
+
+golangci-lint v2.12.2 的 typechecker 不兼容 Go 1.27 标准库 `internal/poll` 的 `splicePipe` 定义，因此 lint lane 使用 Go 1.26.x；Go 1.27 的编译与 race tests 仍由独立 matrix lane 阻断。升级 lint 时必须先证明其可解析两个受支持工具链，再调整这一固定值。
 
 ## 分支保护
 

@@ -9,7 +9,7 @@
 
 ## Decision
 
-公开仓库位于 `github.com/jinyule/nano-harness`，Go module 和 GoReleaser ldflags 使用同一 canonical path。项目采用 MIT License，release archive 同时包含 README 和 LICENSE；`@jinyule` 是初始 Code Owner。GitHub Actions 默认 token 为 read-only，不能批准 PR，并仅允许运行 GitHub-owned action 与当前 workflow 明确使用的第三方 action。`github-release` Environment 需要 `@jinyule` 审批且只接受 `v*` tag，仓库变量 `RELEASE_ENABLED=true` 开启已经具备 module、license、tag 和制品哈希门禁的发布路径。默认分支 ruleset 禁止删除与 force push，要求 PR、最新主线上的 `All checks passed`、解决全部 conversation 和 squash merge。单维护者阶段 required approval 为 0；增加第二名 maintainer 后提升为至少一个 Code Owner approval。
+公开仓库位于 `github.com/jinyule/nano-harness`，Go module 和 GoReleaser ldflags 使用同一 canonical path。项目采用 MIT License，release archive 同时包含 README 和 LICENSE；`@jinyule` 是初始 Code Owner。GitHub Actions 默认 token 为 read-only，不能批准 PR，并仅允许运行 GitHub-owned action 与当前 workflow 明确使用的第三方 action。golangci-lint v2.12.2 在 Go 1.27 下不能解析该版本标准库的 `internal/poll.splicePipe`，因此 lint lane 固定使用兼容下限 Go 1.26.x，Go 1.27 继续由独立 race/build lanes 验证。`github-release` Environment 需要 `@jinyule` 审批且只接受 `v*` tag，仓库变量 `RELEASE_ENABLED=true` 开启已经具备 module、license、tag 和制品哈希门禁的发布路径。默认分支 ruleset 禁止删除与 force push，要求 PR、最新主线上的 `All checks passed`、解决全部 conversation 和 squash merge。单维护者阶段 required approval 为 0；增加第二名 maintainer 后提升为至少一个 Code Owner approval。
 
 ## Consequences
 
@@ -17,4 +17,4 @@
 
 ## Verification
 
-`make ci`、Actionlint v1.7.12、Agent Note、skills、submodule 和格式检查通过；所有产品源文件/函数 coverage 为 100.0%，govulncheck 报告可达漏洞为 0。GoReleaser v2.17.1 snapshot 生成六个平台 archive，release smoke、checksum 和每个 archive 的 README/MIT LICENSE 内容检查通过。GitHub API 已读回 PUBLIC visibility、squash-only merge、Actions selected allowlist、read-only default token、Dependabot/security settings、`RELEASE_ENABLED=true`，以及 `github-release` 的 `@jinyule` reviewer 与 `v*` tag policy。default branch、首轮 `CI` 的 `All checks passed` 和 active `main-protection` ruleset 需要在初始提交推送后验证；正式 publish 不在没有版本 tag 的初始化任务中触发。
+`make ci`、Actionlint v1.7.12、Agent Note、skills、submodule 和格式检查通过；所有产品源文件/函数 coverage 为 100.0%，govulncheck 报告可达漏洞为 0。GoReleaser v2.17.1 snapshot 生成六个平台 archive，release smoke、checksum 和每个 archive 的 README/MIT LICENSE 内容检查通过。GitHub API 已读回 PUBLIC visibility、`main` default branch、squash-only merge、Actions selected allowlist、read-only default token、Dependabot/security settings、`RELEASE_ENABLED=true`，以及 `github-release` 的 `@jinyule` reviewer 与 `v*` tag policy。初始 CI 的 static、coverage、Go 1.26/1.27 race、三平台 build、security 和 release dry-run 通过；lint 在 Go 1.27 下以 `internal/poll/splice_linux.go: unknown field rfd in splicePipe` 失败，修复后的 `All checks passed` 和 active `main-protection` ruleset 仍待验证。正式 publish 不在没有版本 tag 的初始化任务中触发。
