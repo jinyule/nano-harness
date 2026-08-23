@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the validated artifacts. Must run from a v* tag.
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ inputs.publish && 'release-publication' || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: false
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  build:
+    name: Build and validate artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache: true
+      - name: Authorize publication source
+        if: inputs.publish
+        env:
+          RELEASE_ENABLED: ${{ vars.RELEASE_ENABLED }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          [[ "$RELEASE_ENABLED" == true ]] || { echo "set repository variable RELEASE_ENABLED=true before publication" >&2; exit 1; }
+          [[ "$REF_TYPE" == tag ]] || { echo "publication requires a tag ref" >&2; exit 1; }
+          [[ "$REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] || {
+            echo "tag $REF_NAME is not SemVer" >&2
+            exit 1
+          }
+          git describe --tags --exact-match HEAD | grep -Fx "$REF_NAME"
+          [[ "$(go list -m)" == "github.com/$REPOSITORY" ]] || {
+            echo "go.mod module must be github.com/$REPOSITORY before publication" >&2
+            exit 1
+          }
+          [[ -f LICENSE ]] || { echo "LICENSE is required before publication" >&2; exit 1; }
+      - name: Run source gates
+        run: make quick coverage build
+      - name: Build release candidate
+        if: inputs.publish
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.17.1
+          args: release --clean --skip=publish
+      - name: Build snapshot candidate
+        if: ${{ !inputs.publish }}
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.17.1
+          args: release --snapshot --clean --skip=publish
+      - name: Smoke packaged binary and verify checksums
+        run: scripts/smoke-release.sh dist
+      - name: Collect the exact publication payload
+        run: |
+          mkdir release-artifacts
+          find dist -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name 'checksums.txt' \) -exec cp {} release-artifacts/ \;
+          test "$(find release-artifacts -maxdepth 1 -type f | wc -l | tr -d ' ')" = 7
+      - uses: actions/upload-artifact@v6
+        with:
+          name: nano-harness-release-${{ github.run_id }}
+          path: release-artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    if: inputs.publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment: github-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: nano-harness-release-${{ github.run_id }}
+          path: release-artifacts
+      - name: Re-verify artifact hashes
+        run: cd release-artifacts && sha256sum -c checksums.txt
+      - name: Publish or safely resume the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --draft --verify-tag --generate-notes --title "$TAG"
+          fi
+
+          remote_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$remote_dir"' EXIT
+          remote_names="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          for artifact in release-artifacts/*; do
+            name="$(basename "$artifact")"
+            if grep -Fxq "$name" <<<"$remote_names"; then
+              gh release download "$TAG" --pattern "$name" --dir "$remote_dir"
+              cmp "$artifact" "$remote_dir/$name" || {
+                echo "release asset $name exists with different content" >&2
+                exit 1
+              }
+            else
+              gh release upload "$TAG" "$artifact"
+            fi
+          done
+          gh release edit "$TAG" --draft=false

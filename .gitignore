@@ -1,0 +1,20 @@
+# Go outputs
+/bin/
+/dist/
+*.coverprofile
+coverage.out
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.local.yaml
+*.local.yml
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+
+# Tool caches
+.cache/

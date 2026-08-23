@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nano 简化审计"
+  short_description: "Find evidence-backed Go simplifications"
+  default_prompt: "使用 $nano-find-simplifications 审计当前 Go 项目的简化机会。"

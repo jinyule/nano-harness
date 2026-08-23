@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nano 提交前检查"
+  short_description: "Run scoped checks before pushing Go changes"
+  default_prompt: "使用 $nano-pre-push-checks 检查当前分支是否可以安全推送。"

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nano 插件开发"
+  short_description: "Build reversible Go runtime plugins"
+  default_prompt: "使用 $nano-plugin-development 为当前 Go 项目新增或修改运行时组件。"

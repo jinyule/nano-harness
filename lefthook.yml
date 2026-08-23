@@ -1,0 +1,17 @@
+# Local hooks are deliberately bounded. CI owns cross-platform, vulnerability,
+# coverage, and release checks.
+pre-commit:
+  parallel: true
+  jobs:
+    - name: whitespace
+      run: git diff --cached --check
+
+    - name: gofmt
+      glob: "*.go"
+      run: gofmt -w {staged_files}
+      stage_fixed: true
+
+pre-push:
+  jobs:
+    - name: quick gates
+      run: make quick

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nano 工程文案"
+  short_description: "Preserve contracts while tightening prose"
+  default_prompt: "使用 $nano-prose-standard 审查指定范围内的工程文案。"

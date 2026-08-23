@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nano 文档规范"
+  short_description: "Keep Go project documentation authoritative"
+  default_prompt: "使用 $nano-doc-standards 编写或审查当前 Go 项目的文档。"

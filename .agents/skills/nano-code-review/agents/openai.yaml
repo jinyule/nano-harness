@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nano 代码审查"
+  short_description: "Review Go changes against repository contracts"
+  default_prompt: "使用 $nano-code-review 审查当前 Go 项目的变更。"

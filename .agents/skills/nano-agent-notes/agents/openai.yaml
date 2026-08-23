@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nano Agent Notes"
+  short_description: "Write and maintain required Agent Notes"
+  default_prompt: "使用 $nano-agent-notes 为当前非平凡改动编写或审计 Agent Note。"

@@ -1,0 +1,62 @@
+version: 2
+
+project_name: nano-harness
+
+builds:
+  - id: nano-harness
+    main: ./cmd/nano-harness
+    binary: nano-harness
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/jinyule/nano-harness/internal/version.Version={{.Version}}
+        -X github.com/jinyule/nano-harness/internal/version.Commit={{.Commit}}
+        -X github.com/jinyule/nano-harness/internal/version.Date={{.Date}}
+
+archives:
+  - id: binaries
+    ids:
+      - nano-harness
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ title .Os }}_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^Merge"
+
+release:
+  # Publication is owned by the protected workflow job, which uploads the
+  # already-verified artifacts. GoReleaser must never publish directly.
+  disable: true

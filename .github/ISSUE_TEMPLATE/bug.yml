@@ -1,0 +1,37 @@
+name: Bug
+description: 报告现有预期行为的失效
+title: "fix: "
+labels: [bug]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: 错误结果
+      description: 一句话说明实际错误及影响。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      placeholder: 最小输入、命令、配置和出现频率
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      placeholder: nano-harness 版本、Go/OS/架构、provider；请删除凭据
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 证据与验收
+      description: 提供脱敏日志、最小复现或失败测试，以及修复后的验收条件。

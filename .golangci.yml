@@ -1,0 +1,47 @@
+version: "2"
+
+run:
+  timeout: 5m
+  relative-path-mode: gomod
+  modules-download-mode: readonly
+  tests: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - nano-harness
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - errcheck
+    - errorlint
+    - exhaustive
+    - fatcontext
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - modernize
+    - musttag
+    - noctx
+    - nolintlint
+    - revive
+    - sloglint
+    - staticcheck
+    - unconvert
+    - unused
+    - usetesting
+  exclusions:
+    generated: strict
+    warn-unused: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

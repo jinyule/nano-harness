@@ -1,0 +1,30 @@
+name: Feature
+description: 新增或有意改变可观察行为
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 预期结果
+      description: 从用户或模型视角描述结果，不先指定实现。
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: 当前问题与证据
+      description: 说明真实消费方、频率和当前替代方案。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收条件
+      description: 包括成功、失败、取消、兼容和安全条件。
+    validations:
+      required: true
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: 非目标

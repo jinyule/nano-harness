@@ -1,0 +1,25 @@
+name: Research / ADR
+description: 形成证据、结论或长期决策
+title: "research: "
+labels: [research]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: 核心问题
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 证据标准
+      description: 说明需要的实现调查、测量、威胁模型或上游依据。
+    validations:
+      required: true
+  - type: textarea
+    id: decision
+    attributes:
+      label: 交付结论
+      description: 例如 ADR、benchmark、prototype 或明确拒绝。
+    validations:
+      required: true
