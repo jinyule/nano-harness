@@ -6,7 +6,7 @@
 - 本地路径：`third_party/deepseek-harness`
 - 固定提交：`b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`
 - 对应标签：`dsh-v0.1.1-rc.2`
-- 分析日期：2026-08-23
+- 架构分析日期：2026-08-24
 - skills 二次分析日期：2026-08-24
 
 本分析直接基于 submodule 中的源码、脚本和 workflow，而不是只读 README。重点证据包括：[架构](../third_party/deepseek-harness/docs/architecture.md)、[测试策略](../third_party/deepseek-harness/docs/testing.md)、[防御模式](../third_party/deepseek-harness/docs/defensive-patterns.md)、[开发规范](../third_party/deepseek-harness/docs/development.md)、[根规则](../third_party/deepseek-harness/AGENTS.md)、[包规则](../third_party/deepseek-harness/packages/AGENTS.md)、[PR CI](../third_party/deepseek-harness/.github/workflows/ci.yml)、[发布验包](../third_party/deepseek-harness/.github/workflows/release.yml)、[发布上传](../third_party/deepseek-harness/.github/workflows/release-publish.yml) 和 [本地 hooks](../third_party/deepseek-harness/lefthook.yml)。
@@ -29,13 +29,13 @@ Go 侧保留完整三角色，但遵循接口隔离：`internal/app` 的 consume
 
 上游 session log 驱动模型历史、恢复、fork、transcript、telemetry 和 UI；任何进入模型请求的信息都必须能从 log 重建。通知和投影在成功提交后派生，避免缓存、UI 和持久化各自成为“真相”。
 
-本仓把这条规则写入目标架构：当 session 子系统落地时，事件类型、存储 provider、replay、投影和格式测试必须一起完成。暂不为了未来创建空 event bus。
+本仓已用 `internal/core/session`、`internal/adapter/session/jsonl` 和 agent journal 落地这条规则：v2 事件同时驱动模型 surface、恢复、TUI、fork 与审计；stream chunk、request header、approval、retry、compaction 和 subagent descriptor 都在各自提交点持久化。更新通知只是已提交事实的可丢提示，不另建可写 event bus。
 
 ### 4. 核心循环稳定，行为通过阶段和能力扩展
 
 上游明确 turn/step、请求 waterfall、工具执行 pipeline 和 stopping 阶段，新行为优先挂扩展点；修改 agent-loop 要同步架构文档。它还强调异步状态不能冒充单次操作结果，dispose 必须等到静止。
 
-Go 侧以用例阶段、显式 middleware 和 context/cancellation 表达相同约束。每个 goroutine、进程和 listener 有所有者与 `Wait`，关闭不只“发出 cancel”。
+Go 侧以显式 Engine 阶段、tool scheduler、retry/compaction 用例和 context/cancellation 表达相同约束。每个 agent worker、subagent monitor、settings watcher、OAuth listener 和进程都有 Scope owner 与可等待的结束点，关闭不只“发出 cancel”。
 
 ## 工程规范结论
 
@@ -115,7 +115,7 @@ Go 侧以用例阶段、显式 middleware 和 context/cancellation 表达相同�
 | 所有组件插件化 | 采纳 | `internal/core/plugin` + 显式静态 composition；loop/session/provider/consumer 均为插件 |
 | Definition/Provider/Consumer 完整接缝 | 采纳 | 消费方小接口 + adapter + `cmd` composition root |
 | 注册可回收、dispose 达到静止 | 采纳 | context、Shutdown/Wait、race 和清理测试 |
-| 模型可见即 logged | 采纳 | 写入 `docs/architecture.md`，随 session 子系统一起实现 |
+| 模型可见即 logged | 采纳 | v2 JSONL + `session.Surface`；消息、图片、stream、工具、approval、retry 和 compaction 都可重放 |
 | 源码与发布制品两条验证路径 | 采纳 | `go test` + binary/release smoke |
 | 逐文件 100% coverage | 采纳 | `scripts/coverage.sh` 强制所有产品源文件/函数与总 coverage 100.0% |
 | 每个非平凡改动写 Agent Note | 采纳 | `.agents/notes` 生命周期 + CI base-diff 门禁；归档冻结 |

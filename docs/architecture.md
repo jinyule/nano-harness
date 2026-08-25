@@ -1,15 +1,15 @@
 # 架构规则
 
-本文定义 `nano-harness` 的目标架构和依赖规则。当前代码已建立命令入口、构建身份、插件生命周期和架构门禁；新增运行时能力必须沿本文扩展，不应创建没有真实消费方的空层或能力接口。
+本文定义 `nano-harness` 的当前产品架构和依赖规则。composition 已包含设置、账户、三个 LLM provider、图片、agent、会话、工具、approval、compaction、subagent 与 TUI；新增运行时能力必须扩展这些已记录接缝。
 
 ## 设计目标
 
-- 核心 agent 生命周期可以在不修改核心循环的情况下扩展能力。
-- 模型、文件、进程、持久化和 UI/协议边界可替换、可测试、可审计。
-- 一个行为只有一个权威状态来源；日志、投影和输出能被重放和验证。
-- 取消、失败和关闭是 API 的一部分，不是事后补丁。
-- 所有运行时组件都是可组合、可逆清理的插件，包括核心循环本身。
-- 使用 Go 的小包、小接口和显式构造实现插件架构，不引入平台受限的动态库加载。
+- 核心 agent loop 不因 provider、工具或 UI 增长而堆积分支。
+- 模型、文件、进程、持久化和交互边界可替换、可测试、可审计。
+- 模型可见事实只有一个权威来源，并可从持久化事件重建。
+- 取消、失败、重试、恢复和关闭是 API 契约的一部分。
+- 每个运行时 effect 有唯一 owner，并通过同一插件生命周期达到静止。
+- 使用 Go 小包、小接口和显式构造，不依赖平台限定的动态库加载。
 
 ## 分层与依赖方向
 
@@ -18,27 +18,34 @@ cmd/nano-harness
        │ 组装
        ▼
 internal/adapter ─────► internal/app ─────► internal/core
-       │                    │
-       ▼                    │
-internal/platform ◄─────────┘（只有 adapter 可直接使用 platform）
+       │
+       ▼
+internal/platform
 ```
-
-实际强制规则如下：
 
 | 目录 | 职责 | 允许的本仓依赖 |
 |---|---|---|
-| `cmd/nano-harness` | 读取配置、组装、信号处理、退出码 | 所有 `internal` 层 |
-| `internal/core` | 领域值、状态转换、不变量、领域事件 | `internal/core` |
-| `internal/app` | 用例、消费方接口、事务/生命周期协调 | `internal/app`、`internal/core` |
-| `internal/adapter/<name>` | LLM、文件、数据库、RPC 等实现 | `app`、`core`、`platform`、同一 `<name>` 子树 |
-| `internal/platform` | 无领域含义的 OS/进程/时钟设施 | `internal/platform` |
-| `internal/tools` | 仓库检查器 | 不进入产品依赖图 |
+| `cmd/nano-harness` | 配置解析、依赖组装、信号处理、退出码 | 所有 `internal` 层 |
+| `internal/core` | 领域值、不变量、领域事件与纯投影 | `internal/core` |
+| `internal/app` | 用例、消费方接口、事务与生命周期协调 | `internal/app`、`internal/core` |
+| `internal/adapter/<capability>` | 网络、文件、终端、持久化等能力实现 | `app`、`core`、`platform`、同一 adapter 子树 |
+| `internal/platform` | 无领域含义的 OS、进程、时钟薄封装 | `internal/platform` |
+| `internal/tools` | 仓库门禁 | 不进入产品依赖图 |
 
-`go run ./internal/tools/archcheck` 检查上述方向。新增例外必须先改变本文和 ADR，再改变检查器；不能只为让 CI 通过而放宽规则。
+`go run ./internal/tools/archcheck` 强制上述方向。新增例外必须先修改本文和 ADR，再修改检查器；不能用 lint 例外绕过依赖错误。
 
-## 所有组件插件化
+## Plugin 与 Scope 生命周期
 
-`internal/core/plugin` 是统一生命周期内核。所有运行时组件——agent loop、session store/log、模型适配器、工具与命令、provider、权限与 sandbox 策略、投影、telemetry、后台任务、UI/协议桥——都实现 `plugin.Plugin`，由 `cmd/nano-harness` 按配置生成确定顺序后启动。纯值类型、DTO、算法函数和 `internal/tools` 不产生运行时副作用，因此不是组件，也不包装成空插件。
+所有运行时组件实现 `internal/core/plugin.Plugin`，由 `cmd/nano-harness` 以确定顺序启动：
+
+```text
+settings → settings file → credential store → LLM runtime
+→ OpenAI/Anthropic/OpenRouter providers → approval → tool runtime
+→ images → prompt → retry → compaction → sessions → agent engine
+→ agent registry → root bootstrap → subagents → workspace/subagent tools → TUI
+```
+
+纯值、DTO、算法和仓库工具没有运行时 effect，不包装为空插件。
 
 ```go
 type Plugin interface {
@@ -47,82 +54,146 @@ type Plugin interface {
 }
 ```
 
-- ID 在一个 composition 内唯一且稳定，用于配置定位、诊断和测试；禁止用启动顺序当身份。
-- `Start` 只在依赖已由构造函数注入并且配置已解析后执行。插件系统负责生命周期，不充当无类型 service locator。
-- 注册、listener、goroutine、进程、临时资源和缓存贡献都是 effect；成功创建后立即用 `scope.Defer` 登记 cleanup。
-- cleanup 必须等待其工作静止。Scope 逆序执行全部 cleanup，并聚合错误；一个失败不能饿死后续回收。
-- 某插件启动失败时，先清理其部分 effect，再逆序回滚已启动插件；Runtime 进入 `stopped`，禁止半启动继续运行。
-- 同一 Runtime 只启动一次；shutdown 幂等。运行期热装卸出现真实需求时扩展 mount/unmount，不另建平行生命周期。
-- 新组件必须有生命周期测试：贡献在启动后可见，Scope 关闭后消失，部分启动失败无泄漏，关闭后无 callback/进程/goroutine 残留。
+- ID 在一个 composition 内唯一稳定；依赖仍由构造函数显式注入，Runtime 不是 service locator。
+- 注册、goroutine、进程、listener、writer lock、临时目录、callback 和缓存贡献成功创建后立即通过 `Scope.Defer` 登记 cleanup。
+- Scope 逆序运行全部 cleanup 并聚合错误。启动失败回滚本插件的部分 effect 和所有已启动插件。
+- cleanup 先停止新工作，再取消活动工作并等待 goroutine、进程和 callback 静止；一个 cleanup 失败不能阻止其他清理。
+- Runtime 单次启动、幂等 shutdown。动态 agent 使用 registry 创建的子 Scope，但仍服从同一 ownership 规则。
+- 每个组件必须测试启动贡献、部分启动失败、逆序 cleanup、cleanup error 和 shutdown 后静止。
 
-静态编译不削弱“所有组件插件化”：provider 与 consumer 都按 Plugin 协议组合，只是不使用 Go 标准库 `plugin` 包加载 `.so`。未来的外部扩展应通过稳定 wire/WASM/子进程协议或评审后的 registry 实现，不能破坏跨平台发布。
+## 能力接缝
 
-## Go 化的能力接缝
-
-DeepSeek Harness 把一个能力拆成 Service Definition、Provider、Consumer。Go 中保留三角色，但接口由消费方拥有：
+DeepSeek Harness 的 Definition/Provider/Consumer 三角色在 Go 中表达为消费方拥有的小接口、adapter 实现和 `cmd` 调用方：
 
 ```go
-// internal/app/turn 包只声明本用例真正需要的能力。
-type Model interface {
-    Stream(ctx context.Context, request Request, consume func(Chunk) error) error
+// internal/app 中的用例只声明真正消费的方法。
+type ModelService interface {
+    PrepareCall(ctx context.Context, provider, model string) (*Call, error)
 }
-
-// internal/adapter/deepseek 提供具体实现。
-type Client struct { /* provider configuration */ }
 ```
 
-每个新能力的设计必须回答：
+接口返回具体领域值；provider 配置、OAuth 字段和 wire DTO 不进入消费方接口。只有真实调用路径需要替换、隔离边界或管理生命周期时才引入接口。
 
-1. 哪个用例消费它，最小接口是什么？
-2. provider 如何实现，配置、超时、重试和错误如何归一化？
-3. provider 与 consumer 插件如何由 `cmd` 组装，effect 如何登记和回收？
-4. 哪些行为是领域事实，哪些只是 provider 诊断？
-5. 单元、组装、e2e、协议/golden 分别如何证明它？
+一个可替换能力必须回答：消费方需要什么；provider 如何校验、归一错误和清理；`cmd` 如何组装；哪些值是持久化事实；哪些测试从真实 composition 证明它。
 
-只有实现或消费方而没有完整插件调用路径，不算完成的能力。一个接口若只有一个调用者且没有替换、隔离测试或生命周期价值，优先传入具体函数或类型。
+## LLM：Models → Provider → wire API
 
-## Agent 生命周期
-
-核心循环应保持小而稳定，预计由以下显式阶段组成：
+`internal/app/llm` 是 provider-neutral 的路由和账户协调层。`internal/adapter/model/provider` 安装 `openai`、`anthropic`、`openrouter` 三个 provider：
 
 ```text
-接纳输入 → 记录事实 → 组装模型请求 → 流式响应
-       → 执行工具 → 记录结果 → 判断继续/停止 → 提交 turn
+hot settings catalog
+       ↓
+Provider.Prepare(model)  ──冻结 endpoint 与模型能力
+       ↓
+credential Resolve/serialized Refresh
+       ↓
+PreparedModel.Stream(provider-neutral Request)
+       ↓
+OpenAI Responses | Anthropic Messages | OpenRouter Chat Completions
 ```
 
-- agent loop 自身是插件；扩展行为由并列插件挂在已记录的阶段或应用用例上，不直接把 provider 特例写进循环。
-- 一个 step 是一次模型请求及其工具执行；一个 turn 包含零个或多个 step。
-- waterfall/中间件式调用必须显式调用下一层；终止链路必须返回稳定原因。
-- 正交结果独立表达。例如进程可以同时 `TimedOut=true` 且 `ExitCode=0`，不能由一个字段遮蔽另一个。
-- 一个异步操作由一个生命周期控制器拥有；启动、取消、完成和资源释放有唯一结算点。
+- provider 拥有自己的 model catalog、认证方法、OAuth 刷新和 wire/SSE 解析；agent 不判断 provider 类型。
+- `PrepareCall` 先冻结 provider/model/settings，再解析账户，并在 OAuth 即将过期时通过 credential store 的跨进程互斥事务刷新。一次 call 不会在流中途切换 route、endpoint 或 credential。
+- 请求由 system、replay surface、tool schema 和可选 max tokens 组成；输出归一为按序 text/reasoning/tool chunk、assistant message、tool calls、usage 和 stop reason。
+- OpenAI API key 使用 Responses；导入或自有 ChatGPT OAuth 使用 Codex Responses 边界。Anthropic 使用 Messages，OpenRouter 使用 Chat Completions。
+- provider 只暴露稳定错误类别：认证、限流、服务端、超时、transport、protocol、非法请求、context window 和空响应。远端正文不进入安全错误。
+- 产品没有订阅配额查询或本地 quota gate。step、大小、超时、并发和 context 限制仍由各自 owner 强制。
 
-## 事件、持久化与投影
+## Agent loop 与控制面
 
-当会话子系统建立后，追加式 session event log 是模型上下文和用户可见会话的权威来源：
+`internal/app/agent` 分为 Engine、每会话顺序 worker、Registry 和 root Bootstrap：
 
-- 模型可见的信息必须被记录，且能仅从事件日志重建。
-- 事实在操作成功的提交点记录；缓存、搜索索引、标题、UI 和 telemetry 从同一事实派生。
-- 持久化事件使用显式类型、schema 版本和稳定字段；结构变化必须有迁移或明确拒绝策略。
-- 未知事件的处理是格式协议的一部分：可忽略事件必须在 envelope 中显式标记，不能由读取方猜测。
-- 时间、序号、ID 和因果边界由日志所有者分配；跨 wire/文件边界的 ID 使用专用类型，不使用含义不明的裸字符串。
-- 查询模型是投影，不反向修改权威日志。
+```text
+Submit user message
+  → turn/start + user/message
+  → optional proactive compaction
+  → step/start + frozen request/header
+  → provider stream → durable assistant/chunk
+  → assistant/message + all tool/call
+  → approval/scheduling/execution → tool/result
+  → step/end
+  → drain steers at tool-step boundary
+  → next step or turn/end
+```
 
-在相关代码出现前，不创建“通用事件总线”或空的 persistence abstraction。第一个真实用例应同时落地事件、存储实现、重放测试和格式文档。
+- 一个 agent 串行处理 turn；一个 turn 最多 256 个 step，产品默认 32。一个 step 是一次模型调用与其产生的全部工具执行。
+- 每个 step 从权威 log 重新折叠 model surface。request header 在调用前固定 provider、model、system、tool schema 和 context window。
+- streaming chunk 按 provider 顺序持久化。完成的 assistant message 和全部 tool call 先提交，工具才能执行；每个 call 最终得到唯一 tool result。
+- 没有输出提交的 retryable provider 失败按热策略指数退避；一旦流内容已提交就不自动重试，避免重复事实。
+- 主动 compaction 在估算上下文超过阈值时运行；context-window 错误触发强制 compaction 后重试新 step。raw log 不删除，surface 用持久化 summary 替换旧 prefix。
+- `Followup` 排队新的 turn；`Steer` 只在活动 turn 的工具 step 边界注入；`Interrupt` 只取消活动 turn，保留已排队 followup；`WhenIdle` 等待队列和活动 turn 都结算。
+- 调用取消、step limit、错误和恢复中断分别记录稳定 outcome。异常边界会尝试用不继承上游取消的 context 关闭 step/turn。
+- Registry 拥有每个动态 agent 的 Scope、worker 和 journal，关闭时先拒绝新 agent，再 interrupt 并等待所有 agent 回收。
 
-## 配置与默认值
+## 工具、approval 与调度
 
-- 配置解析和静态校验在 `cmd`/adapter 边界完成；领域层接收已解析类型。
-- 默认值由拥有该决策的组件在单一 `Resolve`/构造阶段应用，运行阶段不散落 `if zero then default`。
-- 安全限制、协议常量和存储不变量不可作为普通部署配置关闭。
-- 缺失引用、冲突 provider 和不可达依赖尽早报错；不得因错误配置而静默跳过能力。
-- 所有超时、大小、并发和保留上限应用于完整结果，包括 envelope、元数据和多字节编码。
+`internal/app/tool` 冻结按名称排序的 schema，并把模型调用切分为相邻 parallel group 与 exclusive barrier。结果顺序始终与原始 call 顺序一致；未知工具、panic、拒绝、超时和执行错误成为有界 tool result。
 
-## 公共 API 与兼容性
+当前 workspace 工具为：
 
-预发布阶段不提供 `pkg/`。只有出现真实仓外消费者，且维护者愿意承担 Go 1 兼容承诺时，才把最小稳定表面移入 `pkg/`。内部重构可以破坏内部 API，但同一 PR 必须原子更新调用方。
+- `read_file`：读取有界 UTF-8 行范围。
+- `list_files`：不跟随 symlink 的有界目录遍历。
+- `search_files`：有界 Go regexp 搜索。
+- `apply_patch`：校验并应用无 binary/rename/copy/symlink 的 unified diff。
+- `run_shell`：在 workspace sandbox 或一次性授权的 host 模式执行有界 shell。
 
-以下变化即使预发布也需要 ADR：持久化格式、wire 协议、插件/能力发现机制、安全模型、最低 Go 版本、包依赖方向、发布制品集合。
+读、列举和搜索可并行；patch 与 shell 是 exclusive。写入和 shell 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。
 
-## 架构完成条件
+subagent 工具为 `subagent_spawn`、`subagent_followup`、`subagent_interrupt`、`subagent_report` 和 `subagent_list`。它们调用进程内 `app/subagent`，不启动 Codex、Claude 或另一个 harness 进程。
 
-新增能力合并前应具备：消费方最小接口、provider/consumer 插件、真实 composition 入口、可逆 effect、明确的取消/关闭语义、错误归一化、配置校验、逐文件 100% 单元覆盖、真实插件组装测试、Agent Note，以及对应文档。模型或协议可见时再增加 golden/e2e 证据。
+## Subagent
+
+一个 child 是 Registry 中的完整 agent、独立 JSONL session 和独立 Scope。创建时持久化 parent/depth 及 versioned descriptor；模式为 `one-shot` 或 `continuable`，最大 delegation depth 为 4。
+
+- spawn 可只传任务，也可显式 fork parent 当前 surface；fork 是 bounded text snapshot，不共享可变 transcript。
+- child 可选择 persona 与 tool allowlist。空 allowlist 表示当前已注册工具集合。
+- delegated session 在持久化策略层固定为 `never`，因此需要 approval 的工具无法执行，host shell 还在工具执行点再次拒绝。
+- followup 仅允许 parent 对自己的 continuable child 发起；interrupt 取消 child 当前 turn；report/list 返回无凭据的状态与最近结果。
+- service cleanup 停止 monitor、等待退出并关闭所有 child Scope；descriptor 支持 cold resume 时恢复 mode、persona 与 tool allowlist。
+
+## 图片输入
+
+TUI 的 `/attach` 显式读取本地 JPEG/PNG。image plugin 限制源文件大小和像素数，最长边缩放到 2048，重新编码为有界 JPEG，记录尺寸、SHA-256 和标准 base64。规范化图片作为 `user/message` content block 持久化，因而 resume、fork、compaction 和 vision provider 请求都从同一事实构建。模型不支持 vision 时 provider 在 wire 调用前拒绝。
+
+## 事件、持久化与 replay
+
+追加式 session log 是模型上下文和用户可见 transcript 的权威来源。v2 事件词汇包括：
+
+```text
+turn/start, user/message, step/start, request/header,
+assistant/chunk, assistant/message, tool/call,
+approval/asked, approval/decided, approval/policy,
+tool/result, llm/retry, llm/retry-started,
+compaction/start, compaction/summary, compaction/end,
+subagent/descriptor, step/end, turn/end
+```
+
+- 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
+- composition ID 绑定 harness v2、解析后的 workspace、workspace/subagent tool 语义和 session v2。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/tool/system。
+- 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。
+- 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
+- session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。
+- resume 会补写未决 approval 的 cancelled、未决 call 的 interrupted error、未结束 compaction/step/turn 的结束事实；不会截断 torn JSON、猜测未知格式或自动接受旧版本。
+- `session.Surface` 从 raw events 折叠消息、tool call/result 与 compaction replacements。TUI subscriber 只是可丢更新提示；磁盘 replay 仍是恢复来源。
+
+格式变化必须同一变更原子更新领域类型、严格 decoder/order validator、所有 provider、测试、本文和 ADR。预发布阶段不保留静默兼容层。
+
+## 设置与账户
+
+settings owner 将内建 defaults 与稀疏用户 YAML 合并。文件 provider 使用 strict YAML、owner-only 权限、原子替换和 writer lock；250 ms polling 只发布通过完整校验的新 revision，非法外部编辑保留 last-good snapshot。TUI 的 `/model` 使用 optimistic revision update，避免覆盖并发修改。
+
+credential store 按 provider 保存一个 API key 或 OAuth grant，使用 strict versioned YAML、`0600` 文件、随机临时文件、原子 rename 与跨进程 lock。认证与 refresh token 不进入 session、prompt、TUI 列表或错误。环境 API key 是无持久化 fallback；显式 login 会原子替换对应 provider record。
+
+## TUI 与投影
+
+`internal/adapter/tui` 是 alternate-screen Bubble Tea 插件。它从 durable event replay 初始化，再订阅已提交事件，展示 route、streamed text/reasoning、tool call/result、approval、retry、compaction 和 turn outcome。TUI 同时实现本地 approval broker 与 auth interaction；secret prompt 使用 password echo。
+
+UI 命令调用 app 用例，不直接修改文件或 provider 内部状态。退出会 interrupt root 活动 turn；Scope cleanup 撤销 broker、停止 event forwarding，并等待 UI 相关 goroutine 静止。
+
+## 公共 API 与完成条件
+
+预发布阶段不创建 `pkg/`。只有出现真实仓外消费者且维护者愿意承担 Go 兼容承诺时，才移动最小稳定表面。内部破坏性调整必须在同一变更更新全部调用点、测试和文档。
+
+以下长期变化必须有 ADR：agent 阶段、model input、持久化格式、provider wire、插件发现、安全模型、最低 Go 版本、依赖方向或发布制品。
+
+新增能力完成时应具备：消费方最小接口、provider/consumer/caller 真实路径、可逆 effect、取消与失败语义、边界校验、逐产品文件 100% coverage、真实 composition 测试、Agent Note，以及需要的文档、ADR、golden 或 e2e 证据。
