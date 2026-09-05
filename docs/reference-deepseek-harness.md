@@ -1,131 +1,120 @@
 # DeepSeek Harness 分析与本仓取舍
 
-## 参考基线
+## 参考基线与范围
 
-- 上游：`https://github.com/deepseek-ai/deepseek-harness.git`
-- 本地路径：`third_party/deepseek-harness`
-- 固定提交：`b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`
-- 对应标签：`dsh-v0.1.1-rc.2`
-- 架构分析日期：2026-08-24
-- skills 二次分析日期：2026-08-24
+| 项目 | 已核实的值 |
+|---|---|
+| 上游 | [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) |
+| 只读路径 | `third_party/deepseek-harness` |
+| 前一提交 | `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`，`dsh-v0.1.1-rc.2` |
+| 当前提交 | `d347e703908d0406b7a7ef80e3a0e594d86b2215`，`dsh-v0.1.3-alpha.1` |
+| 上游提交日期 | 2026-09-04 |
+| 再评估日期 | 2026-09-05 |
+| 更新依据 | fetch 后 `origin/master` 与远端默认分支 HEAD 一致；固定到该 SHA |
+| 增量规模 | `git rev-list` 统计 2,063 个提交，包含 merge commit |
 
-本分析直接基于 submodule 中的源码、脚本和 workflow，而不是只读 README。重点证据包括：[架构](../third_party/deepseek-harness/docs/architecture.md)、[测试策略](../third_party/deepseek-harness/docs/testing.md)、[防御模式](../third_party/deepseek-harness/docs/defensive-patterns.md)、[开发规范](../third_party/deepseek-harness/docs/development.md)、[根规则](../third_party/deepseek-harness/AGENTS.md)、[包规则](../third_party/deepseek-harness/packages/AGENTS.md)、[PR CI](../third_party/deepseek-harness/.github/workflows/ci.yml)、[发布验包](../third_party/deepseek-harness/.github/workflows/release.yml)、[发布上传](../third_party/deepseek-harness/.github/workflows/release-publish.yml) 和 [本地 hooks](../third_party/deepseek-harness/lefthook.yml)。
+分析比较上述两个提交的规则、架构、测试、skills 和 CI/CD，再追踪关键结论的源码、测试与 Agent Note；不宣称逐行审查整个增量或执行了上游测试。上游与本仓同名的事件、v2 格式和组件不意味着实现或兼容承诺相同。参考子模块不进入本仓产品构建，也不运行其安装脚本或 hooks；本次范围没有上游根许可证变更。
 
-## 上游架构结论
+主要证据入口：上游[根规则](../third_party/deepseek-harness/AGENTS.md)、[包规则](../third_party/deepseek-harness/packages/AGENTS.md)、[架构](../third_party/deepseek-harness/docs/architecture.md)、[开发规范](../third_party/deepseek-harness/docs/development.md)、[防御模式](../third_party/deepseek-harness/docs/defensive-patterns.md)、[测试策略](../third_party/deepseek-harness/docs/testing.md)、[CI](../third_party/deepseek-harness/.github/workflows/ci.yml)、[release 验证](../third_party/deepseek-harness/.github/workflows/release.yml)、[npm 发布](../third_party/deepseek-harness/.github/workflows/release-publish.yml)和[Python 发布](../third_party/deepseek-harness/.github/workflows/python-release.yml)。
 
-### 1. “一切皆插件”服务于替换性和可回收生命周期
+## 结论
 
-DeepSeek Harness 基于 vendored Cordis，把模型适配器、工具、session log 和 agent loop 都做成插件。注册是可逆 effect，插件卸载时贡献自动清理。其关键结果是：没有可绕过生命周期的特权核心；扩展点有所有者；贡献有 disposer；核心不因 provider 增长而堆积分支。
+本仓需要同步测试可靠性、门禁反例、完整制品验证和发布数据责任等通用规则。全组件插件化、消费方接口、显式 composition、权威日志、静止关闭、逐文件 100% coverage 和 Agent Note 基线继续适用。上游也在删除无实际消费者的持久化后端与空 invariant companion，进一步支持本仓按真实需要建立 Go 接缝的方向。
 
-本仓完整采纳所有运行时组件插件化，在 `internal/core/plugin` 实现统一 Plugin/Scope/Runtime。Go 侧通过显式构造和静态 composition 保持类型安全，不使用 Cordis 容器或 Go `.so`；运行期装卸出现真实需求时扩展同一 Runtime，不能建立特权旁路。
+上游的流式持久化、历史迁移链、动态 projection registry、Web/SDK profile 和企业 runner 拓扑属于有具体产品前提的设计。本仓保留现有运行时契约，分别记录重新评估条件；本次可执行修改集中在仓库门禁，不改变 agent、provider 或会话格式。
 
-### 2. 能力接缝包含 Definition、Provider、Consumer
+## 架构深入对照
 
-上游要求一个 filesystem、LLM、subprocess 等能力必须同时设计服务定义、实现和消费方，避免只有接口没有真实路径，或某个 provider 细节反向塑造公共服务。
+### 插件、能力与应用启动
 
-Go 侧保留完整三角色，但遵循接口隔离：`internal/app` 的 consumer 定义最小接口，`internal/adapter/<name>` 实现，`cmd` 组装和拥有生命周期。架构检查阻止 core/app 反向导入 adapter。
+上游继续把 agent loop、session、模型、工具、策略和 UI 都作为 Cordis 插件，注册通过 effect 回收。Definition/Provider/Consumer 三角色与 dispose 到静止的要求没有放宽。本仓的消费方小接口、adapter、`cmd` 显式注入及 `Plugin/Scope/Runtime` 已表达这些约束，不需要引入 Cordis 容器、service locator 或 Go 动态库。
 
-### 3. 模型可见即持久化，可重放日志是权威来源
+应用启动则明显收敛：`dsh` 的 `web`、`headless`、`sdk`、`sdk-minimal`、`acp` profile 替代分散的 package bin、demo 和 SDK argv/config 旁路；[`verify-application-entrypoints.ts`](../third_party/deepseek-harness/scripts/verify-application-entrypoints.ts) 维护允许的入口分类。`sdk-minimal` 是同一 launcher 下的明确 composition，不是任意调用方传入的第二棵应用树。一次性与 stdio profile 固定启动时配置，避免工作期间依赖被热替换。
 
-上游 session log 驱动模型历史、恢复、fork、transcript、telemetry 和 UI；任何进入模型请求的信息都必须能从 log 重建。通知和投影在成功提交后派生，避免缓存、UI 和持久化各自成为“真相”。
+本仓采纳“同一产品启动与 composition 路径”，由[架构入口规则](architecture.md#产品启动入口)拥有。当前只有真实 `cmd/nano-harness` 与 TUI，没有建立 profile 系统的需要；单元测试直接构造组件仍合理，产品证据另走真实入口。
 
-本仓已用 `internal/core/session`、`internal/adapter/session/jsonl` 和 agent journal 落地这条规则：v2 事件同时驱动模型 surface、恢复、TUI、fork 与审计；stream chunk、request header、approval、retry、compaction 和 subagent descriptor 都在各自提交点持久化。更新通知只是已提交事实的可丢提示，不另建可写 event bus。
+### 流式输出的持久化单位发生变化
 
-### 4. 核心循环稳定，行为通过阶段和能力扩展
+上游 v2 删除顶层 `assistant/chunk`。每次模型尝试把精确、有时间信息的 compact stream 嵌入一个 `assistant/message` 或 log-only `assistant/attempt`；实时展示走进程内 `agent/assistant-stream`，settlement 提交后再发 committed end。源码见 [`agent.ts`](../third_party/deepseek-harness/packages/core/agent-loop/src/agent.ts) 与 [`assistant-stream.ts`](../third_party/deepseek-harness/packages/core/agent-loop/src/assistant-stream.ts)，完整取舍见[嵌入式流 Note](../third_party/deepseek-harness/.agents/notes/implemented/architecture/2026-09-01-v2-embedded-assistant-streams.md)。
 
-上游明确 turn/step、请求 waterfall、工具执行 pipeline 和 stopping 阶段，新行为优先挂扩展点；修改 agent-loop 要同步架构文档。它还强调异步状态不能冒充单次操作结果，dispose 必须等到静止。
+这降低顶层事件、历史传输和 Client assembly 对 token 数量的敏感度，代价是进程在 settlement 前硬退出时，整段尚未提交的 stream 没有 durable evidence。它不是“保持相同恢复语义的压缩”。上游 Note 中的 5% 性能门槛比较静态 catalog 路由与直接 v2 恢复，不是 v1/v2 吞吐对比，也不能作为本仓改写的性能证据。
 
-Go 侧以显式 Engine 阶段、tool scheduler、retry/compaction 用例和 context/cancellation 表达相同约束。每个 agent worker、subagent monitor、settings watcher、OAuth listener 和进程都有 Scope owner 与可等待的结束点，关闭不只“发出 cancel”。
+本仓 [`engine.go`](../internal/app/agent/engine.go) 每个 chunk 调用 journal append，JSONL 在 `Sync` 成功后发布；重试也受“是否已有流内容提交”约束。保留该契约。只有测得实际写入/重放瓶颈，并明确部分输出、取消、重试、硬崩溃和 TUI 的语义后，才通过新 ADR 评估另一种提交单位。本仓 v2 与上游 v2 是独立格式。
 
-## 工程规范结论
+### 已发布数据、版本迁移与持久化后端
 
-上游的高价值工程特征包括：
+上游将“API 预稳定”与“已有用户日志”分开。Session body read 通过静态、相邻的 `vN → vN+1` 纯迁移链进入当前格式；JSONL provider 选择最高 canonical generation，保留前代的路径、字节与 inode，仅独占发布最终 successor。header-only list/stat 不加载事件或产生 successor。未来版本、冲突目标及无法保留的事件引用被拒绝，保留旧文件也不承诺自动 fallback 或 downgrade。证据为[迁移决定](../third_party/deepseek-harness/.agents/notes/implemented/architecture/2026-08-31-released-session-format-migrations.md)、[静态 catalog](../third_party/deepseek-harness/packages/session/session-format-catalog/src/index.ts)、[发布实现](../third_party/deepseek-harness/packages/session/session-persistence-jsonl/src/generation.ts)和[代际测试](../third_party/deepseek-harness/packages/session/session-persistence-jsonl/tests/generation.spec.ts)。
 
-- 根 `AGENTS.md` 与目录级补充规则形成就近约束；命令、架构、类型、测试、文档和 Git 流程都可查。
-- 源码 plane 与 build artifact plane 分开：静态测试走源码，发布 smoke 明确跑构建后的真实 entrypoint。
-- 配置默认值由 owner 在 resolve 阶段应用，错误配置尽早失败；跨 wire/文件/持久化边界校验，类型安全进程内不做冗余 hostile validation。
-- `ctx.effect` 注册必须验证 dispose；Go 化为资源所有者、`Close/Shutdown` 和清理测试。
-- 防御规则来自真实事故类型：正交结果独立报告、callback exception 隔离、私有随机临时路径、清理 symlink 不跟随、进程退出等待。
-- 每个非平凡改动使用 Agent Notes 记录，归档记录冻结；本仓完整采纳，并保留 ADR 记录长期架构/协议/安全/发布承诺。
-- staged hook 只跑快速、可修复检查，完整 coverage、build、snapshot、平台矩阵交给 CI。
-- commit 历史大量采用 `fix/docs/test/feat/refactor/ci/release` 类型，说明 Conventional Commits 已形成事实标准。
+本仓 2026-09-05 的 GitHub Release 查询为空，当前 JSONL 明确严格拒绝旧格式。采纳发布数据责任的规则，在[根规则](../AGENTS.md#当前阶段)和[发布评审](ci-cd.md#版本与标签)要求先确定数据升级策略；不预建迁移包或把读取变成写入。本仓还已有跨进程 writer lock，上游迁移 Note 明确留下的跨进程 append fencing 限制不能用来降低本仓所有权保障。
 
-## 测试体系结论
+上游同时改为 [JSONL 唯一第一方 Session store](../third_party/deepseek-harness/.agents/notes/implemented/simplification/2026-08-30-jsonl-only-session-persistence.md)，删除未被产品 profile 选用的 SQLite 权威后端，保留 backend-neutral seam。SQLite FTS query 与 domain-KV 仍在，它们不是第二份 Session 权威。本仓一个 JSONL provider 加 consumer 接口已符合此方向；不增加没有部署消费者的第二后端或通用迁移框架。
 
-上游把测试分为 unit、逐文件 100% coverage、真实 API e2e、keyless snapshot、浏览器 snapshot 和 built-artifact smoke。最重要的原则是：
+### 投影与有意义的不变量
 
-- mock 只替换昂贵/不确定边界，其下游使用真实实现；
-- e2e 检查文件、进程和协议的外部世界，而不信 agent 自述；
-- 产品可见插件必须经过 Loader/真实 composition，手工组装 unit 不足；
-- 发布入口必须跑构建后的 `lib/bin`，避免 source launcher 掩盖 module resolution；
-- fixture 拥有并清理所有资源，真实 API 无 key 时自跳过；
-- 用户、模型和协议变化需要 keyless snapshot，live API 不能替代确定性 replay。
+上游统一 `sessionProjections.stateOf()` 与面向 Client 的 `snapshot()`；需要的 projection 缺失必须显式失败，不能默认返回空状态。共同原则仍是先成功提交事实，再派生 prompt、缓存、UI 和查询。本仓已有类型化 surface/transcript 与显式依赖，暂不增加动态 registry。
 
-本仓采用 race、真实插件组装、真实 binary smoke、golden/live 分层，并完整采纳逐文件 100%：合并 profile 必须达到 100.0%，同时检查每个函数，任何产品文件未覆盖语句都阻断。`internal/tools` 不进入产品制品而单独排除；客观例外需要局部配置、Agent Note 和替代证据。
+上游[简化调查](../third_party/deepseek-harness/.agents/notes/implemented/simplification/2026-08-28-omit-unneeded-invariant-companions.md)移除 209 个解释为空的 companion 和一个自调用探针，只保留能比较独立观测的检查。采纳其判断标准到[开发规范](development.md#api-设计)：检查事件配对、权威日志与投影等可分歧关系，不为纯类型、插件存在或无消费者的诊断创建运行时组件。这不放宽已有 Plugin/Scope 生命周期或测试要求。
 
-## CI 分析
+Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增或深化的产品能力。本次没有对应本仓用户需求，不复制这些模块、状态机、配置项或协议。
 
-上游 PR workflow 把静态、coverage、consumer/build、Node compatibility、Python SDK/runtime、Wine Windows 分成并行 lanes，用 concurrency 取消过时 PR，默认只读权限，并用 `all-checks-passed` fail-closed 汇总。主分支另有 self-hosted Linux/Windows standby，避免主 PR panel 出现不相关 skipped jobs。构建结果由需要 artifact 的 consumer lane 复用，避免每个 job 重建。
+## 工程、测试与文档规则
 
-本仓规模较小，使用 GitHub hosted Linux/macOS/Windows 和 Go 1.26/1.27 matrix，不复制上游 enterprise runner、Wine、self-hosted failover 和 benchmark workflow。保留并行 lanes、只读权限、取消旧 PR、真实制品 smoke 和稳定汇总 check。
-
-## CD 分析
-
-上游把 release 验证与 publish 拆成不同 workflow/job：PR 和主分支无凭据执行完整 build/pack/install；正式 publish 只能手动从匹配 tag 触发；只有受保护 environment 的 publish job 有 registry secret；publish job 下载 build job 的 tarball而不重建。Python 发布进一步校验精确文件集合、大小、metadata 和 SHA256，上传前再验哈希，并使用 OIDC。npm 发布脚本比较 registry integrity，使相同制品重跑幂等、同版本不同内容失败。
-
-本仓发布采用相同权限模型：所有 PR 做 GoReleaser dry-run；正式发布从匹配 `v*` tag 手动触发；build 无写权限并上传临时 artifact；publish 经 `github-release` Environment 审批，下载同一制品、验证 SHA256 后上传。公开仓库使用 canonical module path、MIT License、CODEOWNERS 和受保护发布 Environment。
-
-## Skills 深入分析与 Go 适配
-
-上游 `.agents/skills/` 的主要价值不是命令清单，而是把任务路由和证据契约封装在一起：frontmatter 描述精确触发场景；正文先链接权威文件，再限定 scope、禁止动作、语义判断和完成证据；高频确定性动作下沉到脚本；昂贵或可能改远端状态的流程设置显式调用边界。审查、文案和简化 skill 反复强调“guidance，不是完整 checklist”，避免 agent 把列举项当作思考上限。
-
-本仓保留六个跨 skill 的设计经验：
-
-1. **精确 scope 优先。** review/pre-push 先验证 base/head，再区分 committed、staged、unstaged 和 untracked；`scripts/change-scope.sh` 不猜测、不 fetch，并用独立脚本测试 unborn 与普通分支。
-2. **权威文件优先。** skill 链接 `AGENTS.md`、架构、测试、Agent Note 和真实 Go 类型，不复制完整规则；owner 变化时先改 owner，再同步 skill。
-3. **语义证据优先。** 100% coverage 是阻断门槛但不是断言质量；review 和插件 skill 仍要求真实 composition、rollback、cleanup error 和 shutdown-to-quiescence 场景。
-4. **完整命题优先。** 文案保留 actor、条件、时序、强制程度、negative guarantee、ownership、失败和后果；清理的是重复与推理流水账，不是事实。
-5. **当前仓库视角优先。** durable prose 不引用未提交 decision 编号、评审轮次或 PR stack；有 committed owner 就按名字/路径引用，没有就让事实独立成立。
-6. **远端副作用分离。** 本地检查、记录、发布和 merge 是不同权限步骤；当前没有稳定远端协作面时，不预置会改变 GitHub 状态的 skill。
-
-### 上游 skill 逐项映射
-
-| 上游 skill | 本仓处理 | Go 适配结果 |
+| 主题 | 上游证据与变化 | 本仓决定与 owner |
 |---|---|---|
-| `dsh-archive-agent-notes` | 合并采纳 | [`nano-agent-notes`](../.agents/skills/nano-agent-notes/SKILL.md) 保留按未来决策价值分类、写新 Note 同时审计 supersession、archive 冻结和 inbound link 修复；当前单语 Note 不复制三文件 hash seal。 |
-| `dsh-code-review` | 采纳 | [`nano-code-review`](../.agents/skills/nano-code-review/SKILL.md) 改为 Go 分层、consumer interface、Plugin/Scope、context/error、真实 cmd 与逐文件 coverage 证据。 |
-| `dsh-doc-site-sync` | 暂缓 | 当前没有文档站 manifest、projection 或 hosting；保留“canonical Markdown 与发布 projection 分离”的设计前提，出现真实站点时再建立专用 skill。 |
-| `dsh-doc-standards` | 采纳 | [`nano-doc-standards`](../.agents/skills/nano-doc-standards/SKILL.md) 明确 README、AGENTS、架构、测试、安全、CI/CD、ADR、Agent Note 和 Go doc 的 owner。 |
-| `dsh-find-simplifications` | 采纳 | [`nano-find-simplifications`](../.agents/skills/nano-find-simplifications/SKILL.md) 用 Go 调用点、composition、ownership 和标准库/依赖净删除证明候选；三条硬要求不能被当成简化对象。 |
-| `dsh-merging-stacked-prs` | 暂缓 | 当前没有 GitHub remote、官方 stack 对象或合并授权；等仓库采用 dependent PR 后，按实时 head、同仓 stack、lease 和远端验证另建 skill。 |
-| `dsh-pre-push-checks` | 采纳 | [`nano-pre-push-checks`](../.agents/skills/nano-pre-push-checks/SKILL.md) 保留 change-scope、focused evidence、一次统一门禁、失败不推送和 force-with-lease。 |
-| `dsh-prose-standard` | 采纳 | [`nano-prose-standard`](../.agents/skills/nano-prose-standard/SKILL.md) 覆盖 Markdown、Go doc、注释、test、diagnostic、CLI/model-visible string、Agent Note 和 skill。 |
-| `dsh-translate-docs` | 暂缓 | 当前没有中英 sibling pair、术语表或 pairing gate；普通中文文档不虚构双语一致性记录。建立双语发布承诺后再引入显式调用、最小 counterpart update 和 scoped hash gate。 |
-| `dsh-trim-cot-leakage` | 合并采纳 | 其 current-repository vantage、完整命题和 recall battery 已并入 `nano-prose-standard` 的 [examples](../.agents/skills/nano-prose-standard/references/examples.md) 与 [search probes](../.agents/skills/nano-prose-standard/references/recall-batteries.md)。 |
-| `record-browser-gif` | 暂缓 | 当前没有 product GUI 或 browser test surface；等 UI 存在后再采纳真实 server/真实 flow、state-based frame、确定性编码、artifact 与 publication 分离。 |
+| 边界与完整输出 | 包规则要求限制最终输出，包含包装、metadata 与多字节编码；类型安全进程内避免重复 hostile validation | 补充[开发规范](development.md#api-设计)，保持已有严格配置/wire/持久化边界 |
+| CI 并发隔离 | 新增 [`dsh-ci-test-reliability`](../third_party/deepseek-harness/.agents/skills/dsh-ci-test-reliability/SKILL.md)，区分文件、worker、gate 与共享宿主 | [测试策略](testing.md#并发取消与清理)明确 `:0`、私有目录、全局状态恢复、barrier、timeout budget、平台语义和可等待清理 |
+| 偶发失败 | 同 SHA 成功/失败、首个稳定特征和最小实际并发范围用于分类；重跑绿色不能证明修复 | 合并进同一测试 owner；不新增重试 wrapper、全局串行化开关或独立 skill |
+| 门禁负例 | 新静态/corpus guard 需实际注入被拒情形，通过真实命令证明失败 | 新增[门禁证据规则](testing.md#门禁与预期结果的反例)；覆盖率与发布校验均有先失败、后通过的永久回归 |
+| 100% coverage | 上游继续逐文件 100%，不把覆盖率当断言质量 | 保留本仓硬门槛，并修复格式化百分比会隐藏零执行 block 的问题；[原始 profile](testing.md#覆盖率政策)是判定证据 |
+| Session snapshot | 顶层 snapshot 限定记录会话驱动的场景；其他 expected output 留在 owning app/package；变更工作区独立比较 | 采纳拥有者归属、独立文件树断言和 CI 不重写预期；不为 Go 项目复制 TypeScript snapshot runner |
+| 真实入口与制品 | 统一 dsh profile、已安装 runtime 和原生载体测试，避免 source checkout 掩盖发布依赖 | 保留真实 cmd/composition、protocol 与 binary smoke；准确报告[平台证据范围](testing.md#平台与发布证据范围) |
+| 文档结构 | `dsh-doc` 合并旧 doc-standards/doc-site-sync，强调读者目标、事实 owner、操作实测和可检索层级 | 保留 `nano-doc-standards` 与 prose 分工；命令声明需实际验证。单语 Go docs 不复制双语逐行 pairing、README kind、折叠模板或网站 projection |
+| 设计记录 | 非平凡改动写 Note，归档冻结，长期决定独立可查 | 保留本仓四段 Note 与 ADR；上游迁移和性能结论只作为参考证据 |
 
-### 本仓新增的项目专属 skill
+防御模式中的正交结果独立报告、取消后等待退出、callback 隔离、私有随机临时目录与清理不跟随 symlink 继续适用。上游该文档在本次范围没有变化，因此没有把已有规则重复包装为新能力。
 
-[`nano-plugin-development`](../.agents/skills/nano-plugin-development/SKILL.md) 把上游分散在架构、review 和 package 规则中的插件经验集中为 Go 实现入口：识别 component 与 pure value，设计 consumer/provider/caller 三角色，构造函数无副作用，effect 发布前登记 cleanup，部分启动失败逆序回滚，shutdown 后静止，并要求真实 composition、逐文件 100% coverage 和 Agent Note。它直接执行“所有运行时组件插件化”，不是可选架构建议。
+## CI 与 CD 的实际差异
 
-## 采纳、调整与暂缓
+### CI 保留简单拓扑，补齐证据而非复制 runner
 
-| 上游规则 | 本仓决定 | 原因/对应实现 |
-|---|---|---|
-| 所有组件插件化 | 采纳 | `internal/core/plugin` + 显式静态 composition；loop/session/provider/consumer 均为插件 |
-| Definition/Provider/Consumer 完整接缝 | 采纳 | 消费方小接口 + adapter + `cmd` composition root |
-| 注册可回收、dispose 达到静止 | 采纳 | context、Shutdown/Wait、race 和清理测试 |
-| 模型可见即 logged | 采纳 | v2 JSONL + `session.Surface`；消息、图片、stream、工具、approval、retry 和 compaction 都可重放 |
-| 源码与发布制品两条验证路径 | 采纳 | `go test` + binary/release smoke |
-| 逐文件 100% coverage | 采纳 | `scripts/coverage.sh` 强制所有产品源文件/函数与总 coverage 100.0% |
-| 每个非平凡改动写 Agent Note | 采纳 | `.agents/notes` 生命周期 + CI base-diff 门禁；归档冻结 |
-| 可复用任务封装为 repo-local skills | 采纳 | `.agents/skills/` 七个 skill + `scripts/change-scope.sh` 与确定性测试 |
-| 双语文档 pairing 和生成 catalog | 暂缓 | 当前没有双语发布与大规模 catalog 的维护收益 |
-| 大型 monorepo/workspace 约束 | 暂缓 | 单 module 起步，真实独立版本边界出现再拆分 |
-| Wine + self-hosted failover | 暂缓 | hosted Go matrix 足够；运行时间/稳定性数据出现后再优化 |
-| 自定义 Issue 生命周期机器人 | 暂缓 | 先用 Issue Forms、branch protection 和人工 triage |
-| 发布构建/上传分权、tag 校验、制品哈希 | 采纳 | `.github/workflows/release.yml` 与 `.goreleaser.yml` |
+上游对单个 gate aggregate 引入 fail-fast，Windows build/native tests 加入 required 汇总，Python runtime 从一个 Linux 载体扩大为全部发布载体；Node compatibility 还钉住一个不同 loader 内部形态的 24.x 版本。pnpm 目录按 run/attempt/job 隔离，Windows ReFS clone、coverage duration cache 与 self-hosted failover 都有具体运行环境前提。
 
-## 更新分析的规则
+本仓 `make` 顺序 target 已会在失败时停止，独立 Go/OS matrix 保留 `fail-fast: false` 以获得完整平台结果，`All checks passed` 继续逐项失败关闭。GitHub hosted runner 没有上游共享 ReFS/store 的条件，不复制企业标签、Wine、benchmark、分片调度器或共享缓存。上游 observational job 使用 `continue-on-error`；本仓保留更明确的规则，观察性信号放独立 workflow，不稀释 required check。
 
-submodule 更新时，维护者必须比较上游 `AGENTS.md`、架构/测试/防御文档、CI 和 release workflow，并更新本页的固定 SHA、结论或明确“无影响”。参考代码始终保持只读；上游规则不会因更新指针自动成为本仓规则。
+当前缺少六个发布 OS/架构全部原生运行的证据，不能把跨编译或宿主 version smoke 写成全平台产品验收。平台特有行为变更应补实际目标测试；这项后续工作没有通过文档更新伪装成已实现。
+
+### CD 采纳精确制品集合和使用前校验
+
+上游保持 build/pack 无发布权限、手动匹配 tag、受保护 Environment、下载同一批字节而不重建。Python 发布对 wheel 集合、metadata 和哈希逐步校验；npm publisher 根据 registry integrity 区分已发布相同内容与同版本不同内容。release 验证还增加 npm dependency/install layout，避免 workspace 的依赖布局掩盖安装后缺包。
+
+本仓没有 npm workspace 布局问题，但发现两处实际门禁缺口：`smoke-release.sh` 在哈希验证前执行 archive 中的 binary；发布 payload 只检查文件数和 checksum 列表，未证明六个目标、同一版本与实际文件集合一致。现由 `prepare-release.sh`、`verify-release.sh` 与 smoke/publish 的共同路径补齐，规则归[CI/CD](ci-cd.md#制品与供应链)与 [ADR-0003](decisions/0003-exact-release-payload-validation.md)。发布目标变化必须连同配置、验证器和测试一起更新。
+
+本次没有修改远端 ruleset、Environment、发布开关或 Action 版本，也没有发起发布。完整 Action SHA pin、attestation 与扩大原生平台矩阵仍需各自的供应链/平台变更及验证，不因上游更新自动启用。
+
+## 当前上游 Skills 映射
+
+当前上游仍有 11 个 skill：新增 CI reliability，两个文档 skill 合并为 `dsh-doc`。部分 `agents/openai.yaml` 删除不代表本仓元数据不再需要；本仓七个 skill 由自己的 `skillcheck` 校验，并通过现有权威文档链接获得更新后的规则。
+
+| 上游 skill | 本仓处理 |
+|---|---|
+| `dsh-archive-agent-notes` | `nano-agent-notes` 保留 supersession、冻结和双向引用规则 |
+| `dsh-code-review` | `nano-code-review` 继续执行 Go 分层、Scope、边界与真实证据 |
+| `dsh-ci-test-reliability` | 隔离、平台与偶发失败规则合并到 `docs/testing.md`，由已有实现/review/pre-push skill 引用 |
+| `dsh-doc` | `nano-doc-standards` 拥有文档层级，`nano-prose-standard` 拥有完整契约与可读性；不跟随重命名创建重复入口 |
+| `dsh-find-simplifications` | `nano-find-simplifications` 保留生产消费者和独立观测证明，不添加空 invariant |
+| `dsh-pre-push-checks` | 保留准确 scope、最小证据与一次 `make check`；本仓仍执行完整本地硬门槛 |
+| `dsh-prose-standard` / `dsh-trim-cot-leakage` | 合并在本仓 prose skill；保留错误、所有权、时序和必要限制 |
+| `dsh-merging-stacked-prs` | 暂缓；本仓已有 GitHub remote，但尚未建立 stacked PR 工作流与相应自动合并需求 |
+| `dsh-translate-docs` | 暂缓；没有双语发布、术语表和 pairing 承诺 |
+| `record-browser-gif` | 暂缓；本仓是 TUI，没有产品浏览器界面或 browser snapshot surface |
+
+[`nano-plugin-development`](../.agents/skills/nano-plugin-development/SKILL.md)继续作为本仓运行时实现入口，不因上游 skill 清单缺少同名入口而删除。详细适配规则由本仓 `.agents/skills/` 和各自引用的权威文档拥有。
+
+## 下次更新的验证路径
+
+1. 确认主仓和子模块变更范围，记录旧 SHA；fetch 后验证默认分支或明确选择的 tag，固定新 SHA，子模块内部保持干净。
+2. 比较根/目录规则、架构、持久化、测试/防御、skills、CI/release、许可证与工具版本；重要结论追踪到代码与回归证据，不仅看 commit 标题。
+3. 对每项记录采纳、保留或暂缓及本仓 owner。API/持久化版本号不能跨项目推断兼容，性能数据必须注明测量对象。
+4. 同步规则、适用门禁、Agent Note 和必要 ADR；运行 `make submodule`、相关负例、`make check`，发布面变化另做配置和真实 archive 验证。
+
+本次实施和实际检查记录见[再评估 Agent Note](../.agents/notes/implemented/2026-09-05-refresh-deepseek-reference.md)。

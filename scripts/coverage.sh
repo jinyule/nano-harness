@@ -16,6 +16,13 @@ go test -count=1 -covermode=atomic -coverprofile="$profile" $packages
 report="$(go tool cover -func="$profile")"
 printf '%s\n' "$report"
 
+# The human-readable percentages round to one decimal place. Inspect counters
+# as well so an uncovered statement cannot disappear into a displayed 100.0%.
+if ! awk 'NR > 1 && $NF == 0 && $(NF - 1) > 0 { print; missing = 1 } END { exit missing }' "$profile"; then
+  echo "coverage: uncovered statements in raw profile" >&2
+  exit 1
+fi
+
 uncovered="$(printf '%s\n' "$report" | awk '$1 != "total:" && $3 != "100.0%" {print}')"
 total="$(printf '%s\n' "$report" | awk '$1 == "total:" {print $3}')"
 if [[ "$total" != "100.0%" || -n "$uncovered" ]]; then

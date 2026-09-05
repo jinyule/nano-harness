@@ -34,6 +34,10 @@ internal/platform
 
 `go run ./internal/tools/archcheck` 强制上述方向。新增例外必须先修改本文和 ADR，再修改检查器；不能用 lint 例外绕过依赖错误。
 
+## 产品启动入口
+
+`cmd/nano-harness` 是支持的产品启动入口，拥有配置、构造注入、Plugin Runtime 和退出处理。示例、未来 headless 或协议模式沿同一入口扩展，不能另建一套跳过设置、approval 或 Scope 的应用树。包内单元测试可以直接构造组件；产品行为证据还必须经过真实 composition，发布证据运行编译后的 binary。`internal/tools` 是仓库工具，不属于产品启动入口。
+
 ## Plugin 与 Scope 生命周期
 
 所有运行时组件实现 `internal/core/plugin.Plugin`，由 `cmd/nano-harness` 以确定顺序启动：
@@ -177,6 +181,8 @@ subagent/descriptor, step/end, turn/end
 - `session.Surface` 从 raw events 折叠消息、tool call/result 与 compaction replacements。TUI subscriber 只是可丢更新提示；磁盘 replay 仍是恢复来源。
 
 格式变化必须同一变更原子更新领域类型、严格 decoder/order validator、所有 provider、测试、本文和 ADR。预发布阶段不保留静默兼容层。
+
+这里的 v2 是 nano-harness 自己的格式，不与 DeepSeek Harness 的 v2 互通。当前契约仍在每个 chunk 提交并 `fsync` 后通知消费者；采用内存 live stream、结束时一次性提交的方案会改变硬崩溃前可恢复的事实，必须先有性能证据、失败语义和新 ADR，不能随参考子模块更新而切换。
 
 ## 设置与账户
 
