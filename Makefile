@@ -64,6 +64,8 @@ change-scope: ## Show committed and worktree changes (set BASE_REF after the fir
 
 workflow-tools: ## Test deterministic repository workflow helpers.
 	scripts/change-scope_test.sh
+	scripts/coverage_test.sh
+	scripts/verify-release_test.sh
 
 build: ## Build the command from its real entry path.
 	mkdir -p bin
@@ -83,4 +85,4 @@ check: quick lint coverage build ## Run all normal pre-push gates.
 ci: check vuln release-check ## Run the complete CI-equivalent gate set.
 
 clean: ## Remove generated build and coverage output.
-	rm -rf -- bin dist coverage.out
+	rm -rf -- bin dist release-artifacts coverage.out

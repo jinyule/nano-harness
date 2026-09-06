@@ -17,11 +17,19 @@
 
 ## 覆盖率政策
 
-`scripts/coverage.sh` 排除不进入产品制品的 `internal/tools`，对全部产品包生成同一 profile，并要求每个函数和总 statement coverage 都是 100.0%；任何产品源文件的未覆盖语句都会阻断。
+`scripts/coverage.sh` 排除不进入产品制品的 `internal/tools`，对全部产品包生成同一 profile，并拒绝原始 profile 中任何语句数大于零、执行次数为零的 block，同时要求每个函数和总 coverage 显示为 100.0%。格式化百分比会四舍五入，不能单独用它证明没有未覆盖语句。
 
 不可插桩生成代码等客观例外必须局部到具体路径，有同 PR Agent Note、替代证据和 reviewer 批准。禁止按包或目录宽泛排除。
 
 100% 只证明语句执行，不证明断言质量。不得为数字保留死分支、断言实现细节或用 test-only 行为掩盖生产设计；优先删除无需求分支，并覆盖边界、错误、取消、顺序、并发与资源释放。
+
+## 门禁与预期结果的反例
+
+新增或修复静态、覆盖率、制品或文档门禁时，提供有效输入和被拒输入，并证明真实命令因目标规则失败。错误测试不能仅断言非零退出，否则缺少工具、语法错误或无关失败也可能被当成正确拒绝。修复应先复现失败，再在相同场景观察通过。
+
+golden/expected output 由拥有行为的测试维护，CI 只比较，不自动重写。更新记录不能同时把被测工具产生的工作区内容当成新的正确答案；写操作还须独立比较期望文件树，并证明不相关文件字节未变。仅归一化路径、时间等明确的非语义差异，不能消除顺序、身份关系或失败状态。
+
+`make workflow-tools` 运行范围脚本、覆盖率原始计数和发布制品校验的永久回归测试；它同时进入本地 quick/check 与 CI static lane。
 
 ## Plugin 生命周期
 
@@ -78,6 +86,20 @@ TUI 测试覆盖 alternate-screen Bubble Tea 启停、初始 replay、event forw
 测试必须拥有自己创建的 server、listener、临时目录、进程和 goroutine，并用 `t.Cleanup` 或显式 shutdown 回收。关闭测试证明返回后已静止，不只发出 cancel。
 
 异步顺序使用 channel/barrier 构造；除测试真实 deadline、polling 或 backoff 外，不用 `time.Sleep` 猜时序。分别覆盖取消发生在首个输出前、部分输出后、事实提交后和 shutdown publication race。
+
+Go 包测试可能在不同进程中并发，包内 `t.Parallel` 和独立门禁还会扩大重叠范围。进程隔离不隔离宿主端口、固定路径和外部服务：
+
+- listener 直接绑定 loopback 的 `:0`，从已经监听的 socket 读取地址；不先找空闲端口再关闭重绑。目录使用 `t.TempDir`，文件独占创建使用 `O_EXCL`，资源创建后立即登记清理。
+- 环境、cwd、全局时钟和 registry 是进程共享状态。优先注入实例依赖；确需修改时用 `t.Setenv`、`t.Chdir` 或精确恢复原值的 cleanup，且不在并行测试或并行祖先中修改。单个串行测试不能保护跨进程资源。
+- readiness、交错和退出使用 channel、握手或可观测状态；race 修复用 barrier 证明操作重叠。跨进程共享资源的修复还需独立测试进程并发运行的证据，重复执行只作补充。
+- 外层测试期限为启动、受测超时和清理留出余量。进程结果分别检查 timeout、signal 与 exit code；被终止后返回 0 不等于正常完成。
+- 权限、信号、环境变量大小写和文件时间精度按 OS 语义断言；确实不适用时局部 skip 并说明原因，不能削弱所有平台的断言。
+
+诊断偶发 CI 失败时记录 SHA、job、runner、命令和首个稳定失败特征，对照同一代码的成功/失败证据，重现最小相关并发范围。无根因的加大 timeout、重试、全套串行化、吞错或 snapshot 归一化都不算修复；恢复被误缩小的既有 lane budget 时须说明原预算和等待的状态。
+
+## 平台与发布证据范围
+
+跨编译只证明目标代码能构建；宿主 smoke 只证明该 OS/架构制品可启动。六个 archive 的哈希通过不等于六个平台都运行过。当前 CI 在 Linux 执行两个 Go 版本的 race tests，在 Linux/macOS/Windows 执行本机 build/version，完整 release dry-run 只在 Linux 执行宿主 archive；其他制品的原生执行证据必须单独报告。增加平台行为或宣称新的平台支持时，须补该平台真实入口、进程和文件语义测试。
 
 ## Live provider 验证
 

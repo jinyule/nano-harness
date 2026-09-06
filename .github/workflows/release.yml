@@ -69,13 +69,10 @@ jobs:
           distribution: goreleaser
           version: v2.17.1
           args: release --snapshot --clean --skip=publish
-      - name: Smoke packaged binary and verify checksums
-        run: scripts/smoke-release.sh dist
-      - name: Collect the exact publication payload
-        run: |
-          mkdir release-artifacts
-          find dist -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name 'checksums.txt' \) -exec cp {} release-artifacts/ \;
-          test "$(find release-artifacts -maxdepth 1 -type f | wc -l | tr -d ' ')" = 7
+      - name: Prepare the exact publication payload
+        run: scripts/prepare-release.sh dist release-artifacts
+      - name: Verify payload and smoke the packaged binary
+        run: scripts/smoke-release.sh release-artifacts
       - uses: actions/upload-artifact@v6
         with:
           name: nano-harness-release-${{ github.run_id }}
@@ -92,12 +89,18 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Load verification scripts from the release commit
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
           name: nano-harness-release-${{ github.run_id }}
           path: release-artifacts
-      - name: Re-verify artifact hashes
-        run: cd release-artifacts && sha256sum -c checksums.txt
+      - name: Re-verify publication payload and tag version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: scripts/verify-release.sh release-artifacts "${RELEASE_TAG#v}"
       - name: Publish or safely resume the release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -13,6 +13,8 @@
 
 ## Consequences
 
+当前上游 skill 名称与 CI reliability 的合并适配由[参考再评估](2026-09-05-refresh-deepseek-reference.md)补充；本 Note 继续拥有七个 Go 项目 skill 的任务路由与元数据决定。
+
 高频任务拥有可直接调用且能随仓库演进的工作流，review 和实现不再依赖 agent 记住分散规则；插件生命周期、100% coverage 与 Agent Note 在实现、审查和推送三个阶段重复成为硬证据。维护者需要在权威规则变化时同步检查相关 skill，并为实质 skill 变更继续写 Note。暂缓项不会提前引入文档投影、翻译 hash、浏览器工具或远端合并权限；对应边界建立后必须重新分析上游当前版本，而不是直接启用旧命令。
 
 ## Verification

@@ -6,9 +6,13 @@
 
 仓库尚未承诺稳定 API。优先建立正确、简单的基础：不为尚不存在的调用方增加兼容层、抽象、配置项或状态机。确需破坏性调整时，同一变更中更新全部调用点、测试和文档；禁止静默接受旧格式或错误配置。
 
+API 稳定性与已发布数据的升级承诺分别评估。首次向用户发布持久化数据前，必须由 ADR 明确版本识别、拒绝旧格式或迁移策略，以及数据保留和恢复路径；不能以 API 尚不稳定推断用户数据可丢弃。
+
 ## 不得修改参考仓库
 
 `third_party/deepseek-harness` 是只读 Git submodule，只用于架构和流程研究。不要直接修改其中内容，不要复制其许可证未覆盖的代码，不要在主仓提交 submodule 内的脏文件。更新指针必须单独说明上游旧/新提交、变更摘要和重新评估结果，并运行 `make submodule`。
+
+上游规则和相同的格式版本号不会自动成为本仓契约。更新时按[参考分析](docs/reference-deepseek-harness.md)逐项记录采纳、保留或暂缓，并修改本仓对应的权威文档与门禁。
 
 ## 常用命令
 
@@ -33,6 +37,7 @@ make build           # 从真实 cmd 入口构建并 smoke test
 ## 架构
 
 - `cmd/nano-harness` 只负责配置解析、依赖组装、生命周期启动与退出码；业务行为不放在 `main`。
+- 产品应用统一从 `cmd/nano-harness` 启动；示例和未来协议入口复用同一配置与 composition，不另建绕过策略和生命周期的启动路径。
 - `internal/core` 保存领域状态、不变量和纯逻辑，只可依赖标准库及其他 `core` 包。
 - `internal/app` 保存用例；小接口由消费它的 `app` 包定义，只可依赖 `app` 与 `core`。
 - `internal/adapter/<capability>` 实现外部能力，可依赖 `app`、`core`、`platform` 和同一 adapter 子树；不同 adapter 之间不得直接依赖。
@@ -72,6 +77,7 @@ make build           # 从真实 cmd 入口构建并 smoke test
 - 正常门禁运行 `go test -race -count=1 ./...`。每个产品源文件 statement coverage 必须为 100%；只有不可插桩生成代码等客观例外可通过局部配置排除，并须 Agent Note、替代证据和 reviewer 批准。不要为覆盖率保留无价值分支，优先删除死代码。
 - 每个插件必须测试启动贡献、逆序 cleanup、启动失败回滚和 shutdown 后静止；registry 贡献在 scope 关闭后必须不可见。
 - 修复缺陷必须先有可复现失败的永久测试。用户、模型、协议或持久化可见变化必须有 assembled/e2e 或 golden 证据。
+- 新增或修复门禁必须用无效输入证明它会因目标规则失败；并发 fixture 按[测试策略](docs/testing.md)隔离端口、路径和进程全局状态，不能靠重跑变绿判断修复完成。
 
 ## 文档与决策
 
@@ -86,6 +92,7 @@ make build           # 从真实 cmd 入口构建并 smoke test
 - PR 必须通过静态检查、lint、race tests、覆盖率、跨平台构建、漏洞扫描、release dry-run 和汇总门禁。
 - CI 使用只读默认权限并取消同一 PR 的旧运行；必需检查以 `all-checks-passed` 为唯一稳定汇总名。
 - 构建阶段无发布凭据。发布仅允许从与版本匹配的 `v*` tag 手动触发，经 `github-release` Environment 审批后上传构建阶段产生且校验过哈希的同一批制品。
+- 解包或执行发布制品前校验完整文件集合与 SHA-256；上传前再次校验相同集合及 tag 版本。单纯检查文件数量或 checksum 列表不足以证明完整性。
 - 依赖、Action、Go 和工具版本由 Dependabot 或专门 PR 更新；更新必须通过完整 CI，不得用浮动 `latest` 作为发布输入。
 
 ## 完成标准

@@ -13,6 +13,8 @@
 
 ## Consequences
 
+发布制品的精确集合与使用前验证由[参考再评估](2026-09-05-refresh-deepseek-reference.md)和 [ADR-0003](../../../docs/decisions/0003-exact-release-payload-validation.md)补充；本 Note 保留仓库 identity、权限、Environment 与 ruleset 的决定。
+
 仓库可被正常导入、克隆和依照 MIT 条款复用；CI 在最小权限下自动验证所有 push/PR，发布只能由匹配 tag 的手动 workflow 经 Environment 审批后上传同一批已验证制品。单维护者仍可通过审计可见的 PR 自举，但目前没有独立审批；这是显式的暂时约束，不通过管理员 direct push 绕过。仓库迁移、owner 变化、许可证变化、增加 maintainer 或 required check 重命名都必须原子更新代码、文档和 GitHub 规则。
 
 ## Verification

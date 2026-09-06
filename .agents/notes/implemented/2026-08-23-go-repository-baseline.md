@@ -15,7 +15,7 @@
 
 ## Consequences
 
-新增行为需要承担插件生命周期和完整错误路径测试成本；覆盖率例外只能针对不可插桩生成代码等客观情况，并需 Agent Note、局部配置和替代证据。小改动若不能明确证明机械，也要写 Note。静态 composition 避免平台受限的 Go `.so`，运行期热装卸需求出现时必须扩展同一 Runtime 并复审 ADR。首次公开发布前仍需确定 canonical module path、许可证、CODEOWNERS、受保护 GitHub Environment，并显式设置 `RELEASE_ENABLED=true`。
+新增行为需要承担插件生命周期和完整错误路径测试成本；覆盖率例外只能针对不可插桩生成代码等客观情况，并需 Agent Note、局部配置和替代证据。小改动若不能明确证明机械，也要写 Note。静态 composition 避免平台受限的 Go `.so`，运行期热装卸需求出现时必须扩展同一 Runtime 并复审 ADR。canonical module、许可证与远端发布控制面由 [GitHub 发布决定](2026-08-24-publish-github-repository.md)拥有；参考更新、原始覆盖率计数与精确制品校验由[再评估 Note](2026-09-05-refresh-deepseek-reference.md)补充，本 Note 保留基础架构决定。
 
 ## Verification
 

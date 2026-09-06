@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-artifact_dir="${1:-dist}"
+artifact_dir="${1:?usage: smoke-release.sh <verified-payload-directory>}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"$script_dir/verify-release.sh" "$artifact_dir"
 case "$(uname -s)" in
   Darwin) archive_os="Darwin" ;;
   Linux) archive_os="Linux" ;;
@@ -29,14 +31,3 @@ cleanup() {
 trap cleanup EXIT
 tar -xzf "$archive" -C "$smoke_dir"
 "$smoke_dir/nano-harness" version
-
-if [[ ! -f "$artifact_dir/checksums.txt" ]]; then
-  echo "release smoke: checksums.txt not found" >&2
-  exit 1
-fi
-
-if command -v sha256sum >/dev/null 2>&1; then
-  (cd "$artifact_dir" && sha256sum -c checksums.txt)
-else
-  (cd "$artifact_dir" && shasum -a 256 -c checksums.txt)
-fi

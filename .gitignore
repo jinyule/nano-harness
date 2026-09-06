@@ -1,6 +1,7 @@
 # Go outputs
 /bin/
 /dist/
+/release-artifacts/
 *.coverprofile
 coverage.out
 
