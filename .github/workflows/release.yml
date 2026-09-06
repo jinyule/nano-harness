@@ -73,7 +73,7 @@ jobs:
         run: scripts/prepare-release.sh dist release-artifacts
       - name: Verify payload and smoke the packaged binary
         run: scripts/smoke-release.sh release-artifacts
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: nano-harness-release-${{ github.run_id }}
           path: release-artifacts/*
