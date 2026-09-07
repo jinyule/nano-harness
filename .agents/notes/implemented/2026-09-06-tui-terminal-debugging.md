@@ -17,6 +17,8 @@ TUI 按显示列宽换行，只有原来位于底部时才跟随新输出；分�
 
 共享 GoLand 配置分别提供带 terminal emulation 的正常 package 入口与 loopback Remote 调试。`make debug-tools` 将固定 Delve 1.27.1 安装到 ignored cache；`make debug-fixture` 构建保留源码路径且关闭优化/内联的 binary，使 TUI 留在终端而 GoLand 操作同一进程。
 
+`Agent.WhenIdle` 的成功等待测试先注册等待者，并通过测试 context 的 `Done` 调用确认已经进入 select，再释放模型 gate。这个同步点消除 worker 提前变为空闲时绕过 waiter 成功分支的竞态；生产并发和取消语义不变，也不使用 sleep 或重试掩盖时序。
+
 此 Note 补充[核心 Harness 实施记录](2026-08-24-core-agent-harness.md)的终端和调试证据；该记录仍拥有原有 composition、持久化、安全和 live provider 决策。没有取代其余 active Note，也没有改变需要新增 ADR 的架构或数据契约。
 
 ## Consequences
@@ -32,6 +34,7 @@ PTY 验证依赖 Unix、Python 3 和可运行的本机 workspace sandbox，因�
 - `go test -race -count=1 ./internal/adapter/tui ./internal/app/subagent ./cmd/nano-harness` 与修改后的 TUI focused race tests 通过。新增断言还检查历史位置、普通输入、Page Down、鼠标滚动与回到底部后跟随。
 - `make tui-e2e` 在 macOS/arm64 通过。独立检查十种根 call/result、真实 child header 与两次完成结果、delegated `never` 策略、两次允许审批、三个文件字节、终端 alternate-screen 恢复、长文本末尾、取消、重新启动 replay 和锁清理。
 - `make check` 最终通过，包括 lint、race、architecture、submodule、Agent Note/skills、workflow helpers、真实 binary build。`make coverage` 的原始 block 计数与全部产品文件/函数均为 100%；`govulncheck ./...` 报告无可达漏洞。
+- PR #10 合入后的主干 CI run `34096037784` 复现 `internal/app/agent/agent.go:214` 未覆盖；同步 waiter 注册后，agent 包 race 压力测试、逐文件覆盖率和完整门禁通过。
 - GoLand `Nano TUI Remote` 连接从 Codex PTY 启动的 Delve 1.27.1/Go 1.27.0 调试构建，实际停在 `tui.model.Update` 的 Enter 分支、`subagent.Service.Spawn` 和 child `workspace.readTool.Execute`。IDE 显示调用栈与变量；Spawn 参数为 `Label=reader`、`Mode=continuable`、`Task=CHILD_READ`，Step Over 从入口条件行前进至下一行；child 工具参数为 `Delegated=true`、`Elevated=false`。
 
 本次没有发出外部模型请求，也未获得 Linux/Windows 的原生 PTY 或 GoLand 执行证据。
