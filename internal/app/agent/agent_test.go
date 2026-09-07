@@ -12,6 +12,20 @@ import (
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
+type observedDoneContext struct {
+	context.Context
+	observed chan struct{}
+}
+
+func (ctx observedDoneContext) Done() <-chan struct{} {
+	select {
+	case <-ctx.observed:
+	default:
+		close(ctx.observed)
+	}
+	return ctx.Context.Done()
+}
+
 func TestAgent_SubmitFollowupSubscribeAndSnapshots(t *testing.T) {
 	harness := startEngineHarness(t, 2,
 		modelAction{completion: assistantCompletion("first")},
@@ -130,8 +144,17 @@ func TestAgent_SteersAtToolBoundaryAndWaitsForIdle(t *testing.T) {
 	if err := agent.WhenIdle(waitContext); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("busy WhenIdle() error = %v", err)
 	}
+	idleSelecting := make(chan struct{})
+	idleResult := make(chan error, 1)
+	go func() {
+		idleResult <- agent.WhenIdle(observedDoneContext{
+			Context:  context.Background(),
+			observed: idleSelecting,
+		})
+	}()
+	<-idleSelecting
 	close(gate)
-	if err := agent.WhenIdle(context.Background()); err != nil {
+	if err := <-idleResult; err != nil {
 		t.Fatal(err)
 	}
 	if result := <-resultChannel; result.Outcome != session.OutcomeCompleted || result.Text != "done" {
