@@ -4,12 +4,13 @@ GOLANGCI_LINT_VERSION ?= v2.12.2
 GOVULNCHECK_VERSION ?= v1.7.0
 GORELEASER_VERSION ?= v2.17.1
 LEFTHOOK_VERSION ?= v2.1.11
+DELVE_VERSION ?= v1.27.1
 
 GO_FILES := $(shell find cmd internal -type f -name '*.go' 2>/dev/null)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap hooks fmt fmt-check tidy mod-check vet lint test coverage architecture submodule agent-notes skills change-scope workflow-tools build vuln release-check quick check ci clean
+.PHONY: help bootstrap hooks fmt fmt-check tidy mod-check vet lint test coverage architecture submodule agent-notes skills change-scope workflow-tools build tui-e2e tui-fixture debug-tools debug-fixture vuln release-check quick check ci clean
 
 help: ## Show available commands.
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -71,6 +72,20 @@ build: ## Build the command from its real entry path.
 	mkdir -p bin
 	CGO_ENABLED=0 $(GO) build -trimpath -o bin/$(BINARY) ./cmd/nano-harness
 	./bin/$(BINARY) version
+
+tui-e2e: build ## Verify real terminal/tool/subagent behavior with a local model fixture (Python 3, Unix).
+	python3 scripts/tui-e2e.py --binary bin/$(BINARY)
+
+tui-fixture: ## Serve a local Responses fixture for interactive debugging (Python 3).
+	python3 scripts/tui-e2e.py --serve .cache/tui-fixture
+
+debug-tools: ## Install the pinned Delve debugger into the ignored project cache.
+	GOBIN="$(CURDIR)/.cache/debug-tools" $(GO) install github.com/go-delve/delve/cmd/dlv@$(DELVE_VERSION)
+
+debug-fixture: ## Run the fixture TUI in this terminal and expose Delve to GoLand on loopback port 2345.
+	mkdir -p bin
+	$(GO) build -gcflags='all=-N -l' -o bin/nano-harness-debug ./cmd/nano-harness
+	NANO_FIXTURE_KEY=fixture-key .cache/debug-tools/dlv exec bin/nano-harness-debug --headless --listen=127.0.0.1:2345 --api-version=2 --accept-multiclient -- tui --root .cache/tui-fixture/workspace --settings .cache/tui-fixture/settings.yaml --credentials .cache/tui-fixture/credentials.yaml --session-root .cache/tui-fixture/sessions
 
 vuln: ## Check reachable dependencies against the Go vulnerability database.
 	govulncheck ./...

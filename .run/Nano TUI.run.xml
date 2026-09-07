@@ -1,0 +1,13 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Nano TUI" type="GoApplicationRunConfiguration" factoryName="Go Application">
+    <module name="nano-harness" />
+    <working_directory value="$PROJECT_DIR$" />
+    <parameters value="tui --root ." />
+    <kind value="PACKAGE" />
+    <package value="github.com/jinyule/nano-harness/cmd/nano-harness" />
+    <directory value="$PROJECT_DIR$" />
+    <filePath value="$PROJECT_DIR$/cmd/nano-harness/main.go" />
+    <pty_enabled value="true" />
+    <method v="2" />
+  </configuration>
+</component>
