@@ -143,7 +143,7 @@ Submit user message
 
 读、列举和搜索可并行；patch 与 shell 是 exclusive。写入和 shell 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。
 
-subagent 工具为 `subagent_spawn`、`subagent_followup`、`subagent_interrupt`、`subagent_report` 和 `subagent_list`。它们调用进程内 `app/subagent`，不启动 Codex、Claude 或另一个 harness 进程。
+subagent 工具为 `spawn_subagent`、`subagent_followup`、`subagent_interrupt`、`subagent_report` 和 `list_subagents`。它们调用进程内 `app/subagent`，不启动 Codex、Claude 或另一个 harness 进程。
 
 ## Subagent
 

@@ -58,9 +58,17 @@ make build
 
 `/attach` 接受 JPEG 或 PNG；图片会缩放、规范化并随下一条消息持久化。`/permission ask` 是默认策略：`apply_patch` 和 `run_shell` 在实际执行前请求一次性授权。普通 shell 在 workspace sandbox 中运行；host 模式仍需一次性授权，而且 subagent 不能请求 host 执行。
 
+长行按终端列宽换行。用方向键、Page Up/Page Down 或 Ctrl+U/Ctrl+D 浏览 transcript；浏览历史时新输出保留当前位置，滚到底部后恢复跟随。普通文字输入不会滚动 transcript。
+
 会话默认保存在用户配置目录下的 `nano-harness/sessions`，账户和设置分别保存在同目录的 `credentials.yaml` 与 `settings.yaml`。这些文件使用 owner-only 权限。可以用 `--session ID` 恢复同一会话，用 `--session-root DIR`、`--credentials FILE` 和 `--settings FILE` 改变位置。已有会话的 composition fingerprint 必须与 workspace 和工具/会话语义一致，否则拒绝恢复。
 
 设置采用默认值与稀疏用户 YAML 合并，并支持运行期热重载。可配置 route、三个 provider 的 HTTPS/loopback endpoint、模型目录、retry 和 compaction；无效编辑不会替换最后一个有效快照。产品代码不会读取或强制任何订阅配额，模型请求受 provider 账户自身的服务限制约束。
+
+## 终端验证与 GoLand 调试
+
+`make tui-e2e` 使用真实二进制和 PTY，配合本地模型协议 fixture，验证文件工具、Subagent、审批、打断和恢复，无需模型账户。需要 Python 3、Unix PTY 和本机 workspace sandbox。
+
+GoLand 可直接选择共享配置 `Nano TUI` 运行全屏界面。需要在 Codex 或其他终端中输入、在 GoLand 中打断点时，使用 `Nano TUI Remote`；完整步骤见[终端与断点调试](docs/debugging.md)。
 
 ## 核心行为
 

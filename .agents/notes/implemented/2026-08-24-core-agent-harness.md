@@ -29,6 +29,8 @@ workspace provider 提供 `read_file`、`list_files`、`search_files`、`apply_p
 
 ## Verification
 
+真实终端工具链、TUI 展示修复和 GoLand 断点证据由[终端调试记录](2026-09-06-tui-terminal-debugging.md)补充；本记录保留核心 composition 和真实 provider 验证范围。
+
 开发过程中，全部包已通过 `go test -race -count=1 ./...`。focused coverage 逐包补齐了每个产品源文件的正常、错误、取消、并发、rollback 与 cleanup 路径，coverage 门禁显示所有产品文件、函数和 statement 为 100.0%。`cmd/nano-harness` assembled e2e 经真实 composition 和 loopback OpenAI SSE 完成 stream → `read_file` call → 真实 workspace result → 第二次 assistant response，并从磁盘重开 v2 transcript；默认 Bubble Tea runner 也通过真实启动/终止测试。OpenAI、Anthropic 和 OpenRouter 的 text/reasoning/image/tool/usage、malformed stream、OAuth/refresh 与 error mapping 均由 loopback protocol server 覆盖。
 
 本机 Codex OAuth Luna 验证在产品外查询 `wham/usage`，首次真实请求前剩余 45%，最终清晰图片复测前后均剩余 44%，高于保留 3% 的停止线。真实 full-screen TUI 显式导入 Codex login，附加仓库现有的 `dsh-badge.png`，Luna 正确识别 `powered by dsh`，以 workspace-relative `proof.txt` 调用 `read_file`，接收真实首行结果，再流式返回 `IMAGE_TEXT=powered by dsh; FILE=luna-live-tool-evidence-2026-08-24` 并以 `completed` 结束。落盘 v2 transcript 有 51 个连续序号，包含两步 request、stream、call/result 和最终消息；图片为 726×120 JPEG 且 digest 重算一致。session/credential 文件为 `0600`、目录为 `0700`，关闭后无 lock，transcript 不含 credential 字段。

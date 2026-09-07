@@ -81,6 +81,10 @@ TUI 测试覆盖 alternate-screen Bubble Tea 启停、初始 replay、event forw
 
 命令级 failure matrix 覆盖路径归一化、create/resume、每个 constructor、runtime start、TUI run、shutdown、usage/version output 和 write failure。发布 smoke 必须运行编译后的 `bin/nano-harness`，不能以 `go run` 或直接调用内部函数替代。
 
+`make tui-e2e` 是独立的本机 PTY 验证入口，需要 Python 3 和 Unix。`scripts/tui-e2e.py` 只替换远端模型，在 loopback 的动态端口提供 Responses SSE；TUI、composition、工具、审批、sandbox 和 session 均走编译后的真实 `cmd`。脚本从终端发送任务和审批答案，再独立检查根会话的十种工具调用、子会话的 read/followup 与 `never` 策略、两次审批决定、实际文件字节、长行末尾、打断、重启 replay、私有权限和退出后的 lock 清理。`subagent_interrupt` 场景针对已 idle 的 child；活动 turn 的取消由根 `/interrupt` 场景与 subagent 包测试覆盖。
+
+TUI 回归测试证明流式输出与系统行不会串接、reasoning 不隐藏最终回答、中文长行可见、历史浏览保留位置，以及键盘输入和分页/鼠标滚动各自生效。断点调试另按[调试步骤](debugging.md)验证；协议 fixture 不等于远端模型 live 证据。
+
 ## 并发、取消与清理
 
 测试必须拥有自己创建的 server、listener、临时目录、进程和 goroutine，并用 `t.Cleanup` 或显式 shutdown 回收。关闭测试证明返回后已静止，不只发出 cancel。

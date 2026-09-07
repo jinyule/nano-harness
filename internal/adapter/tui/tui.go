@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/approval"
@@ -313,19 +314,20 @@ const (
 )
 
 type model struct {
-	ctx      context.Context
-	app      *App
-	viewport viewport.Model
-	input    textinput.Model
-	width    int
-	height   int
-	lines    []string
-	mode     inputMode
-	approval *approvalEnvelope
-	auth     *authEnvelope
-	images   []session.Image
-	stream   string
-	quitting bool
+	ctx        context.Context
+	app        *App
+	viewport   viewport.Model
+	input      textinput.Model
+	width      int
+	height     int
+	lines      []string
+	mode       inputMode
+	approval   *approvalEnvelope
+	auth       *authEnvelope
+	images     []session.Image
+	stream     string
+	streamText string
+	quitting   bool
 }
 
 func newModel(ctx context.Context, app *App, initial []session.Event) model {
@@ -358,11 +360,15 @@ func waitUI(events <-chan any, stop <-chan struct{}) tea.Cmd {
 func (model model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
+		follow := model.viewport.AtBottom()
 		model.width, model.height = message.Width, message.Height
 		model.viewport.Width = max(message.Width-4, 20)
 		model.viewport.Height = max(message.Height-7, 3)
 		model.input.Width = max(message.Width-8, 10)
 		model.refresh()
+		if follow {
+			model.viewport.GotoBottom()
+		}
 		return model, nil
 	case transcriptMessage:
 		model.applyEvent(message.event, true)
@@ -424,6 +430,14 @@ func (model model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if message.String() == "enter" {
 			return model.submit()
 		}
+		switch message.String() {
+		case "pgup", "pgdown", "ctrl+u", "ctrl+d", "up", "down":
+			model.viewport, _ = model.viewport.Update(message)
+			return model, nil
+		}
+		var command tea.Cmd
+		model.input, command = model.input.Update(message)
+		return model, command
 	}
 	var command tea.Cmd
 	model.input, command = model.input.Update(message)
@@ -667,10 +681,11 @@ func (model *model) applyEvent(event session.Event, live bool) {
 			model.appendStream("reasoning", record.Chunk.Text)
 		}
 	case session.RecordAssistantMessage:
-		if !live || model.stream == "" {
+		if !live || model.streamText != session.Text(*record.Message) {
 			model.addLine("assistant> " + session.Text(*record.Message))
 		}
 		model.stream = ""
+		model.streamText = ""
 	case session.RecordToolCall:
 		model.addLine(fmt.Sprintf("tool> %s %s", record.Call.Name, record.Call.Arguments))
 	case session.RecordApprovalAsked:
@@ -692,6 +707,7 @@ func (model *model) applyEvent(event session.Event, live bool) {
 			model.addLine("compact> " + record.Compaction.Error)
 		}
 	case session.RecordTurnEnd:
+		model.streamText = ""
 		model.addLine("turn> " + string(record.Outcome))
 	case session.RecordTurnStart, session.RecordStepStart, session.RecordApprovalDecided,
 		session.RecordApprovalPolicy, session.RecordRetryStarted, session.RecordCompactionSummary,
@@ -701,6 +717,9 @@ func (model *model) applyEvent(event session.Event, live bool) {
 }
 
 func (model *model) appendStream(kind, delta string) {
+	if kind == "assistant" {
+		model.streamText += delta
+	}
 	if model.stream != kind || len(model.lines) == 0 {
 		model.lines = append(model.lines, kind+"> "+delta)
 		model.stream = kind
@@ -711,6 +730,7 @@ func (model *model) appendStream(kind, delta string) {
 }
 
 func (model *model) addLine(value string) {
+	model.stream = ""
 	model.lines = append(model.lines, value)
 	if len(model.lines) > 4000 {
 		model.lines = append([]string(nil), model.lines[len(model.lines)-4000:]...)
@@ -719,8 +739,11 @@ func (model *model) addLine(value string) {
 }
 
 func (model *model) refresh() {
-	model.viewport.SetContent(strings.Join(model.lines, "\n"))
-	model.viewport.GotoBottom()
+	follow := model.viewport.AtBottom()
+	model.viewport.SetContent(ansi.Hardwrap(strings.Join(model.lines, "\n"), model.viewport.Width, true))
+	if follow {
+		model.viewport.GotoBottom()
+	}
 }
 
 func (model model) View() string {
@@ -729,7 +752,7 @@ func (model model) View() string {
 	}
 	document, _, _ := model.app.config.Settings.Snapshot()
 	status := model.app.agent.Status()
-	header := headerStyle.Render(fmt.Sprintf(" nano-harness  %s/%s  session=%s  busy=%t ", document.Route.Provider, document.Route.Model, status.SessionID, status.Busy))
+	header := headerStyle.MaxWidth(model.width).Render(fmt.Sprintf(" nano-harness  %s/%s  session=%s  busy=%t ", document.Route.Provider, document.Route.Model, status.SessionID, status.Busy))
 	prompt := ""
 	switch model.mode {
 	case modeApproval:
