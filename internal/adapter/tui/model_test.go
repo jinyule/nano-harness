@@ -245,7 +245,7 @@ func TestModelCommand_ExecutesAllAsyncUseCases(t *testing.T) {
 	fixture, current := modelFixture(t)
 	fixture.images.image = session.Image{Name: "attached.png"}
 	fixture.models.accounts = []llm.AccountInfo{{Provider: "openai", Kind: llm.CredentialOAuth, Source: "stored"}}
-	fixture.models.models = []llm.ModelInfo{{Provider: "openai", ID: "model", ContextWindow: 1000, Vision: true, Tools: true}}
+	fixture.models.models = []llm.ModelInfo{{Provider: "openai", ID: "model", Effort: session.EffortMax, ContextWindow: 1000, Vision: true, Tools: true}}
 	fixture.subagents.infos = []appSubagent.Info{{SessionID: "child", Label: "worker", Mode: "one-shot", Busy: true, Last: agent.TurnResult{Outcome: session.OutcomeCompleted}}}
 	fixture.controller.compact = true
 
@@ -255,7 +255,7 @@ func TestModelCommand_ExecutesAllAsyncUseCases(t *testing.T) {
 	}{
 		{value: "/attach /tmp/image.png"},
 		{value: "/accounts", want: "openai kind=oauth source=stored"},
-		{value: "/models openai", want: "openai/model context=1000 vision=true tools=true"},
+		{value: "/models openai", want: "openai/model context=1000 vision=true tools=true effort=max"},
 		{value: "/login openai oauth", want: "login stored for openai"},
 		{value: "/logout openai", want: "logged out openai"},
 		{value: "/model openai gpt-5.6-luna", want: "route=openai/gpt-5.6-luna"},
@@ -339,7 +339,7 @@ func TestApplyEvent_ProjectsAllDurablePresentationFacts(t *testing.T) {
 	image := &session.Image{Name: "image"}
 	events := []session.Event{
 		{Record: session.Record{Type: session.RecordUserMessage, Message: &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: "hello"}, {Type: session.ContentImage, Image: image}}}}},
-		{Record: session.Record{Type: session.RecordRequestHeader, Header: &session.RequestHeader{Provider: "openai", Model: "model"}}},
+		{Record: session.Record{Type: session.RecordRequestHeader, Header: &session.RequestHeader{Provider: "openai", Model: "model", Effort: session.EffortMax}}},
 		{Record: session.Record{Type: session.RecordAssistantChunk, Chunk: &session.AssistantChunk{Kind: session.ChunkText, Text: "one"}}},
 		{Record: session.Record{Type: session.RecordAssistantChunk, Chunk: &session.AssistantChunk{Kind: session.ChunkText, Text: " two"}}},
 		{Record: session.Record{Type: session.RecordAssistantChunk, Chunk: &session.AssistantChunk{Kind: session.ChunkReasoning, Text: "think"}}},
@@ -358,7 +358,7 @@ func TestApplyEvent_ProjectsAllDurablePresentationFacts(t *testing.T) {
 		current.applyEvent(event, true)
 	}
 	joined := strings.Join(current.lines, "\n")
-	for _, expected := range []string{"you> hello [images=1]", "route> openai/model", "assistant> one two", "reasoning> think", "tool> read", "approval> write", "result> ok", "tool-error> bad", "retry> attempt=2", "compact> started", "compact> completed", "compact> failed", "turn> completed"} {
+	for _, expected := range []string{"you> hello [images=1]", "route> openai/model effort=max", "assistant> one two", "reasoning> think", "tool> read", "approval> write", "result> ok", "tool-error> bad", "retry> attempt=2", "compact> started", "compact> completed", "compact> failed", "turn> completed"} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("projection missing %q in %s", expected, joined)
 		}

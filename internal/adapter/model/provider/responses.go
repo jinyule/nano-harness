@@ -35,16 +35,21 @@ type responsesTool struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
+type responsesReasoning struct {
+	Effort session.Effort `json:"effort"`
+}
+
 type responsesRequest struct {
-	Model             string           `json:"model"`
-	Instructions      string           `json:"instructions,omitempty"`
-	Input             []responsesInput `json:"input"`
-	Tools             []responsesTool  `json:"tools,omitempty"`
-	ToolChoice        string           `json:"tool_choice,omitempty"`
-	ParallelToolCalls bool             `json:"parallel_tool_calls"`
-	MaxOutputTokens   int              `json:"max_output_tokens,omitempty"`
-	Stream            bool             `json:"stream"`
-	Store             bool             `json:"store"`
+	Model             string              `json:"model"`
+	Instructions      string              `json:"instructions,omitempty"`
+	Input             []responsesInput    `json:"input"`
+	Tools             []responsesTool     `json:"tools,omitempty"`
+	ToolChoice        string              `json:"tool_choice,omitempty"`
+	ParallelToolCalls bool                `json:"parallel_tool_calls"`
+	MaxOutputTokens   int                 `json:"max_output_tokens,omitempty"`
+	Reasoning         *responsesReasoning `json:"reasoning,omitempty"`
+	Stream            bool                `json:"stream"`
+	Store             bool                `json:"store"`
 }
 
 func (provider *Provider) streamResponses(ctx context.Context, current *snapshot, model llm.ModelInfo, credential llm.Credential, request llm.Request, emit llm.Emit) (llm.Completion, error) {
@@ -112,6 +117,9 @@ func (provider *Provider) responsesRequest(model llm.ModelInfo, request llm.Requ
 	payload := responsesRequest{
 		Model: model.ID, Instructions: request.System, Input: input, Tools: tools,
 		ParallelToolCalls: true, MaxOutputTokens: request.MaxTokens, Stream: true, Store: false,
+	}
+	if model.Effort != "" {
+		payload.Reasoning = &responsesReasoning{Effort: model.Effort}
 	}
 	if len(tools) > 0 {
 		payload.ToolChoice = "auto"

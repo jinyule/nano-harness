@@ -187,6 +187,7 @@ type ModelInfo struct {
 	Provider      string
 	ID            string
 	Name          string
+	Effort        session.Effort
 	ContextWindow int
 	Vision        bool
 	Tools         bool
