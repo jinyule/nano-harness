@@ -48,6 +48,11 @@ func TestComposition_EndToEndToolChain(t *testing.T) {
 			http.Error(writer, "bad json", http.StatusBadRequest)
 			return
 		}
+		reasoning, _ := body["reasoning"].(map[string]any)
+		if reasoning["effort"] != "max" {
+			http.Error(writer, "missing max reasoning effort", http.StatusBadRequest)
+			return
+		}
 		writer.Header().Set("Content-Type", "text/event-stream")
 		if calls.Add(1) == 1 {
 			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read_file\"}}\n\n")
@@ -66,7 +71,7 @@ func TestComposition_EndToEndToolChain(t *testing.T) {
 	}
 	data := t.TempDir()
 	settingsPath := filepath.Join(data, "settings.yaml")
-	settingsYAML := fmt.Sprintf("route:\n  provider: openai\n  model: test-model\nproviders:\n  openai:\n    base_url: %s\n    models:\n      - id: test-model\n        name: Test\n        context_window: 8192\n        vision: true\n        tools: true\n", server.URL)
+	settingsYAML := fmt.Sprintf("route:\n  provider: openai\n  model: test-model\nproviders:\n  openai:\n    base_url: %s\n    models:\n      - id: test-model\n        name: Test\n        effort: max\n        context_window: 8192\n        vision: true\n        tools: true\n", server.URL)
 	if err := os.WriteFile(settingsPath, []byte(settingsYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +111,7 @@ func TestComposition_EndToEndToolChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fact := range []string{`"tool/call"`, `"tool/result"`, "verified proof", "evidence"} {
+	for _, fact := range []string{`"tool/call"`, `"tool/result"`, `"effort":"max"`, "verified proof", "evidence"} {
 		if !bytes.Contains(encoded, []byte(fact)) {
 			t.Fatalf("transcript lacks %s", fact)
 		}

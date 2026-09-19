@@ -158,10 +158,31 @@ type ToolDefinition struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
+// Effort selects the provider-neutral work budget frozen for one model request.
+type Effort string
+
+const (
+	// EffortNone disables reasoning where the provider and model support it.
+	EffortNone Effort = "none"
+	// EffortMinimal requests the provider's smallest nonzero reasoning level.
+	EffortMinimal Effort = "minimal"
+	// EffortLow favors lower latency and token use.
+	EffortLow Effort = "low"
+	// EffortMedium balances response work and token use.
+	EffortMedium Effort = "medium"
+	// EffortHigh requests the provider's standard high capability.
+	EffortHigh Effort = "high"
+	// EffortXHigh requests extended work from providers that expose it.
+	EffortXHigh Effort = "xhigh"
+	// EffortMax requests the greatest work level exposed by the provider.
+	EffortMax Effort = "max"
+)
+
 // RequestHeader makes a provider call reconstructable from the log.
 type RequestHeader struct {
 	Provider      string           `json:"provider"`
 	Model         string           `json:"model"`
+	Effort        Effort           `json:"effort,omitempty"`
 	System        string           `json:"system"`
 	Tools         []ToolDefinition `json:"tools,omitempty"`
 	ContextWindow int              `json:"context_window,omitempty"`
@@ -251,6 +272,7 @@ type CompactionData struct {
 	Summary            []ContentBlock `json:"summary,omitempty"`
 	Provider           string         `json:"provider,omitempty"`
 	Model              string         `json:"model,omitempty"`
+	Effort             Effort         `json:"effort,omitempty"`
 	Error              string         `json:"error,omitempty"`
 }
 

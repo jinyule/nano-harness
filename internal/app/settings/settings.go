@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/jinyule/nano-harness/internal/core/plugin"
+	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
 var (
@@ -31,11 +32,12 @@ type Route struct {
 
 // Model describes provider-owned catalog facts used before a request.
 type Model struct {
-	ID            string `yaml:"id" json:"id"`
-	Name          string `yaml:"name" json:"name"`
-	ContextWindow int    `yaml:"context_window" json:"context_window"`
-	Vision        bool   `yaml:"vision" json:"vision"`
-	Tools         bool   `yaml:"tools" json:"tools"`
+	ID            string         `yaml:"id" json:"id"`
+	Name          string         `yaml:"name" json:"name"`
+	Effort        session.Effort `yaml:"effort,omitempty" json:"effort,omitempty"`
+	ContextWindow int            `yaml:"context_window" json:"context_window"`
+	Vision        bool           `yaml:"vision" json:"vision"`
+	Tools         bool           `yaml:"tools" json:"tools"`
 }
 
 // Provider configures one of the three installed wire providers.
@@ -77,7 +79,7 @@ func Defaults() Document {
 		Providers: map[string]Provider{
 			"openai": { //nolint:gosec // this block contains an environment-variable name, not a credential
 				BaseURL: "https://api.openai.com", APIKeyEnv: "OPENAI_API_KEY",
-				Models: []Model{{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", ContextWindow: 200_000, Vision: true, Tools: true}, {ID: "gpt-5.4", Name: "GPT-5.4", ContextWindow: 200_000, Vision: true, Tools: true}},
+				Models: []Model{{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", Effort: session.EffortMax, ContextWindow: 1_050_000, Vision: true, Tools: true}, {ID: "gpt-5.4", Name: "GPT-5.4", ContextWindow: 200_000, Vision: true, Tools: true}},
 			},
 			"anthropic": { //nolint:gosec // this block contains an environment-variable name, not a credential
 				BaseURL: "https://api.anthropic.com", APIKeyEnv: "ANTHROPIC_API_KEY",
@@ -173,10 +175,23 @@ func validateProvider(name string, provider Provider) error {
 		if !validName(model.ID, 256) || model.Name == "" || len(model.Name) > 256 || model.ContextWindow < 1024 || model.ContextWindow > 10_000_000 {
 			return invalid("provider %q has invalid model metadata", name)
 		}
+		if err := validateEffort(name, model); err != nil {
+			return err
+		}
 		if _, exists := seen[model.ID]; exists {
 			return invalid("provider %q repeats model %q", name, model.ID)
 		}
 		seen[model.ID] = struct{}{}
+	}
+	return nil
+}
+
+func validateEffort(provider string, model Model) error {
+	if model.Effort == "" {
+		return nil
+	}
+	if !session.ValidEffort(model.Effort) || provider == "anthropic" && (model.Effort == session.EffortNone || model.Effort == session.EffortMinimal) {
+		return invalid("provider %q model %q has unsupported effort %q", provider, model.ID, model.Effort)
 	}
 	return nil
 }

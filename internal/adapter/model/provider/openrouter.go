@@ -50,13 +50,14 @@ type chatTool struct {
 }
 
 type chatRequest struct {
-	Model             string        `json:"model"`
-	Messages          []chatMessage `json:"messages"`
-	Tools             []chatTool    `json:"tools,omitempty"`
-	ToolChoice        string        `json:"tool_choice,omitempty"`
-	ParallelToolCalls bool          `json:"parallel_tool_calls"`
-	MaxTokens         int           `json:"max_tokens,omitempty"`
-	Stream            bool          `json:"stream"`
+	Model             string         `json:"model"`
+	Messages          []chatMessage  `json:"messages"`
+	Tools             []chatTool     `json:"tools,omitempty"`
+	ToolChoice        string         `json:"tool_choice,omitempty"`
+	ParallelToolCalls bool           `json:"parallel_tool_calls"`
+	MaxTokens         int            `json:"max_tokens,omitempty"`
+	ReasoningEffort   session.Effort `json:"reasoning_effort,omitempty"`
+	Stream            bool           `json:"stream"`
 	StreamOptions     struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options"`
@@ -123,7 +124,7 @@ func (provider *Provider) chatRequest(model llm.ModelInfo, request llm.Request) 
 	}
 	payload := chatRequest{
 		Model: model.ID, Messages: messages, Tools: tools, ParallelToolCalls: true,
-		MaxTokens: request.MaxTokens, Stream: true,
+		MaxTokens: request.MaxTokens, ReasoningEffort: model.Effort, Stream: true,
 	}
 	payload.StreamOptions.IncludeUsage = true
 	if len(tools) > 0 {

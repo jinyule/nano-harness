@@ -627,6 +627,9 @@ func (model model) modelsCommand(provider string) tea.Cmd {
 		lines := make([]string, len(models))
 		for index, candidate := range models {
 			lines[index] = fmt.Sprintf("%s/%s context=%d vision=%t tools=%t", candidate.Provider, candidate.ID, candidate.ContextWindow, candidate.Vision, candidate.Tools)
+			if candidate.Effort != "" {
+				lines[index] += " effort=" + string(candidate.Effort)
+			}
 		}
 		return operationMessage{text: strings.Join(lines, "\n")}
 	}
@@ -673,7 +676,11 @@ func (model *model) applyEvent(event session.Event, live bool) {
 		}
 		model.addLine("you> " + text)
 	case session.RecordRequestHeader:
-		model.addLine(fmt.Sprintf("route> %s/%s", record.Header.Provider, record.Header.Model))
+		route := fmt.Sprintf("route> %s/%s", record.Header.Provider, record.Header.Model)
+		if record.Header.Effort != "" {
+			route += " effort=" + string(record.Header.Effort)
+		}
+		model.addLine(route)
 	case session.RecordAssistantChunk:
 		if live && record.Chunk.Kind == session.ChunkText {
 			model.appendStream("assistant", record.Chunk.Text)
