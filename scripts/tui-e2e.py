@@ -135,6 +135,9 @@ class Terminal:
         self.output = b""
         self.cursor = 0
 
+    def resize(self, width, height):
+        fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))
+
     def send(self, text):
         os.write(self.master, text.encode())
 
@@ -187,13 +190,15 @@ def verify(binary):
             terminal = Terminal(binary, directory, workspace, settings)
             try:
                 terminal.expect("/help")
-                terminal.send("verify tools\r")
+                terminal.resize(60, 20)
+                terminal.send("\x1b[200~verify tools\x1b[201~\r")
                 terminal.expect("Approval required:")
                 terminal.send("y\r")
                 terminal.expect("Approval required:")
                 terminal.send("y\r")
                 terminal.expect("WRAP_END")
                 terminal.expect("turn> completed")
+                terminal.resize(100, 32)
                 terminal.send("/agents\r")
                 terminal.expect("reader mode=continuable busy=false outcome=completed")
                 terminal.send("wait\r")
@@ -236,7 +241,7 @@ def verify(binary):
                 assert terminal.process.wait(timeout=10) == 0
             finally:
                 terminal.close()
-            print("PASS: real binary/PTY, 10 root tools, child read/followup, approvals, files, wrap, interrupt, resume, cleanup")
+            print("PASS: real binary/PTY, 10 root tools, child read/followup, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
 
 
 def main():

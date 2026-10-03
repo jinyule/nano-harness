@@ -16,7 +16,7 @@ make tui-e2e
 
 在 GoLand 打开仓库，选择共享配置 **Nano TUI**，设置源码断点后点击 Debug。该配置从真实 package 入口启动并开启 terminal emulation，TUI 输入、调用栈和变量都在 IDE 的 Debug 工具窗口中。
 
-本机已验证 GoLand 2025.2.6.2、IDE 内置 Delve 1.25.1 与工程 Go 1.27.0 可以直接启动：在控制台输入 `/help` 后，断点命中 `internal/adapter/tui/tui.go` 的 Enter 分支，Threads & Variables 显示 `tui.model` 与 `tea.KeyMsg`。这个结果证明当前组合可直接调试，不要求 Remote 配置。若其他 GoLand/Go/Delve 组合启动时报版本或符号错误，应升级 IDE/Delve，或使用下一节固定版本的远程流程。
+GoLand 2025.2.6.2、IDE 内置 Delve 1.25.1 与工程 Go 1.27.0 的直接启动已有[本机验证记录](../.agents/notes/implemented/2026-09-19-provider-neutral-effort-and-direct-debug.md)。当前 Enter 分支位于 `internal/adapter/tui/model.go` 的 `model.update`，输入类型为 `tea.KeyPressMsg`。TUI v2 后尚未重复 IDE 断点验证；若所用 GoLand/Go/Delve 组合报版本或符号错误，应升级 IDE/Delve，或使用下一节固定版本的远程流程。
 
 **Nano TUI** 使用正常的个人账户和 session 路径。验证结束优先在 TUI 输入 `/quit`；停在断点时也可用 IDE 的 Stop 回收目标进程。
 
@@ -46,7 +46,7 @@ make debug-fixture
 
 | 断点位置 | 可观察内容 |
 |---|---|
-| `internal/adapter/tui/tui.go` 的 `model.submit` | TUI 提交的文本与输入模式 |
+| `internal/adapter/tui/model.go` 的 `model.submit` | TUI 提交的文本与输入模式 |
 | `internal/app/subagent/service.go` 的 `Service.Spawn` | parent session、label、mode、task、tool allowlist |
 | `internal/adapter/tool/workspace/files.go` 的 `readTool.Execute` | session ID、arguments、delegated/elevated 状态 |
 

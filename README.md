@@ -58,7 +58,9 @@ make build
 
 `/attach` 接受 JPEG 或 PNG；图片会缩放、规范化并随下一条消息持久化。`/permission ask` 是默认策略：`apply_patch` 和 `run_shell` 在实际执行前请求一次性授权。普通 shell 在 workspace sandbox 中运行；host 模式仍需一次性授权，而且 subagent 不能请求 host 执行。
 
-长行按终端列宽换行。用方向键、Page Up/Page Down 或 Ctrl+U/Ctrl+D 浏览 transcript；浏览历史时新输出保留当前位置，滚到底部后恢复跟随。普通文字输入不会滚动 transcript。
+TUI 使用 Bubble Tea v2、Lip Gloss v2 和 Bubbles v2，并作为可回收插件接入共享应用。后续 GUI 可独立复用同一组装，见[前端插件决策](docs/decisions/0005-selectable-frontend-plugins.md)。
+
+长行按终端列宽换行，窗口缩放时重新布局，支持 bracketed paste。用鼠标滚轮、方向键、Page Up/Page Down 或 Ctrl+U/Ctrl+D 浏览 transcript；浏览历史时新输出保留当前位置，滚到底部后恢复跟随。普通文字输入不会滚动 transcript。
 
 会话默认保存在用户配置目录下的 `nano-harness/sessions`，账户和设置分别保存在同目录的 `credentials.yaml` 与 `settings.yaml`。这些文件使用 owner-only 权限。可以用 `--session ID` 恢复同一会话，用 `--session-root DIR`、`--credentials FILE` 和 `--settings FILE` 改变位置。已有会话的 composition fingerprint 必须与 workspace 和工具/会话语义一致，否则拒绝恢复。
 
