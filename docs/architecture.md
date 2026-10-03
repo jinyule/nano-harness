@@ -36,7 +36,7 @@ internal/platform
 
 ## 产品启动入口
 
-`cmd/nano-harness` 是支持的产品启动入口，拥有配置、构造注入、Plugin Runtime 和退出处理。示例、未来 headless 或协议模式沿同一入口扩展，不能另建一套跳过设置、approval 或 Scope 的应用树。包内单元测试可以直接构造组件；产品行为证据还必须经过真实 composition，发布证据运行编译后的 binary。`internal/tools` 是仓库工具，不属于产品启动入口。
+`cmd/nano-harness` 是支持的产品启动入口，拥有配置、构造注入、Plugin Runtime 和退出处理。`composeApplication` 构造共享服务与有序插件，前端组装追加选中的 UI 插件；当前 `composeTUI` 追加终端，后续 GUI 复用同一应用构造。示例、未来 headless 或协议模式沿同一入口扩展，不能另建一套跳过设置、approval 或 Scope 的应用树。包内单元测试可以直接构造组件；产品行为证据还必须经过真实 composition，发布证据运行编译后的 binary。`internal/tools` 是仓库工具，不属于产品启动入口。
 
 ## Plugin 与 Scope 生命周期
 
@@ -192,9 +192,9 @@ credential store 按 provider 保存一个 API key 或 OAuth grant，使用 stri
 
 ## TUI 与投影
 
-`internal/adapter/tui` 是 alternate-screen Bubble Tea 插件。它从 durable event replay 初始化，再订阅已提交事件，展示 route、streamed text/reasoning、tool call/result、approval、retry、compaction 和 turn outcome。TUI 同时实现本地 approval broker 与 auth interaction；secret prompt 使用 password echo。
+`internal/adapter/tui` 是使用 Bubble Tea v2、Lip Gloss v2 与 Bubbles v2 的 alternate-screen 插件。`tea.View` 声明终端模式，输入、viewport、命令与事件投影保留在 adapter；app/core 不依赖 Charm。它从 durable event replay 初始化，再订阅已提交事件，展示 route、streamed text/reasoning、tool call/result、approval、retry、compaction 和 turn outcome。TUI 同时实现本地 approval broker 与 auth interaction；secret prompt 使用 password echo。
 
-UI 命令调用 app 用例，不直接修改文件或 provider 内部状态。退出会 interrupt root 活动 turn；Scope cleanup 撤销 broker、停止 event forwarding，并等待 UI 相关 goroutine 静止。
+UI 命令调用 app 用例，不直接修改文件或 provider 内部状态。退出会 interrupt root 活动 turn；Scope cleanup 撤销 broker、停止 event forwarding，取消并等待终端程序与异步命令静止。Run 退出先取消命令 context，关闭命令执行入口，再等待已开始的操作；迟到命令不再调用 app。前端独立选择，当前只有所选 UI 注册 approval broker；GUI 的扩展边界见 [ADR-0005](decisions/0005-selectable-frontend-plugins.md)。
 
 ## 公共 API 与完成条件
 

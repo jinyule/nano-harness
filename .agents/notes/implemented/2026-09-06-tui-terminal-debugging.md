@@ -21,6 +21,8 @@ TUI 按显示列宽换行，只有原来位于底部时才跟随新输出；分�
 
 此 Note 补充[核心 Harness 实施记录](2026-08-24-core-agent-harness.md)的终端和调试证据；该记录仍拥有原有 composition、持久化、安全和 live provider 决策。没有取代其余 active Note，也没有改变需要新增 ADR 的架构或数据契约。
 
+v2 前端、共享组装拆分和更完整的 terminal/command cleanup 由 [TUI v2 Note](2026-10-03-tui-v2-frontend-plugins.md) 记录；本记录保留工具 fixture、stream 修复和历史调试证据。
+
 ## Consequences
 
 可重复验证用户真正输入的命令、审批决定和磁盘效果，并可调试同进程子代理 goroutine。长文本和异步系统提示不再相互覆盖，历史阅读位置也不会被后续输出抢走。ASCII/中文列宽处理使用现有 ANSI 库，不另造终端渲染器。

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/approval"
 	"github.com/jinyule/nano-harness/internal/app/llm"
@@ -121,12 +121,16 @@ type fakeModelService struct {
 	modelsErr   error
 	login       [2]string
 	loginErr    error
+	loginWork   func(context.Context) error
 	logout      string
 	logoutErr   error
 }
 
-func (service *fakeModelService) Login(_ context.Context, provider, method string, _ llm.AuthInteraction) error {
+func (service *fakeModelService) Login(ctx context.Context, provider, method string, _ llm.AuthInteraction) error {
 	service.login = [2]string{provider, method}
+	if service.loginWork != nil {
+		return service.loginWork(ctx)
+	}
 	return service.loginErr
 }
 func (service *fakeModelService) Logout(_ context.Context, provider string) error {
@@ -410,7 +414,7 @@ type immediateQuitModel struct{}
 
 func (immediateQuitModel) Init() tea.Cmd                             { return tea.Quit }
 func (model immediateQuitModel) Update(tea.Msg) (tea.Model, tea.Cmd) { return model, nil }
-func (immediateQuitModel) View() string                              { return "" }
+func (immediateQuitModel) View() tea.View                            { return tea.NewView("") }
 
 func TestDefaultRunProgram_ExecutesBubbleTeaProgram(t *testing.T) {
 	previousRun := runProgram
@@ -532,4 +536,79 @@ func TestAppAskPromptAndNotify_AllTerminalStates(t *testing.T) {
 		t.Fatalf("gone prompt = %v", err)
 	}
 	gone.Notify(llm.AuthNotice{})
+}
+
+func TestAppScopeClose_StopsRunningProgram(t *testing.T) {
+	previous := runProgram
+	t.Cleanup(func() { runProgram = previous })
+	_, config := newAppFixture()
+	app, _ := New(config)
+	scope := &plugin.Scope{}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if err := app.Start(ctx, scope); err != nil {
+		t.Fatal(err)
+	}
+	entered, finished := make(chan struct{}), make(chan struct{})
+	runProgram = func(ctx context.Context, _ io.Reader, _ io.Writer, _ tea.Model) error {
+		close(entered)
+		<-ctx.Done()
+		close(finished)
+		return ctx.Err()
+	}
+	runDone := make(chan error, 1)
+	go func() { runDone <- app.Run(ctx, strings.NewReader(""), io.Discard) }()
+	<-entered
+	if err := scope.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-finished:
+	default:
+		t.Error("scope cleanup returned with terminal program still running")
+	}
+	cancel()
+	<-runDone
+}
+
+func TestAppRun_QuitCancelsAndJoinsLogin(t *testing.T) {
+	previous := runProgram
+	t.Cleanup(func() { runProgram = previous })
+	fixture, config := newAppFixture()
+	entered, finished := make(chan struct{}), make(chan struct{})
+	fixture.models.loginWork = func(ctx context.Context) error {
+		close(entered)
+		<-ctx.Done()
+		close(finished)
+		return ctx.Err()
+	}
+	app, _ := New(config)
+	scope := &plugin.Scope{}
+	if err := app.Start(t.Context(), scope); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = scope.Close(context.Background()) })
+	var delayed tea.Cmd
+	commandDone := make(chan struct{})
+	runProgram = func(_ context.Context, _ io.Reader, _ io.Writer, initial tea.Model) error {
+		current := initial.(model)
+		current.input.SetValue("/login openai browser")
+		_, command := current.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		delayed = command
+		go func() { defer close(commandDone); command() }()
+		<-entered
+		return nil
+	}
+	if err := app.Run(t.Context(), strings.NewReader(""), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-finished:
+	default:
+		t.Fatal("Run returned before login settled")
+	}
+	<-commandDone
+	if message := delayed(); message != nil {
+		t.Fatal("queued command ran after UI exit")
+	}
 }
