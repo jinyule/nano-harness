@@ -55,7 +55,7 @@ type scriptedModel struct {
 }
 
 func (model *scriptedModel) Info() llm.ModelInfo {
-	return llm.ModelInfo{Provider: "openai", ID: "gpt-5.6-luna", ContextWindow: 200_000, Vision: true, Tools: true}
+	return llm.ModelInfo{Provider: "openai", ID: "gpt-5.6-luna", Effort: session.EffortMax, ContextWindow: 1_050_000, Vision: true, Tools: true}
 }
 func (*scriptedModel) CredentialEnv() string { return "OPENAI_API_KEY" }
 func (*scriptedModel) Refresh(_ context.Context, credential llm.Credential) (llm.Credential, error) {
@@ -277,6 +277,10 @@ func TestEngine_CompletesStreamingTurnWithDurableOrder(t *testing.T) {
 	}
 	if len(harness.model.seen) != 1 || harness.model.seen[0].Purpose != "agent" || !strings.Contains(harness.model.seen[0].System, "Assigned role") {
 		t.Fatalf("model request = %#v", harness.model.seen)
+	}
+	header := log.events[3].Record.Header
+	if header.Effort != session.EffortMax || header.ContextWindow != 1_050_000 {
+		t.Fatalf("request header = %#v", header)
 	}
 }
 

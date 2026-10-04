@@ -24,7 +24,7 @@ func testImage() *Image {
 func TestRecordValidate_AllKinds(t *testing.T) {
 	call := &ToolCall{ID: "call", Name: "tool", Arguments: json.RawMessage(`{"x":1}`)}
 	result := &ToolResult{CallID: "call", Output: "ok"}
-	header := &RequestHeader{Provider: "openai", Model: "model", System: "system", ContextWindow: 8192, Tools: []ToolDefinition{{Name: "tool", Description: "does work", Parameters: json.RawMessage(`{"type":"object"}`)}}}
+	header := &RequestHeader{Provider: "openai", Model: "model", Effort: EffortMax, System: "system", ContextWindow: 8192, Tools: []ToolDefinition{{Name: "tool", Description: "does work", Parameters: json.RawMessage(`{"type":"object"}`)}}}
 	valid := []Record{
 		{Type: RecordTurnStart, Turn: 1},
 		{Type: RecordUserMessage, Turn: 1, Message: textMessage(RoleUser, "hello")},
@@ -42,7 +42,7 @@ func TestRecordValidate_AllKinds(t *testing.T) {
 		{Type: RecordRetry, Turn: 1, Step: 1, Retry: &RetryData{ID: "retry", Provider: "openai", PolicyKey: "route", Attempt: 1, MaxRetries: 2, DelayMS: 1, Failure: "server"}},
 		{Type: RecordRetryStarted, Turn: 1, Step: 1, Retry: &RetryData{ID: "retry", Attempt: 1}},
 		{Type: RecordCompactionStart, Compaction: &CompactionData{ID: "compact"}},
-		{Type: RecordCompactionSummary, Compaction: &CompactionData{ID: "compact", ShadowedSeqs: []uint64{1}, ShadowedTokenCount: 1, Summary: []ContentBlock{{Type: ContentText, Text: "summary"}}, Provider: "openai", Model: "model"}},
+		{Type: RecordCompactionSummary, Compaction: &CompactionData{ID: "compact", ShadowedSeqs: []uint64{1}, ShadowedTokenCount: 1, Summary: []ContentBlock{{Type: ContentText, Text: "summary"}}, Provider: "openai", Model: "model", Effort: EffortMax}},
 		{Type: RecordCompactionEnd, Compaction: &CompactionData{ID: "compact", Error: "failure"}},
 		{Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 1, Provider: "in-process", Mode: "continuable", Label: "worker", Tools: []string{"tool"}}},
 		{Type: RecordStepEnd, Turn: 1, Step: 1, Usage: &TokenUsage{InputTokens: 1, OutputTokens: 1}},
@@ -108,7 +108,7 @@ func TestRecordValidateRejectsEveryInvalidShape(t *testing.T) {
 	validHeader := &RequestHeader{Provider: "p", Model: "m", Tools: []ToolDefinition{{Name: "tool", Description: "description", Parameters: json.RawMessage(`{}`)}}}
 	validApproval := &ApprovalData{ID: "approval", CallID: "call", ToolName: "tool", Reason: "reason"}
 	validRetry := &RetryData{ID: "retry", Provider: "p", PolicyKey: "route", Attempt: 1, Failure: "server"}
-	validCompaction := &CompactionData{ID: "compact", ShadowedSeqs: []uint64{1}, ShadowedTokenCount: 1, Summary: []ContentBlock{{Type: ContentText, Text: "summary"}}, Provider: "p", Model: "m"}
+	validCompaction := &CompactionData{ID: "compact", ShadowedSeqs: []uint64{1}, ShadowedTokenCount: 1, Summary: []ContentBlock{{Type: ContentText, Text: "summary"}}, Provider: "p", Model: "m", Effort: EffortMax}
 	cases := map[string]Record{
 		"missing type":              {},
 		"missing turn":              {Type: RecordTurnStart},
@@ -123,6 +123,7 @@ func TestRecordValidateRejectsEveryInvalidShape(t *testing.T) {
 		"header shape":              {Type: RecordRequestHeader, Turn: 1, Header: validHeader},
 		"header provider":           {Type: RecordRequestHeader, Turn: 1, Step: 1, Header: &RequestHeader{Provider: "", Model: "m"}},
 		"header model":              {Type: RecordRequestHeader, Turn: 1, Step: 1, Header: &RequestHeader{Provider: "p", Model: ""}},
+		"header effort":             {Type: RecordRequestHeader, Turn: 1, Step: 1, Header: &RequestHeader{Provider: "p", Model: "m", Effort: "extreme"}},
 		"header limits":             {Type: RecordRequestHeader, Turn: 1, Step: 1, Header: &RequestHeader{Provider: "p", Model: "m", ContextWindow: -1}},
 		"header duplicate tool":     {Type: RecordRequestHeader, Turn: 1, Step: 1, Header: &RequestHeader{Provider: "p", Model: "m", Tools: []ToolDefinition{{Name: "t", Description: "x", Parameters: json.RawMessage(`{}`)}, {Name: "t", Description: "x", Parameters: json.RawMessage(`{}`)}}}},
 		"header bad tool":           {Type: RecordRequestHeader, Turn: 1, Step: 1, Header: &RequestHeader{Provider: "p", Model: "m", Tools: []ToolDefinition{{Name: "", Description: "x", Parameters: json.RawMessage(`{}`)}}}},
@@ -153,6 +154,7 @@ func TestRecordValidateRejectsEveryInvalidShape(t *testing.T) {
 		"compaction summary fields": {Type: RecordCompactionSummary, Compaction: &CompactionData{ID: "compact"}},
 		"compaction shadow seq":     {Type: RecordCompactionSummary, Compaction: &CompactionData{ID: "compact", ShadowedSeqs: []uint64{0}, ShadowedTokenCount: 1, Summary: []ContentBlock{{Type: ContentText, Text: "s"}}, Provider: "p", Model: "m"}},
 		"compaction content":        {Type: RecordCompactionSummary, Compaction: &CompactionData{ID: "compact", ShadowedSeqs: []uint64{1}, ShadowedTokenCount: 1, Summary: []ContentBlock{{Type: "bad"}}, Provider: "p", Model: "m"}},
+		"compaction effort":         {Type: RecordCompactionSummary, Compaction: &CompactionData{ID: "compact", ShadowedSeqs: []uint64{1}, ShadowedTokenCount: 1, Summary: []ContentBlock{{Type: ContentText, Text: "s"}}, Provider: "p", Model: "m", Effort: "extreme"}},
 		"compaction end fields":     {Type: RecordCompactionEnd, Compaction: &CompactionData{ID: "compact", Provider: "p"}},
 		"subagent shape":            {Type: RecordSubagentDescriptor},
 		"subagent fields":           {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{}},
@@ -160,6 +162,14 @@ func TestRecordValidateRejectsEveryInvalidShape(t *testing.T) {
 		"turn end extras":           {Type: RecordTurnEnd, Turn: 1, Outcome: OutcomeCompleted, Result: validResult},
 		"turn end outcome":          {Type: RecordTurnEnd, Turn: 1, Outcome: "bad"},
 		"message extras":            {Type: RecordUserMessage, Turn: 1, Message: validMessage, Call: validCall},
+	}
+	for _, effort := range []Effort{EffortNone, EffortMinimal, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax} {
+		if !ValidEffort(effort) {
+			t.Fatalf("valid effort rejected: %s", effort)
+		}
+	}
+	if ValidEffort("") || ValidEffort("extreme") {
+		t.Fatal("invalid effort accepted")
 	}
 	for name, record := range cases {
 		t.Run(name, func(t *testing.T) {

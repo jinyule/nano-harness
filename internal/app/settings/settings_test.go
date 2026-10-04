@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jinyule/nano-harness/internal/core/plugin"
+	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
 type fakeBackend struct {
@@ -46,6 +47,9 @@ func startService(t *testing.T) (*Service, *plugin.Scope) {
 
 func TestDocumentResolveAndValidation(t *testing.T) {
 	defaults := Defaults()
+	if model := defaults.Providers["openai"].Models[0]; model.ID != "gpt-5.6-luna" || model.Effort != session.EffortMax || model.ContextWindow != 1_050_000 {
+		t.Fatalf("default Luna model = %#v", model)
+	}
 	resolved, err := Resolve(Document{Route: Route{Provider: "openrouter", Model: "openai/gpt-5.4"}, Providers: map[string]Provider{
 		"openrouter": {BaseURL: "http://localhost:1234", APIKeyEnv: "CUSTOM_KEY", Models: []Model{{ID: "openai/gpt-5.4", Name: "Custom", ContextWindow: 4096, Vision: true, Tools: true}}},
 	}, Retry: Retry{Mode: "always", MaxRetries: 1, InitialDelayMS: 1, MaxDelayMS: 2}, Compaction: Compaction{ThresholdRatio: .7, RetainRatio: .1, MaxTokens: 256}})
@@ -91,6 +95,16 @@ func TestDocumentResolveAndValidation(t *testing.T) {
 			provider.Models = append(provider.Models, provider.Models[0])
 			document.Providers["openai"] = provider
 		},
+		func(document *Document) {
+			provider := document.Providers["openai"]
+			provider.Models[0].Effort = "extreme"
+			document.Providers["openai"] = provider
+		},
+		func(document *Document) {
+			provider := document.Providers["anthropic"]
+			provider.Models[0].Effort = session.EffortMinimal
+			document.Providers["anthropic"] = provider
+		},
 		func(document *Document) { document.Route.Model = "missing" },
 		func(document *Document) { document.Retry.Mode = "bad" },
 		func(document *Document) { document.Compaction.ThresholdRatio = 1 },
@@ -114,6 +128,21 @@ func TestDocumentResolveAndValidation(t *testing.T) {
 	}
 	if validName(" bad ", 10) || validName("", 10) || !validName("good", 10) {
 		t.Fatal("validName behavior")
+	}
+	for _, provider := range []string{"openai", "openrouter"} {
+		for _, effort := range []session.Effort{session.EffortNone, session.EffortMinimal, session.EffortLow, session.EffortMedium, session.EffortHigh, session.EffortXHigh, session.EffortMax} {
+			if err := validateEffort(provider, Model{ID: "model", Effort: effort}); err != nil {
+				t.Fatalf("%s effort %s rejected: %v", provider, effort, err)
+			}
+		}
+	}
+	for _, effort := range []session.Effort{session.EffortLow, session.EffortMedium, session.EffortHigh, session.EffortXHigh, session.EffortMax} {
+		if err := validateEffort("anthropic", Model{ID: "model", Effort: effort}); err != nil {
+			t.Fatalf("anthropic effort %s rejected: %v", effort, err)
+		}
+	}
+	if err := validateEffort("anthropic", Model{ID: "model"}); err != nil {
+		t.Fatalf("unset effort rejected: %v", err)
 	}
 	missing := Defaults()
 	delete(missing.Providers, "openai")

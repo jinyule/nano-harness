@@ -48,6 +48,11 @@ func TestComposition_EndToEndToolChain(t *testing.T) {
 			http.Error(writer, "bad json", http.StatusBadRequest)
 			return
 		}
+		reasoning, _ := body["reasoning"].(map[string]any)
+		if reasoning["effort"] != "max" {
+			http.Error(writer, "missing max reasoning effort", http.StatusBadRequest)
+			return
+		}
 		writer.Header().Set("Content-Type", "text/event-stream")
 		if calls.Add(1) == 1 {
 			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read_file\"}}\n\n")
@@ -66,11 +71,11 @@ func TestComposition_EndToEndToolChain(t *testing.T) {
 	}
 	data := t.TempDir()
 	settingsPath := filepath.Join(data, "settings.yaml")
-	settingsYAML := fmt.Sprintf("route:\n  provider: openai\n  model: test-model\nproviders:\n  openai:\n    base_url: %s\n    models:\n      - id: test-model\n        name: Test\n        context_window: 8192\n        vision: true\n        tools: true\n", server.URL)
+	settingsYAML := fmt.Sprintf("route:\n  provider: openai\n  model: test-model\nproviders:\n  openai:\n    base_url: %s\n    models:\n      - id: test-model\n        name: Test\n        effort: max\n        context_window: 8192\n        vision: true\n        tools: true\n", server.URL)
 	if err := os.WriteFile(settingsPath, []byte(settingsYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	config, err := normalizeConfig(tuiConfig{
+	config, err := normalizeConfig(applicationConfig{
 		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), settingsPath: settingsPath,
 		credentialPath: filepath.Join(data, "credentials.yaml"), sessionID: "session-e2e", maxSteps: 8,
 	})
@@ -106,7 +111,7 @@ func TestComposition_EndToEndToolChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fact := range []string{`"tool/call"`, `"tool/result"`, "verified proof", "evidence"} {
+	for _, fact := range []string{`"tool/call"`, `"tool/result"`, `"effort":"max"`, "verified proof", "evidence"} {
 		if !bytes.Contains(encoded, []byte(fact)) {
 			t.Fatalf("transcript lacks %s", fact)
 		}
@@ -148,7 +153,7 @@ func TestRunAndParsing(t *testing.T) {
 	if _, err := parseTUIConfig([]string{"extra"}, &stderr); err == nil {
 		t.Fatal("positional argument accepted")
 	}
-	if _, err := normalizeConfig(tuiConfig{workspaceRoot: root, sessionRoot: root, settingsPath: "x", credentialPath: "y", sessionID: "x", maxSteps: 0}); err == nil {
+	if _, err := normalizeConfig(applicationConfig{workspaceRoot: root, sessionRoot: root, settingsPath: "x", credentialPath: "y", sessionID: "x", maxSteps: 0}); err == nil {
 		t.Fatal("zero max steps accepted")
 	}
 	if got := compositionID(config); len(got) != 64 {
@@ -179,7 +184,7 @@ func TestCommandErrorPaths(t *testing.T) {
 		})
 	}
 	root := t.TempDir()
-	config := tuiConfig{workspaceRoot: root, sessionRoot: root, settingsPath: filepath.Join(root, "s"), credentialPath: filepath.Join(root, "c"), sessionID: "id", maxSteps: 1, create: true}
+	config := applicationConfig{workspaceRoot: root, sessionRoot: root, settingsPath: filepath.Join(root, "s"), credentialPath: filepath.Join(root, "c"), sessionID: "id", maxSteps: 1, create: true}
 	_, err := composeTUI(config, dependencies{newRuntime: func(...plugin.Plugin) (*plugin.Runtime, error) { return nil, failure }})
 	if !errors.Is(err, failure) {
 		t.Fatalf("compose error=%v", err)
@@ -302,7 +307,7 @@ func TestRunTUI_MapsParseComposeLifecycleRunAndShutdown(t *testing.T) {
 func TestNormalizeConfig_ContainsEveryPathBoundary(t *testing.T) {
 	restoreMainHooks(t)
 	root := t.TempDir()
-	base := tuiConfig{workspaceRoot: root, sessionRoot: filepath.Join(root, "sessions"), settingsPath: filepath.Join(root, "settings"), credentialPath: filepath.Join(root, "credentials"), sessionID: "session", maxSteps: 1}
+	base := applicationConfig{workspaceRoot: root, sessionRoot: filepath.Join(root, "sessions"), settingsPath: filepath.Join(root, "settings"), credentialPath: filepath.Join(root, "credentials"), sessionID: "session", maxSteps: 1}
 	failure := errors.New("failure")
 	absolutePath = func(string) (string, error) { return "", failure }
 	if _, err := normalizeConfig(base); err == nil || !strings.Contains(err.Error(), "resolve") {
@@ -339,7 +344,7 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 	restoreMainHooks(t)
 	failure := errors.New("constructor")
 	root := t.TempDir()
-	config := tuiConfig{
+	config := applicationConfig{
 		workspaceRoot: root, sessionRoot: filepath.Join(t.TempDir(), "sessions"), settingsPath: filepath.Join(t.TempDir(), "settings.yaml"),
 		credentialPath: filepath.Join(t.TempDir(), "credentials.yaml"), sessionID: "session", maxSteps: 1, create: true,
 	}

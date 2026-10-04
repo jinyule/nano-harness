@@ -41,13 +41,18 @@ type anthropicTool struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 
+type anthropicOutputConfig struct {
+	Effort session.Effort `json:"effort"`
+}
+
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	System    string             `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
-	Tools     []anthropicTool    `json:"tools,omitempty"`
-	MaxTokens int                `json:"max_tokens"`
-	Stream    bool               `json:"stream"`
+	Model        string                 `json:"model"`
+	System       string                 `json:"system,omitempty"`
+	Messages     []anthropicMessage     `json:"messages"`
+	Tools        []anthropicTool        `json:"tools,omitempty"`
+	MaxTokens    int                    `json:"max_tokens"`
+	OutputConfig *anthropicOutputConfig `json:"output_config,omitempty"`
+	Stream       bool                   `json:"stream"`
 }
 
 func (provider *Provider) streamAnthropic(ctx context.Context, current *snapshot, model llm.ModelInfo, credential llm.Credential, request llm.Request, emit llm.Emit) (llm.Completion, error) {
@@ -109,7 +114,11 @@ func (provider *Provider) anthropicRequest(model llm.ModelInfo, request llm.Requ
 	if maxTokens == 0 {
 		maxTokens = 8192
 	}
-	return anthropicRequest{Model: model.ID, System: request.System, Messages: messages, Tools: tools, MaxTokens: maxTokens, Stream: true}, nil
+	payload := anthropicRequest{Model: model.ID, System: request.System, Messages: messages, Tools: tools, MaxTokens: maxTokens, Stream: true}
+	if model.Effort != "" {
+		payload.OutputConfig = &anthropicOutputConfig{Effort: model.Effort}
+	}
+	return payload, nil
 }
 
 type anthropicEvent struct {
