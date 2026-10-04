@@ -36,6 +36,8 @@ type model struct {
 	approval   *approvalEnvelope
 	auth       *authEnvelope
 	images     []session.Image
+	todos      []session.TodoItem
+	plan       []string
 	stream     string
 	streamText string
 	quitting   bool
@@ -55,7 +57,7 @@ func newModel(ctx context.Context, app *App, initial []session.Event) model {
 	for _, event := range initial {
 		current.applyEvent(event, false)
 	}
-	current.refresh()
+	current.layout()
 	return current
 }
 
@@ -84,15 +86,8 @@ func (model model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 func (model model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
-		follow := model.viewport.AtBottom()
 		model.width, model.height = max(message.Width, 1), max(message.Height, 1)
-		model.viewport.SetWidth(max(message.Width-4, 1))
-		model.viewport.SetHeight(max(message.Height-4, 1))
-		model.input.SetWidth(max(message.Width-8, 1))
-		model.refresh()
-		if follow {
-			model.viewport.GotoBottom()
-		}
+		model.layout()
 		return model, nil
 	case transcriptMessage:
 		model.applyEvent(message.event, true)
@@ -264,6 +259,9 @@ func (model model) View() tea.View {
 		}
 	}
 	body := lipgloss.NewStyle().Padding(0, 2).Width(model.width).Render(model.viewport.View())
+	if len(model.plan) > 0 {
+		body += "\n" + strings.Join(model.plan, "\n")
+	}
 	footer := mutedStyle.Render(" /help · ctrl+c quit/cancel ")
 	content := header + "\n" + body + "\n" + ansi.Truncate(prompt, model.width, "…") + "\n" + model.input.View() + "\n" + ansi.Truncate(footer, model.width, "…")
 	view := tea.NewView(lipgloss.NewStyle().MaxWidth(model.width).MaxHeight(model.height).Render(content))

@@ -62,7 +62,7 @@ make build
 
 TUI 使用 Bubble Tea v2、Lip Gloss v2 和 Bubbles v2，并作为可回收插件接入共享应用。后续 GUI 可独立复用同一组装，见[前端插件决策](docs/decisions/0005-selectable-frontend-plugins.md)。
 
-长行按终端列宽换行，窗口缩放时重新布局，支持 bracketed paste。用鼠标滚轮、方向键、Page Up/Page Down 或 Ctrl+U/Ctrl+D 浏览 transcript；浏览历史时新输出保留当前位置，滚到底部后恢复跟随。普通文字输入不会滚动 transcript。
+长行按终端列宽换行，窗口缩放时重新布局，支持 bracketed paste。模型用 `todo_write` 记录计划后，输入区上方显示当前清单，下一轮对话开始时清除。用鼠标滚轮、方向键、Page Up/Page Down 或 Ctrl+U/Ctrl+D 浏览 transcript；浏览历史时新输出保留当前位置，滚到底部后恢复跟随。普通文字输入不会滚动 transcript。
 
 会话默认保存在用户配置目录下的 `nano-harness/sessions`，账户和设置分别保存在同目录的 `credentials.yaml` 与 `settings.yaml`。这些文件使用 owner-only 权限。可以用 `--session ID` 恢复同一会话，用 `--session-root DIR`、`--credentials FILE` 和 `--settings FILE` 改变位置。已有会话的 composition fingerprint 必须与 workspace 和工具/会话语义一致，否则拒绝恢复。
 
@@ -70,7 +70,7 @@ TUI 使用 Bubble Tea v2、Lip Gloss v2 和 Bubbles v2，并作为可回收插�
 
 ## 终端验证与 GoLand 调试
 
-`make tui-e2e` 使用真实二进制和 PTY，配合本地模型协议 fixture，验证文件工具、Subagent、审批、打断和恢复，无需模型账户。需要 Python 3、Unix PTY、ripgrep 和本机 workspace sandbox。
+`make tui-e2e` 使用真实二进制和 PTY，配合本地模型协议 fixture，验证文件工具、任务计划、Subagent、审批、打断和恢复，无需模型账户。需要 Python 3、Unix PTY、ripgrep 和本机 workspace sandbox。
 
 GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点。需要把 TUI 输入保留在 Codex 或其他终端中时，使用 `Nano TUI Remote`；完整步骤见[终端与断点调试](docs/debugging.md)。
 
@@ -78,10 +78,10 @@ GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点�
 
 - provider-neutral 的 Models → Provider → wire API 路由；provider 拥有 catalog、认证、刷新和流协议。
 - OpenAI Responses/ChatGPT Codex Responses、Anthropic Messages、OpenRouter Chat Completions 的流式适配。
-- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash`，以及 spawn/followup/interrupt/report/list subagent 工具。
+- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash` 和记录会话任务计划的 `todo_write`，以及 spawn/followup/interrupt/report/list subagent 工具。
 - 失败关闭的 approval、相邻只读工具并发、写入与 shell 的独占 barrier。
 - 指数退避 retry、主动/被动 context compaction、followup、steer、interrupt 和恢复。
-- v2 严格 JSONL 事件日志；流式 text/reasoning/tool、审批、重试、压缩和 subagent 身份均可审计。
+- v2 严格 JSONL 事件日志；流式 text/reasoning/tool、审批、重试、压缩、任务计划和 subagent 身份均可审计。
 
 ## 仓库结构
 
@@ -94,7 +94,7 @@ internal/app/{llm,tool,...}/      用例与消费方能力接口
 internal/adapter/model/provider/  OpenAI、Anthropic、OpenRouter provider
 internal/adapter/credential/file/ owner-only 账户存储
 internal/adapter/session/jsonl/   严格 JSONL 会话 provider
-internal/adapter/tool/            workspace 与 subagent 工具
+internal/adapter/tool/            workspace、subagent 与 todo 工具
 internal/adapter/media/image/     图片解码、缩放与规范化
 internal/adapter/tui/             全屏终端 UI
 internal/platform/process/        受限进程与 OS sandbox

@@ -10,6 +10,7 @@ import (
 	searchtool "github.com/jinyule/nano-harness/internal/adapter/tool/search"
 	shelltool "github.com/jinyule/nano-harness/internal/adapter/tool/shell"
 	subagenttool "github.com/jinyule/nano-harness/internal/adapter/tool/subagent"
+	todotool "github.com/jinyule/nano-harness/internal/adapter/tool/todo"
 	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/approval"
@@ -55,6 +56,7 @@ var (
 	newSearchTools       = searchtool.New
 	newShellTools        = shelltool.New
 	newSubagentTools     = subagenttool.New
+	newTodoTools         = todotool.New
 )
 
 func composeApplication(config applicationConfig, deps dependencies) (*application, error) {
@@ -139,11 +141,15 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
+	todoTools, err := newTodoTools(toolRuntime)
+	if err != nil {
+		return nil, err
+	}
 	plugins := []plugin.Plugin{
 		configuration, settingsProvider, credentials, modelRuntime,
 		providers[0], providers[1], providers[2], approvalService, toolRuntime,
 		images, assembler, retryService, compactionService, sessions, engine,
-		registry, root, subagents, fileTools, searchTools, shellTools, subagentTools,
+		registry, root, subagents, fileTools, searchTools, shellTools, subagentTools, todoTools,
 	}
 	return &application{plugins: plugins, root: root, registry: registry, models: modelRuntime,
 		settings: configuration, approval: approvalService, images: images, subagents: subagents}, nil

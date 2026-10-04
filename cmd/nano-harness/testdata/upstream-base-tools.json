@@ -169,6 +169,47 @@
       }
     },
     {
+      "name": "todo_write",
+      "source": "docs/tool-catalog.md with packages/todo/tool-todo/src/index.ts",
+      "composition": "Base sets allowParallelInProgress: true, which selects the description clause inviting several in_progress todos",
+      "description": "Record and update a task list to plan multi-step work and show progress; skip it for trivial single-step tasks. Add one todo per concrete step before you start. While work remains, keep the todos being worked on `in_progress`, several only when work runs in parallel. Mark each todo `completed` as soon as it is done.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "todos": {
+            "type": "array",
+            "description": "The COMPLETE task list, replacing any previous list.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "content": {
+                  "type": "string",
+                  "description": "What the task is — a short imperative line."
+                },
+                "status": {
+                  "type": "string",
+                  "description": "pending (not started) | in_progress (now) | completed (done).",
+                  "enum": [
+                    "pending",
+                    "in_progress",
+                    "completed"
+                  ]
+                }
+              },
+              "required": [
+                "content",
+                "status"
+              ]
+            }
+          }
+        },
+        "required": [
+          "todos"
+        ]
+      }
+    },
+    {
       "name": "write",
       "source": "docs/tool-catalog.md with packages/fs/tool-fs/src/sandbox.ts and packages/sandbox/sandbox/src/escalation.ts",
       "composition": "Base mounts @deepseek-ai/dsh-fs-sandbox, so packages/fs/tool-fs/src/sandbox.ts adds sandbox_permissions and justification",

@@ -22,6 +22,7 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 	callNames := map[string]string{}
 	approvalCalls := map[string]string{}
 	seenApprovals := map[string]struct{}{}
+	todoCalls := map[string]struct{}{}
 	for _, event := range events {
 		record := event.Record
 		switch record.Type {
@@ -89,7 +90,19 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 				}
 			}
 			delete(callNames, record.Result.CallID)
+			delete(todoCalls, record.Result.CallID)
 			state.calls = remove(state.calls, record.Result.CallID)
+		case coresession.RecordTodoWrite:
+			if record.Turn != state.turn || record.Step != state.step {
+				return state, orderError("todo/write outside active step")
+			}
+			if _, exists := callNames[record.Todo.CallID]; !exists {
+				return state, orderError("todo/write has no pending call")
+			}
+			if _, exists := todoCalls[record.Todo.CallID]; exists {
+				return state, orderError("duplicate todo/write for call %q", record.Todo.CallID)
+			}
+			todoCalls[record.Todo.CallID] = struct{}{}
 		case coresession.RecordRetry, coresession.RecordRetryStarted:
 			if record.Turn != state.turn || record.Step != state.step || state.assistant {
 				return state, orderError("%s is not a request recovery fact", record.Type)

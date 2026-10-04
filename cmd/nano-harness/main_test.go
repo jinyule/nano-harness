@@ -24,6 +24,7 @@ import (
 	searchtool "github.com/jinyule/nano-harness/internal/adapter/tool/search"
 	shelltool "github.com/jinyule/nano-harness/internal/adapter/tool/shell"
 	subagenttool "github.com/jinyule/nano-harness/internal/adapter/tool/subagent"
+	todotool "github.com/jinyule/nano-harness/internal/adapter/tool/todo"
 	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
 	"github.com/jinyule/nano-harness/internal/adapter/tui"
 	"github.com/jinyule/nano-harness/internal/app/agent"
@@ -223,7 +224,7 @@ func TestComposition_MatchesUpstreamBaseTools(t *testing.T) {
 		frozen[definition.Name] = definition
 	}
 	upstream := loadCatalog(t, filepath.Join("testdata", "upstream-base-tools.json"))
-	if len(upstream) != 6 {
+	if len(upstream) != 7 {
 		t.Fatalf("upstream fixture lists %d tools", len(upstream))
 	}
 	for _, want := range upstream {
@@ -339,7 +340,7 @@ func restoreMainHooks(t *testing.T) {
 	compactor, sessions, engine := newCompactionService, newSessionManager, newAgentEngine
 	registry, root, subagents := newAgentRegistry, newRootBootstrap, newSubagentService
 	workspaceRoot, fileTools, searchTools, shellTools := newWorkspace, newFileTools, newSearchTools, newShellTools
-	subagentTools, terminal := newSubagentTools, newTerminal
+	subagentTools, todoTools, terminal := newSubagentTools, newTodoTools, newTerminal
 	t.Cleanup(func() {
 		currentWorkingDirectory, userConfigDirectory, readRandom, inspectPath, absolutePath, evaluateLinks = cwd, config, random, inspect, absolute, links
 		newSettingsProvider, newCredentialStore, newModelRuntime = settingsProvider, credentials, modelRuntime
@@ -347,7 +348,7 @@ func restoreMainHooks(t *testing.T) {
 		newCompactionService, newSessionManager, newAgentEngine = compactor, sessions, engine
 		newAgentRegistry, newRootBootstrap, newSubagentService = registry, root, subagents
 		newWorkspace, newFileTools, newSearchTools, newShellTools = workspaceRoot, fileTools, searchTools, shellTools
-		newSubagentTools, newTerminal = subagentTools, terminal
+		newSubagentTools, newTodoTools, newTerminal = subagentTools, todoTools, terminal
 	})
 }
 
@@ -528,6 +529,7 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 		{name: "subagent tools", set: func() {
 			newSubagentTools = func(*appTool.Runtime, subagenttool.Service) (*subagenttool.Provider, error) { return nil, failure }
 		}},
+		{name: "todo tools", set: func() { newTodoTools = func(*appTool.Runtime) (*todotool.Provider, error) { return nil, failure } }},
 		{name: "terminal", set: func() { newTerminal = func(tui.Config) (*tui.App, error) { return nil, failure } }},
 	}
 	for _, test := range tests {

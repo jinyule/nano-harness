@@ -67,6 +67,8 @@ class Fixture(http.server.BaseHTTPRequestHandler):
                 child = re.search(r"session=([^ ]+)", " ".join(outputs))
                 child_id = child.group(1) if child else "missing-child"
                 sequence = [
+                    ("todo_write", {"todos": [{"content": "inspect workspace", "status": "in_progress"},
+                                              {"content": "report tools", "status": "pending"}]}),
                     ("glob", {"pattern": "*.txt"}),
                     ("grep", {"pattern": "PTY_PROOF"}),
                     ("read", {"file_path": "proof.txt"}),
@@ -202,6 +204,8 @@ def verify(binary):
                 terminal.expect("/help")
                 terminal.resize(60, 20)
                 terminal.send("\x1b[200~verify tools\x1b[201~\r")
+                terminal.expect("plan> 1 in progress · 1 pending")
+                terminal.expect("[>] inspect workspace")
                 for _ in range(3):
                     terminal.expect("Approval required:")
                     terminal.send("y\r")
@@ -225,13 +229,17 @@ def verify(binary):
             assert len(logs) == 1, "expected an independent child session"
             root_records = [entry["record"] for entry in root[1:]]
             calls = [entry["call"]["name"] for entry in root_records if entry["type"] == "tool/call"]
-            assert calls == ["glob", "grep", "read", "spawn_subagent", "subagent_followup", "subagent_report",
+            assert calls == ["todo_write", "glob", "grep", "read", "spawn_subagent", "subagent_followup", "subagent_report",
                              "list_subagents", "subagent_interrupt", "write", "edit", "bash"], calls
             results = [entry["result"] for entry in root_records if entry["type"] == "tool/result"]
-            assert len(results) == 11 and all(not entry.get("is_error", False) for entry in results), results
-            assert results[0]["output"] == "proof.txt", results[0]
-            assert results[1]["output"] == "Found 1 match\n\nproof.txt\nLine 1: PTY_PROOF", results[1]
-            assert "1: PTY_PROOF" in results[2]["output"], results[2]
+            assert len(results) == 12 and all(not entry.get("is_error", False) for entry in results), results
+            assert results[0]["output"] == "Updated todo list: 1 pending, 1 in progress, 0 completed.", results[0]
+            assert results[1]["output"] == "proof.txt", results[1]
+            assert results[2]["output"] == "Found 1 match\n\nproof.txt\nLine 1: PTY_PROOF", results[2]
+            assert "1: PTY_PROOF" in results[3]["output"], results[3]
+            todos = [entry["todo"] for entry in root_records if entry["type"] == "todo/write"]
+            assert todos == [{"call_id": "call-0", "items": [{"content": "inspect workspace", "status": "in_progress"},
+                                                             {"content": "report tools", "status": "pending"}]}], todos
             decisions = [entry["approval"]["outcome"] for entry in root_records if entry["type"] == "approval/decided"]
             assert decisions == ["allowed-once", "allowed-once", "allowed-once"], decisions
             assert (workspace / "proof.txt").read_text() == "PTY_PROOF\n"
@@ -248,12 +256,13 @@ def verify(binary):
             terminal = Terminal(binary, directory, workspace, settings)
             try:
                 terminal.expect("turn> canceled")
+                assert b"plan>" not in terminal.output, "a later turn/start must clear the replayed plan"
                 terminal.send("/quit\r")
                 terminal.expect("\x1b[?1049l")
                 assert terminal.process.wait(timeout=10) == 0
             finally:
                 terminal.close()
-            print("PASS: real binary/PTY, 11 root tools, child read/followup, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
+            print("PASS: real binary/PTY, 12 root tools, todo plan, child read/followup, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
 
 
 def main():

@@ -1,6 +1,6 @@
 # 架构规则
 
-本文定义 `nano-harness` 的当前产品架构和依赖规则。composition 已包含设置、账户、三个 LLM provider、图片、agent、会话、工具、approval、compaction、subagent 与 TUI；新增运行时能力必须扩展这些已记录接缝。
+本文定义 `nano-harness` 的当前产品架构和依赖规则。composition 已包含设置、账户、三个 LLM provider、图片、agent、会话、工具、任务列表、approval、compaction、subagent 与 TUI；新增运行时能力必须扩展这些已记录接缝。
 
 ## 设计目标
 
@@ -48,7 +48,7 @@ settings → settings file → credential store → LLM runtime
 → OpenAI/Anthropic/OpenRouter providers → approval → tool runtime
 → images → prompt → retry → compaction → sessions → agent engine
 → agent registry → root bootstrap → subagents
-→ file/search/shell/subagent tools → TUI
+→ file/search/shell/subagent/todo tools → TUI
 ```
 
 纯值、DTO、算法和仓库工具没有运行时 effect，不包装为空插件。
@@ -152,6 +152,7 @@ Submit user message
 | `internal/adapter/tool/search` | `search-tools` | `glob`、`grep` |
 | `internal/adapter/tool/shell` | `shell-tools` | 前台 `bash` |
 | `internal/adapter/tool/subagent` | `subagent-tools` | 五个 subagent 工具 |
+| `internal/adapter/tool/todo` | `todo-tools` | `todo_write` |
 
 `internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。
 
@@ -160,6 +161,8 @@ Submit user message
 `read`、`glob`、`grep` 可并行；`write`、`edit`、`bash` 是 exclusive，并在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。`bash` 的 `sandbox_permissions: danger-full-access` 是唯一离开 workspace sandbox 的方式，规则见[安全工程规则](security.md#approvalshell-与进程)。
 
 subagent 工具为 `spawn_subagent`、`subagent_followup`、`subagent_interrupt`、`subagent_report` 和 `list_subagents`。它们调用进程内 `app/subagent`，不启动 Codex、Claude 或另一个 harness 进程。
+
+`todo_write` 的模型可见定义同样与上游 Base 组合一致。每次调用提交完整列表并替换旧列表，`content` 去空白后须非空且唯一，最多 256 项、每项 2048 字节，多个任务可同时为 `in_progress`。成功时先提交 `todo/write`，再返回 `Updated todo list: <pending> pending, <inProgress> in progress, <completed> completed.`。它是 exclusive 工具，不需要 approval；列表属于调用方 session，root 与每个 subagent 各自维护。记录格式和版本策略见 [ADR-0010](decisions/0010-todo-write-session-record.md)。
 
 ## Subagent
 
@@ -185,16 +188,17 @@ assistant/chunk, assistant/message, tool/call,
 approval/asked, approval/decided, approval/policy,
 tool/result, llm/retry, llm/retry-started,
 compaction/start, compaction/summary, compaction/end,
-subagent/descriptor, step/end, turn/end
+subagent/descriptor, todo/write, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、subagent）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、subagent、todo）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。
 - resume 会补写未决 approval 的 cancelled、未决 call 的 interrupted error、未结束 compaction/step/turn 的结束事实；不会截断 torn JSON、猜测未知格式或自动接受旧版本。
 - `session.Surface` 从 raw events 折叠消息、tool call/result 与 compaction replacements。TUI subscriber 只是可丢更新提示；磁盘 replay 仍是恢复来源。
+- `todo/write` 必须位于活动 step，引用尚未得到 result 的 call，且每个 call 最多一条。它不进入 surface；模型只从自己的 tool call 参数和 tool result 看到列表。`session.StandingTodos` 把最新一条之后没有更晚 `turn/start` 的 `todo/write` 投影为当前计划。
 
 格式变化必须同一变更原子更新领域类型、严格 decoder/order validator、所有 provider、测试、本文和 ADR。预发布阶段不保留静默兼容层。
 
@@ -208,7 +212,7 @@ credential store 按 provider 保存一个 API key 或 OAuth grant，使用 stri
 
 ## TUI 与投影
 
-`internal/adapter/tui` 是使用 Bubble Tea v2、Lip Gloss v2 与 Bubbles v2 的 alternate-screen 插件。`tea.View` 声明终端模式，输入、viewport、命令与事件投影保留在 adapter；app/core 不依赖 Charm。它从 durable event replay 初始化，再订阅已提交事件，展示 route、streamed text/reasoning、tool call/result、approval、retry、compaction 和 turn outcome。TUI 同时实现本地 approval broker 与 auth interaction；secret prompt 使用 password echo。
+`internal/adapter/tui` 是使用 Bubble Tea v2、Lip Gloss v2 与 Bubbles v2 的 alternate-screen 插件。`tea.View` 声明终端模式，输入、viewport、命令与事件投影保留在 adapter；app/core 不依赖 Charm。它从 durable event replay 初始化，再订阅已提交事件，展示 route、streamed text/reasoning、tool call/result、approval、retry、compaction 和 turn outcome。当前计划固定显示在输入区上方，最多占 transcript 剩余行数的一半并保留至少一行 transcript；条目溢出时从第一个未完成项开始显示，标题保留各状态计数。TUI 同时实现本地 approval broker 与 auth interaction；secret prompt 使用 password echo。
 
 UI 命令调用 app 用例，不直接修改文件或 provider 内部状态。退出会 interrupt root 活动 turn；Scope cleanup 撤销 broker、停止 event forwarding，取消并等待终端程序与异步命令静止。Run 退出先取消命令 context，关闭命令执行入口，再等待已开始的操作；迟到命令不再调用 app。前端独立选择，当前只有所选 UI 注册 approval broker；GUI 的扩展边界见 [ADR-0005](decisions/0005-selectable-frontend-plugins.md)。
 

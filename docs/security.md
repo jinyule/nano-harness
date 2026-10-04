@@ -74,6 +74,7 @@
 - append 先写、`fsync`，再更新内存状态；失败尝试 truncate 回已知 durable prefix。回滚失败会和原错误一起返回。
 - resume 只对 schema 与因果均有效的完整记录做追加式 repair：取消未决 approval、补 tool error，并关闭 compaction/step/turn。它不截断 torn line、不删除未知内容、不迁移旧格式。
 - model-visible stream chunk、message、call/result、approval、retry、compaction summary 和 image 均进入日志；credential、OAuth notice 和内部 provider DTO 不进入。
+- `todo/write` 只由调用方 session 中尚未得到 result 的 `todo_write` call 写入，最多 256 项、每项 `content` 2048 字节。decoder 拒绝未知字段、未知状态、未去空白或重复的内容，以及不引用 pending call 的记录。
 
 ## Subagent 与生命周期
 

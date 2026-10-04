@@ -64,7 +64,10 @@ func (model *model) applyEvent(event session.Event, live bool) {
 	case session.RecordTurnEnd:
 		model.streamText = ""
 		model.addLine("turn> " + string(record.Outcome))
-	case session.RecordTurnStart, session.RecordStepStart, session.RecordApprovalDecided,
+	case session.RecordTurnStart, session.RecordTodoWrite:
+		model.todos = session.StandingTodos(model.todos, record)
+		model.layout()
+	case session.RecordStepStart, session.RecordApprovalDecided,
 		session.RecordApprovalPolicy, session.RecordRetryStarted, session.RecordCompactionSummary,
 		session.RecordSubagentDescriptor, session.RecordStepEnd:
 		// These facts affect replay or lifecycle state but have no standalone TUI line.

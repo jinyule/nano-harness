@@ -64,6 +64,8 @@ const (
 	RecordCompactionEnd RecordType = "compaction/end"
 	// RecordSubagentDescriptor commits cold-resume metadata for a delegated agent.
 	RecordSubagentDescriptor RecordType = "subagent/descriptor"
+	// RecordTodoWrite commits the complete todo list written by one pending tool call.
+	RecordTodoWrite RecordType = "todo/write"
 	// RecordStepEnd closes an active step after all calls and approvals settle.
 	RecordStepEnd RecordType = "step/end"
 	// RecordTurnEnd closes an active turn with a stable outcome.
@@ -301,6 +303,7 @@ type Record struct {
 	Approval   *ApprovalData       `json:"approval,omitempty"`
 	Compaction *CompactionData     `json:"compaction,omitempty"`
 	Subagent   *SubagentDescriptor `json:"subagent,omitempty"`
+	Todo       *TodoWrite          `json:"todo,omitempty"`
 	Outcome    TurnOutcome         `json:"outcome,omitempty"`
 }
 

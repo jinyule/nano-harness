@@ -1,0 +1,15 @@
+{"type":"session","version":2,"header":{"session_id":"fixture","composition_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","created_at_unix_ms":1,"cwd":"/synthetic/workspace"}}
+{"seq":1,"record":{"type":"turn/start","turn":1}}
+{"seq":2,"record":{"type":"user/message","turn":1,"message":{"role":"user","content":[{"type":"text","text":"ship it"}],"source":{"kind":"test"}}}}
+{"seq":3,"record":{"type":"step/start","turn":1,"step":1}}
+{"seq":4,"record":{"type":"request/header","turn":1,"step":1,"header":{"provider":"openai","model":"model","system":""}}}
+{"seq":5,"record":{"type":"assistant/message","turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"planning"}],"source":{"kind":"provider"}}}}
+{"seq":6,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-todo","name":"todo_write","arguments":{"todos":[{"content":"write tests","status":"completed"},{"content":"implement","status":"in_progress"},{"content":"document","status":"pending"}]}}}}
+{"seq":7,"record":{"type":"todo/write","turn":1,"step":1,"todo":{"call_id":"call-todo","items":[{"content":"write tests","status":"completed"},{"content":"implement","status":"in_progress"},{"content":"document","status":"pending"}]}}}
+{"seq":8,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-todo","output":"Updated todo list: 1 pending, 1 in progress, 1 completed.","is_error":false}}}
+{"seq":9,"record":{"type":"step/end","turn":1,"step":1}}
+{"seq":10,"record":{"type":"step/start","turn":1,"step":2}}
+{"seq":11,"record":{"type":"request/header","turn":1,"step":2,"header":{"provider":"openai","model":"model","system":""}}}
+{"seq":12,"record":{"type":"assistant/message","turn":1,"step":2,"message":{"role":"assistant","content":[{"type":"text","text":"done"}],"source":{"kind":"provider"}}}}
+{"seq":13,"record":{"type":"step/end","turn":1,"step":2}}
+{"seq":14,"record":{"type":"turn/end","turn":1,"outcome":"completed"}}

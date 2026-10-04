@@ -316,6 +316,10 @@ func TestEngine_ExecutesToolsSteersAndNextTurn(t *testing.T) {
 	if result.Outcome != session.OutcomeCompleted || result.Text != "after tool" || len(candidate.seen) != 1 || !candidate.seen[0].Delegated {
 		t.Fatalf("tool turn = %+v, seen = %#v", result, candidate.seen)
 	}
+	// Session-owned tools such as todo_write append to the caller's own journal at its call.
+	if seen := candidate.seen[0]; seen.Journal != appTool.Journal(journal) || seen.Turn != 1 || seen.Step != 1 || seen.CallID != "call-1" {
+		t.Fatalf("tool execution lost its session identity: %+v", seen)
+	}
 	types := recordTypes(log.events)
 	for _, required := range []session.RecordType{session.RecordToolCall, session.RecordToolResult} {
 		if !slices.Contains(types, required) {
