@@ -1,54 +1,29 @@
-// Package tool owns tool discovery, approval, scheduling, and execution.
+// Package tool owns tool definitions, discovery, approval, scheduling, and execution.
 package tool
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
+
+// maxReasonBytes keeps model-derived approval reasons well inside the
+// durable approval record limit.
+const maxReasonBytes = 1024
 
 var (
 	// ErrInvalidTool identifies an invalid tool definition, registration, or runtime request.
 	ErrInvalidTool = errors.New("invalid tool")
 	// ErrNotRunning indicates the tool runtime has not started or has stopped.
 	ErrNotRunning = errors.New("tool runtime is not running")
-	// ErrUnknownTool identifies a requested tool name that is not registered.
-	ErrUnknownTool = errors.New("unknown tool")
 )
-
-// Concurrency declares whether a tool may overlap adjacent calls.
-type Concurrency string
-
-const (
-	// ConcurrencyParallel permits overlap with adjacent parallel tool calls.
-	ConcurrencyParallel Concurrency = "parallel"
-	// ConcurrencyExclusive forms a scheduling barrier around the tool call.
-	ConcurrencyExclusive Concurrency = "exclusive"
-)
-
-// Execution is the bounded context supplied to a tool implementation.
-type Execution struct {
-	SessionID string
-	Cwd       string
-	Arguments json.RawMessage
-	Delegated bool
-	Elevated  bool
-}
-
-// Tool is one registered, stateless tool behavior.
-type Tool interface {
-	Definition() session.ToolDefinition
-	Concurrency() Concurrency
-	ApprovalReason(json.RawMessage) string
-	Execute(context.Context, Execution) (string, error)
-}
 
 // ApprovalRequest is the app-level approval envelope.
 type ApprovalRequest struct {
@@ -82,6 +57,13 @@ type BatchRequest struct {
 	Journal   Journal
 }
 
+// Catalog is one consistent snapshot of visible tool schemas in lexical
+// order and the prompt guidance those tools contribute.
+type Catalog struct {
+	Definitions []session.ToolDefinition
+	Guidance    []string
+}
+
 // Runtime publishes tools and enforces deterministic scheduling barriers.
 type Runtime struct {
 	approver Approver
@@ -89,7 +71,7 @@ type Runtime struct {
 	mu      sync.RWMutex
 	started bool
 	active  bool
-	tools   map[string]Tool
+	tools   map[string]*Tool
 }
 
 // New constructs a tool runtime over a fail-closed approver.
@@ -97,7 +79,7 @@ func New(approver Approver) (*Runtime, error) {
 	if approver == nil {
 		return nil, ErrInvalidTool
 	}
-	return &Runtime{approver: approver, tools: map[string]Tool{}}, nil
+	return &Runtime{approver: approver, tools: map[string]*Tool{}}, nil
 }
 
 // ID returns the stable plugin identity.
@@ -113,7 +95,7 @@ func (runtime *Runtime) Start(_ context.Context, scope *plugin.Scope) error {
 	if err := scope.Defer(func(context.Context) error {
 		runtime.mu.Lock()
 		runtime.active = false
-		runtime.tools = map[string]Tool{}
+		runtime.tools = map[string]*Tool{}
 		runtime.mu.Unlock()
 		return nil
 	}); err != nil {
@@ -124,96 +106,107 @@ func (runtime *Runtime) Start(_ context.Context, scope *plugin.Scope) error {
 }
 
 // Register publishes one tool for exactly the caller's scope lifetime.
-func (runtime *Runtime) Register(candidate Tool, scope *plugin.Scope) error {
+func (runtime *Runtime) Register(candidate *Tool, scope *plugin.Scope) error {
 	if candidate == nil || scope == nil {
 		return ErrInvalidTool
 	}
-	definition := candidate.Definition()
-	if err := validateDefinition(definition); err != nil || candidate.Concurrency() != ConcurrencyParallel && candidate.Concurrency() != ConcurrencyExclusive {
-		return ErrInvalidTool
+	if candidate.err != nil {
+		return fmt.Errorf("%w %q: %w", ErrInvalidTool, candidate.definition.Name, candidate.err)
 	}
+	name := candidate.definition.Name
 	runtime.mu.Lock()
 	if !runtime.active {
 		runtime.mu.Unlock()
 		return ErrNotRunning
 	}
-	if _, exists := runtime.tools[definition.Name]; exists {
+	if _, exists := runtime.tools[name]; exists {
 		runtime.mu.Unlock()
-		return fmt.Errorf("%w: duplicate %q", ErrInvalidTool, definition.Name)
+		return fmt.Errorf("%w: duplicate %q", ErrInvalidTool, name)
 	}
-	runtime.tools[definition.Name] = candidate
+	runtime.tools[name] = candidate
 	runtime.mu.Unlock()
 	if err := scope.Defer(func(context.Context) error {
 		runtime.mu.Lock()
-		if runtime.tools[definition.Name] == candidate {
-			delete(runtime.tools, definition.Name)
+		if runtime.tools[name] == candidate {
+			delete(runtime.tools, name)
 		}
 		runtime.mu.Unlock()
 		return nil
 	}); err != nil {
 		runtime.mu.Lock()
-		delete(runtime.tools, definition.Name)
+		delete(runtime.tools, name)
 		runtime.mu.Unlock()
 		return err
 	}
 	return nil
 }
 
-func validateDefinition(definition session.ToolDefinition) error {
-	header := session.Record{Type: session.RecordRequestHeader, Turn: 1, Step: 1, Header: &session.RequestHeader{Provider: "test", Model: "test", Tools: []session.ToolDefinition{definition}}}
-	return header.Validate()
-}
-
-// Definitions freezes the currently registered schemas in lexical order.
-func (runtime *Runtime) Definitions(allow []string) ([]session.ToolDefinition, error) {
+// Catalog freezes the visible schemas and guidance. An empty allow list
+// selects every registered tool.
+func (runtime *Runtime) Catalog(allow []string) (Catalog, error) {
 	runtime.mu.RLock()
 	defer runtime.mu.RUnlock()
 	if !runtime.active {
-		return nil, ErrNotRunning
+		return Catalog{}, ErrNotRunning
 	}
-	allowed := map[string]struct{}{}
-	for _, name := range allow {
-		allowed[name] = struct{}{}
-	}
-	definitions := make([]session.ToolDefinition, 0, len(runtime.tools))
+	visible := make([]*Tool, 0, len(runtime.tools))
 	for name, candidate := range runtime.tools {
-		if len(allow) == 0 {
-			definitions = append(definitions, candidate.Definition())
-		} else if _, ok := allowed[name]; ok {
-			definitions = append(definitions, candidate.Definition())
+		if len(allow) == 0 || slices.Contains(allow, name) {
+			visible = append(visible, candidate)
 		}
 	}
-	slices.SortFunc(definitions, func(left, right session.ToolDefinition) int {
-		return strings.Compare(left.Name, right.Name)
+	slices.SortFunc(visible, func(left, right *Tool) int {
+		return strings.Compare(left.definition.Name, right.definition.Name)
 	})
-	return definitions, nil
+	catalog := Catalog{Definitions: make([]session.ToolDefinition, len(visible))}
+	names := map[string]struct{}{}
+	for index, candidate := range visible {
+		catalog.Definitions[index] = candidate.Definition()
+		names[candidate.definition.Name] = struct{}{}
+	}
+	isVisible := func(name string) bool {
+		_, ok := names[name]
+		return ok
+	}
+	guided := slices.DeleteFunc(slices.Clone(visible), func(candidate *Tool) bool { return candidate.guidance.Text == nil })
+	slices.SortStableFunc(guided, func(left, right *Tool) int { return left.guidance.Order - right.guidance.Order })
+	for _, candidate := range guided {
+		if text := candidate.guidance.Text(isVisible); text != "" {
+			catalog.Guidance = append(catalog.Guidance, text)
+		}
+	}
+	return catalog, nil
 }
 
-// ExecuteBatch runs adjacent parallel tools concurrently and exclusive tools as barriers.
+// prepared is one call after lookup and schema validation. A nil call
+// carries a terminal error result and is scheduled as a barrier.
+type prepared struct {
+	call   *call
+	result session.ToolResult
+}
+
+// ExecuteBatch validates every call against its schema and classifies it,
+// then runs adjacent concurrent calls together and every other call as an
+// exclusive barrier. Each call's Check, approval, and execution happen at
+// its turn. Results keep the original call order.
 func (runtime *Runtime) ExecuteBatch(ctx context.Context, request BatchRequest) []session.ToolResult {
+	calls := make([]prepared, len(request.Calls))
+	for index, candidate := range request.Calls {
+		calls[index] = runtime.prepare(candidate)
+	}
 	results := make([]session.ToolResult, len(request.Calls))
-	for index := 0; index < len(request.Calls); {
-		candidate := runtime.lookup(request.Calls[index].Name)
-		if candidate == nil || candidate.Concurrency() == ConcurrencyExclusive {
-			results[index] = runtime.execute(ctx, request, request.Calls[index], candidate)
-			index++
-			continue
-		}
-		end := index
-		for end < len(request.Calls) {
-			next := runtime.lookup(request.Calls[end].Name)
-			if next == nil || next.Concurrency() != ConcurrencyParallel {
-				break
+	for index := 0; index < len(calls); {
+		end := index + 1
+		if calls[index].call != nil && calls[index].call.concurrent {
+			for end < len(calls) && calls[end].call != nil && calls[end].call.concurrent {
+				end++
 			}
-			end++
 		}
 		var group sync.WaitGroup
 		for current := index; current < end; current++ {
-			group.Add(1)
-			go func(position int) {
-				defer group.Done()
-				results[position] = runtime.execute(ctx, request, request.Calls[position], runtime.lookup(request.Calls[position].Name))
-			}(current)
+			group.Go(func() {
+				results[current] = runtime.execute(ctx, request, request.Calls[current], calls[current])
+			})
 		}
 		group.Wait()
 		index = end
@@ -221,31 +214,52 @@ func (runtime *Runtime) ExecuteBatch(ctx context.Context, request BatchRequest) 
 	return results
 }
 
-func (runtime *Runtime) lookup(name string) Tool {
+func (runtime *Runtime) prepare(candidate session.ToolCall) (result prepared) {
+	result.result.CallID = candidate.ID
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result.call = nil
+			result.result.Output, result.result.IsError = "tool error: implementation panicked", true
+		}
+	}()
 	runtime.mu.RLock()
-	defer runtime.mu.RUnlock()
+	registered := runtime.tools[candidate.Name]
 	if !runtime.active {
-		return nil
+		registered = nil
 	}
-	return runtime.tools[name]
+	runtime.mu.RUnlock()
+	if registered == nil {
+		result.result.Output, result.result.IsError = finishText("tool error: unknown tool "+candidate.Name), true
+		return result
+	}
+	validated, err := registered.prepare(candidate.Arguments)
+	if err != nil {
+		result.result.Output, result.result.IsError = finishText("tool error: "+err.Error()), true
+		return result
+	}
+	result.call = validated
+	return result
 }
 
-func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, call session.ToolCall, candidate Tool) (result session.ToolResult) {
-	result.CallID = call.ID
-	elevated := false
+func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candidate session.ToolCall, validated prepared) (result session.ToolResult) {
+	if validated.call == nil {
+		return validated.result
+	}
+	result.CallID = candidate.ID
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			result.Output, result.IsError = "tool error: implementation panicked", true
 		}
 	}()
-	if candidate == nil {
-		result.Output, result.IsError = "tool error: unknown tool "+call.Name, true
+	if err := validated.call.check(); err != nil {
+		result.Output, result.IsError = finishText("tool error: "+err.Error()), true
 		return result
 	}
-	if reason := candidate.ApprovalReason(call.Arguments); reason != "" {
+	approved := false
+	if reason := validated.call.reason(); reason != "" {
 		outcome, err := runtime.approver.Decide(ctx, ApprovalRequest{
 			SessionID: request.SessionID, Turn: request.Turn, Step: request.Step,
-			Call: call, Reason: reason, Delegated: request.Delegated, Journal: request.Journal,
+			Call: candidate, Reason: clamp(reason, maxReasonBytes, "…"), Delegated: request.Delegated, Journal: request.Journal,
 		})
 		if err != nil {
 			result.Output, result.IsError = "tool error: approval could not be recorded", true
@@ -255,16 +269,31 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, call 
 			result.Output, result.IsError = "tool error: approval "+string(outcome), true
 			return result
 		}
-		elevated = true
+		approved = true
 	}
-	output, err := candidate.Execute(ctx, Execution{SessionID: request.SessionID, Cwd: request.Cwd, Arguments: call.Arguments, Delegated: request.Delegated, Elevated: elevated})
+	output, err := validated.call.execute(ctx, Invocation{SessionID: request.SessionID, Cwd: request.Cwd, Delegated: request.Delegated, Approved: approved})
 	if err != nil {
-		result.Output, result.IsError = "tool error: "+err.Error(), true
+		result.Output, result.IsError = finishText("tool error: "+err.Error()), true
 		return result
 	}
-	if len(output) > session.MaxTextBytes {
-		output = output[:session.MaxTextBytes-len("\n[output truncated]")] + "\n[output truncated]"
-	}
-	result.Output = output
+	result.Output = finishText(output.Text)
 	return result
+}
+
+// finishText makes tool output durable: invalid UTF-8 is replaced and the
+// complete text, including the truncation marker, fits one tool result.
+func finishText(text string) string {
+	return clamp(strings.ToValidUTF8(text, "�"), session.MaxTextBytes, "\n[output truncated]")
+}
+
+// clamp cuts text at a rune boundary so text plus suffix fits limit bytes.
+func clamp(text string, limit int, suffix string) string {
+	if len(text) <= limit {
+		return text
+	}
+	cut := limit - len(suffix)
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + suffix
 }

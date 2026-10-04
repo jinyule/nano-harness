@@ -143,14 +143,15 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			result.Err, result.Outcome = err, session.OutcomeError
 			return result
 		}
-		definitions, err := engine.tools.Definitions(input.tools)
+		catalog, err := engine.tools.Catalog(input.tools)
 		if err != nil {
 			result.Err, result.Outcome = err, session.OutcomeError
 			return result
 		}
+		definitions := catalog.Definitions
 		system, err := engine.prompt.Build(prompt.Input{
 			Workspace: input.journal.Header().Cwd, Provider: document.Route.Provider, Model: document.Route.Model,
-			Persona: input.persona, Delegated: input.delegated, Tools: definitions,
+			Persona: input.persona, Delegated: input.delegated, Tools: definitions, Guidance: catalog.Guidance,
 		})
 		if err != nil {
 			result.Err, result.Outcome = err, session.OutcomeError

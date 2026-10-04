@@ -47,7 +47,8 @@ internal/platform
 settings → settings file → credential store → LLM runtime
 → OpenAI/Anthropic/OpenRouter providers → approval → tool runtime
 → images → prompt → retry → compaction → sessions → agent engine
-→ agent registry → root bootstrap → subagents → workspace/subagent tools → TUI
+→ agent registry → root bootstrap → subagents
+→ file/search/shell/subagent tools → TUI
 ```
 
 纯值、DTO、算法和仓库工具没有运行时 effect，不包装为空插件。
@@ -132,17 +133,28 @@ Submit user message
 
 ## 工具、approval 与调度
 
-`internal/app/tool` 冻结按名称排序的 schema，并把模型调用切分为相邻 parallel group 与 exclusive barrier。结果顺序始终与原始 call 顺序一致；未知工具、panic、拒绝、超时和执行错误成为有界 tool result。
+`internal/app/tool` 拥有工具定义抽象和运行时。工具用 `tool.Spec[A]` 声明名称、描述、按模型可见顺序排列的 `Parameters`、可选 prompt guidance，以及基于类型化参数 `A` 的 `Check`、`Concurrent`、`Approval` 和 `Execute`。`tool.Define` 编译 schema，并检查 `A` 的导出字段与声明成员一一对应、Go 类型兼容；无效定义在 `Runtime.Register` 被拒绝。
 
-当前 workspace 工具为：
+- schema 采用上游 `defineTool` 子集中本仓用到的部分：可带 enum 的 string、number、boolean、必须声明 items 的 array，以及显式声明开放性的嵌套 object。序列化键序与上游编译器一致；根对象只输出 `type`、`properties` 和 `required`。
+- 批次开始前，runtime 按 schema 校验并解码每个调用，再用 `Concurrent(A)` 分类。缺少必填、类型不符、null、非有限数、`-0`、重复键和未声明成员（包括根对象）都成为 `invalid arguments: ...` 结果，并按上游遍历顺序列出全部违规。上游根对象对未知成员开放，本仓更严格，模型可见 schema 不变。
+- `Concurrent(A)` 为 true 的相邻调用并行；其余调用、未知工具和无效参数形成独占 barrier。结果顺序始终与原始 call 顺序一致。
+- 每个调用轮到执行时依次运行 `Check(A)`、`Approval(A)` 和 `Execute`。`Check` 因此能观察同一批次前序调用的效果，并在提问前拒绝语义错误或不安全路径；`Approval` 返回非空原因时请求一次性 approval，原因截断到 1 KiB。执行函数仍须在执行点确认 `Invocation.Approved`。
+- `tool.Result` 目前只有文本。runtime 统一替换非法 UTF-8，并把完整结果截断到 256 KiB；多模态结果扩展这个类型，不改变只返回文本的工具。
+- `Runtime.Catalog(allow)` 一次冻结按名称排序的 schema 和可见工具贡献的 guidance。guidance 按上游 section order 排序，engine 把它追加在 system prompt 的工具列表之后，与 schema 一起写入 `request/header`。
+- 未知工具、panic、拒绝、执行错误和取消都成为有界 tool result。
 
-- `read_file`：读取有界 UTF-8 行范围。
-- `list_files`：不跟随 symlink 的有界目录遍历。
-- `search_files`：有界 Go regexp 搜索。
-- `apply_patch`：校验并应用无 binary/rename/copy/symlink 的 unified diff。
-- `run_shell`：在 workspace sandbox 或一次性授权的 host 模式执行有界 shell。
+内置工具与上游 Base 组合同名同定义，映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)：
 
-读、列举和搜索可并行；patch 与 shell 是 exclusive。写入和 shell 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。
+| 包 | 插件 ID | 工具 |
+|---|---|---|
+| `internal/adapter/tool/file` | `fs-tools` | `read`、`write`、`edit` |
+| `internal/adapter/tool/search` | `search-tools` | `glob`、`grep` |
+| `internal/adapter/tool/shell` | `shell-tools` | 前台 `bash` |
+| `internal/adapter/tool/subagent` | `subagent-tools` | 五个 subagent 工具 |
+
+`internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。
+
+`read`、`glob`、`grep` 可并行；`write`、`edit`、`bash` 是 exclusive，并在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。`bash` 的 `sandbox_permissions: danger-full-access` 是唯一离开 workspace sandbox 的方式，规则见[安全工程规则](security.md#approvalshell-与进程)。
 
 subagent 工具为 `spawn_subagent`、`subagent_followup`、`subagent_interrupt`、`subagent_report` 和 `list_subagents`。它们调用进程内 `app/subagent`，不启动 Codex、Claude 或另一个 harness 进程。
 
@@ -152,7 +164,7 @@ subagent 工具为 `spawn_subagent`、`subagent_followup`、`subagent_interrupt`
 
 - spawn 可只传任务，也可显式 fork parent 当前 surface；fork 是 bounded text snapshot，不共享可变 transcript。
 - child 可选择 persona 与 tool allowlist。空 allowlist 表示当前已注册工具集合。
-- delegated session 在持久化策略层固定为 `never`，因此需要 approval 的工具无法执行，host shell 还在工具执行点再次拒绝。
+- delegated session 在持久化策略层固定为 `never`，因此需要 approval 的工具无法执行，`bash` 的 sandbox 升级还在工具执行点再次拒绝。
 - followup 仅允许 parent 对自己的 continuable child 发起；interrupt 取消 child 当前 turn；report/list 返回无凭据的状态与最近结果。
 - service cleanup 停止 monitor、等待退出并关闭所有 child Scope；descriptor 支持 cold resume 时恢复 mode、persona 与 tool allowlist。
 
@@ -174,7 +186,7 @@ subagent/descriptor, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、workspace/subagent tool 语义和 session v2。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、subagent）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。

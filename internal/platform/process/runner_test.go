@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -52,14 +53,17 @@ func TestNew_ResolvesPlatformSandbox(t *testing.T) {
 func TestRunnerRun_ValidatesRequestAndPaths(t *testing.T) {
 	temporary := t.TempDir()
 	runner := &Runner{goos: "linux"}
-	valid := Request{Path: "/bin/sh", Cwd: temporary, TempDir: temporary, Mode: ModeHost, Timeout: time.Second}
+	valid := Request{Path: "/bin/sh", Root: temporary, Cwd: temporary, TempDir: temporary, Mode: ModeHost, Timeout: time.Second}
 	for _, mutate := range []func(*Request){
 		func(request *Request) { request.Path = "" },
+		func(request *Request) { request.Root = "" },
 		func(request *Request) { request.Cwd = "" },
 		func(request *Request) { request.TempDir = "" },
 		func(request *Request) { request.Mode = "unknown" },
 		func(request *Request) { request.Timeout = 0 },
 		func(request *Request) { request.Timeout = 11 * time.Minute },
+		func(request *Request) { request.Cwd = filepath.Dir(temporary) },
+		func(request *Request) { request.TempDir = filepath.Dir(temporary) },
 	} {
 		request := valid
 		mutate(&request)
@@ -67,112 +71,153 @@ func TestRunnerRun_ValidatesRequestAndPaths(t *testing.T) {
 			t.Fatalf("Run(%+v) error = %v", request, err)
 		}
 	}
-
 	previousAbs := processAbs
 	t.Cleanup(func() { processAbs = previousAbs })
-	absCalls := 0
-	processAbs = func(value string) (string, error) {
-		absCalls++
-		if absCalls == 1 {
-			return "", errors.New("root")
-		}
-		return filepath.Abs(value)
-	}
+	processAbs = func(string) (string, error) { return "", errors.New("abs") }
 	if _, err := runner.Run(context.Background(), valid); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("root abs error = %v", err)
-	}
-
-	absCalls = 0
-	processAbs = func(value string) (string, error) {
-		absCalls++
-		if absCalls == 2 {
-			return "", errors.New("temp")
-		}
-		return filepath.Abs(value)
-	}
-	if _, err := runner.Run(context.Background(), valid); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("temp abs error = %v", err)
-	}
-
-	processAbs = filepath.Abs
-	valid.TempDir = filepath.Dir(temporary)
-	if _, err := runner.Run(context.Background(), valid); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("outside temp error = %v", err)
+		t.Fatalf("abs error = %v", err)
 	}
 }
 
-func TestRunnerRun_HostSuccessExitStartAndTimeout(t *testing.T) {
+func TestRunnerRun_ReportsStreamsExitSignalTimeoutAndCancellation(t *testing.T) {
 	root := t.TempDir()
+	work := filepath.Join(root, "work")
+	if err := os.Mkdir(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	runner := &Runner{goos: "linux"}
-	if _, err := runner.Run(context.Background(), Request{Path: "/bin/true", Cwd: root, TempDir: root, Mode: ModeWorkspace, Timeout: time.Second}); !errors.Is(err, ErrSandboxUnavailable) {
+	if _, err := runner.Run(context.Background(), Request{Path: "/bin/true", Root: root, Cwd: root, TempDir: root, Mode: ModeWorkspace, Timeout: time.Second}); !errors.Is(err, ErrSandboxUnavailable) {
 		t.Fatalf("workspace sandbox error = %v", err)
 	}
 	request := Request{
-		Path: "/bin/sh", Args: []string{"-c", `read value; printf '%s|%s|%s' "$value" "$NANO_TEST" "$NANO_WORKSPACE"`},
-		Stdin: []byte("input\n"), Cwd: root, TempDir: root, Mode: ModeHost, Timeout: time.Second,
+		Path: "/bin/sh", Args: []string{"-c", `printf '%s|%s|%s|' "$NANO_TEST" "$NANO_WORKSPACE" "$(pwd -P)"; printf oops >&2`},
+		Root: root, Cwd: work, TempDir: root, Mode: ModeHost, Timeout: 5 * time.Second,
 		Additional: map[string]string{"NANO_TEST": "extra", "lower": "ignored", "NUL": "bad\x00value"},
 	}
 	result, err := runner.Run(context.Background(), request)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if result.ExitCode != 0 || result.Output != "input|extra|"+root {
-		t.Fatalf("result = %+v", result)
+	resolvedWork, _ := filepath.EvalSymlinks(work)
+	if err != nil || result.ExitCode != 0 || result.Stdout.Text != "extra|"+root+"|"+resolvedWork+"|" || result.Stderr.Text != "oops" || result.Signal != "" || result.TimedOut {
+		t.Fatalf("result = %+v, error = %v", result, err)
 	}
 
 	request.Args = []string{"-c", "printf failure; exit 7"}
 	result, err = runner.Run(context.Background(), request)
-	if err == nil || err.Error() != "process exited with status 7" || result.ExitCode != 7 || result.Output != "failure" {
+	if err != nil || result.ExitCode != 7 || result.Stdout.Text != "failure" || result.SandboxDenied {
 		t.Fatalf("exit result = %+v, error = %v", result, err)
+	}
+
+	request.Args = []string{"-c", "kill -TERM $$"}
+	if result, err = runner.Run(context.Background(), request); err != nil || result.Signal != "SIGTERM" || result.ExitCode != -1 {
+		t.Fatalf("signal result = %+v, error = %v", result, err)
+	}
+	request.Args = []string{"-c", "kill -VTALRM $$"}
+	if result, err = runner.Run(context.Background(), request); err != nil || !strings.HasPrefix(result.Signal, "signal ") {
+		t.Fatalf("unnamed signal result = %+v, error = %v", result, err)
 	}
 
 	request.Path = filepath.Join(root, "missing")
 	request.Args = nil
-	result, err = runner.Run(context.Background(), request)
-	if err == nil || !strings.Contains(err.Error(), "start process") || result.ExitCode != 0 {
+	if result, err = runner.Run(context.Background(), request); err == nil || !strings.Contains(err.Error(), "start process") || result.ExitCode != 0 {
 		t.Fatalf("start result = %+v, error = %v", result, err)
 	}
 
 	request.Path = "/bin/sh"
-	request.Args = []string{"-c", "printf before; sleep 2"}
-	request.Timeout = 20 * time.Millisecond
+	request.Args = []string{"-c", "printf before; sleep 30"}
+	request.Timeout = 50 * time.Millisecond
+	started := time.Now()
 	result, err = runner.Run(context.Background(), request)
-	if !errors.Is(err, context.DeadlineExceeded) || result.ExitCode != -1 || result.Output != "before" {
+	if err != nil || !result.TimedOut || result.Signal != "SIGKILL" || result.Stdout.Text != "before" || time.Since(started) > 10*time.Second {
 		t.Fatalf("timeout result = %+v, error = %v", result, err)
+	}
+
+	// A background descendant holding the pipes open is killed with the group.
+	request.Args = []string{"-c", "sleep 30 & printf done"}
+	request.Timeout = 5 * time.Second
+	started = time.Now()
+	if result, err = runner.Run(context.Background(), request); err != nil || result.Stdout.Text != "done" || time.Since(started) > 4*time.Second {
+		t.Fatalf("background result = %+v, error = %v after %v", result, err, time.Since(started))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	marker := filepath.Join(root, "started")
+	request.Args = []string{"-c", "printf partial; : > \"$MARKER\"; sleep 30"}
+	request.Additional = map[string]string{"MARKER": marker}
+	// Cancel only after the command proves it produced output.
+	go func() {
+		for {
+			if _, err := os.Stat(marker); err == nil {
+				cancel()
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	if result, err = runner.Run(ctx, request); !errors.Is(err, context.Canceled) || result.Stdout.Text != "partial" {
+		t.Fatalf("canceled result = %+v, error = %v", result, err)
+	}
+	if _, err = runner.Run(ctx, request); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-canceled error = %v", err)
+	}
+}
+
+func TestRunnerRun_ClassifiesSandboxDenial(t *testing.T) {
+	root := t.TempDir()
+	// A fake sandbox executable runs the command itself, so the denial
+	// classifier sees real process output without a host sandbox.
+	fake := filepath.Join(root, "sandbox")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nprintf 'touch: x: Operation not permitted\\n' >&2\nexit 1\n"), 0o700); err != nil { //nolint:gosec // the fake runner must be executable
+		t.Fatal(err)
+	}
+	runner := &Runner{goos: "darwin", sandboxPath: fake}
+	request := Request{Path: "/bin/sh", Args: []string{"-c", "true"}, Root: root, Cwd: root, TempDir: root, Mode: ModeWorkspace, Timeout: 5 * time.Second}
+	result, err := runner.Run(context.Background(), request)
+	if err != nil || !result.SandboxDenied || result.ExitCode != 1 {
+		t.Fatalf("denied = %+v, %v", result, err)
+	}
+	runner.goos = "linux"
+	if result, _ := runner.Run(context.Background(), request); result.SandboxDenied {
+		t.Fatal("linux signature matched darwin text")
+	}
+	request.Mode = ModeHost
+	request.Path = fake
+	runner.goos = "darwin"
+	if result, _ := runner.Run(context.Background(), request); result.SandboxDenied {
+		t.Fatal("host mode reported a sandbox denial")
 	}
 }
 
 func TestRunnerCommand_BuildsSandboxInvocation(t *testing.T) {
 	request := Request{Path: "/bin/tool", Args: []string{"one", "two"}, Mode: ModeHost}
 	runner := &Runner{sandboxPath: "/sandbox", goos: "linux"}
-	path, args, err := runner.command(`/work/"quoted`, "/work/tmp", request)
+	path, args, err := runner.command(`/work/"quoted`, "/work/sub", "/work/tmp", request)
 	if err != nil || path != request.Path || strings.Join(args, " ") != "one two" {
 		t.Fatalf("host command = %q %#v, %v", path, args, err)
 	}
 
 	request.Mode = ModeWorkspace
-	path, args, err = runner.command("/work", "/work/tmp", request)
-	if err != nil || path != "/sandbox" || strings.Join(args[len(args)-3:], " ") != "/bin/tool one two" || args[0] != "--die-with-parent" {
+	path, args, err = runner.command("/work", "/work/sub", "/work/tmp", request)
+	joined := strings.Join(args, " ")
+	if err != nil || path != "/sandbox" || !strings.HasSuffix(joined, "--chdir /work/sub -- /bin/tool one two") || !strings.Contains(joined, "--bind /work /work --bind /work/tmp /tmp") || args[0] != "--die-with-parent" {
 		t.Fatalf("linux command = %q %#v, %v", path, args, err)
 	}
 
 	runner.goos = "darwin"
-	path, args, err = runner.command(`/work/"quoted`, "/work/tmp", request)
+	path, args, err = runner.command(`/work/"quoted`, "/work/sub", "/work/tmp", request)
 	if err != nil || path != "/sandbox" || args[0] != "-p" || !strings.Contains(args[1], `subpath "/work/\"quoted"`) || args[2] != "/bin/tool" {
 		t.Fatalf("darwin command = %q %#v, %v", path, args, err)
 	}
 
 	runner.sandboxPath = ""
-	if _, _, err := runner.command("/work", "/work/tmp", request); !errors.Is(err, ErrSandboxUnavailable) {
+	if _, _, err := runner.command("/work", "/work", "/work/tmp", request); !errors.Is(err, ErrSandboxUnavailable) {
 		t.Fatalf("missing sandbox error = %v", err)
 	}
 	runner.sandboxPath, runner.goos = "/sandbox", "plan9"
-	if _, _, err := runner.command("/work", "/work/tmp", request); !errors.Is(err, ErrSandboxUnavailable) {
+	if _, _, err := runner.command("/work", "/work", "/work/tmp", request); !errors.Is(err, ErrSandboxUnavailable) {
 		t.Fatalf("unsupported sandbox error = %v", err)
 	}
 }
 
-func TestHelpers_ValidateEnvironmentContainmentAndBoundOutput(t *testing.T) {
+func TestHelpers_ValidateEnvironmentContainmentAndTailOutput(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		want bool
@@ -200,13 +245,23 @@ func TestHelpers_ValidateEnvironmentContainmentAndBoundOutput(t *testing.T) {
 		t.Fatal("within returned an unexpected containment result")
 	}
 
-	var buffer limitedBuffer
-	if count, err := buffer.Write([]byte("small")); count != 5 || err != nil || buffer.String() != "small" {
-		t.Fatalf("small write = %d, %v, %q", count, err, buffer.String())
+	var small tailBuffer
+	if count, err := small.Write([]byte("small")); count != 5 || err != nil || small.output() != (Output{Text: "small"}) {
+		t.Fatalf("small write = %d, %v, %+v", count, err, small.output())
 	}
-	data := []byte(strings.Repeat("x", maxOutputBytes))
-	if count, err := buffer.Write(data); count != len(data) || err != nil || !strings.HasSuffix(buffer.String(), "\n[output truncated]") {
-		t.Fatalf("large write = %d, %v, suffix=%q", count, err, buffer.String()[len(buffer.String())-20:])
+	var large tailBuffer
+	for range 5 {
+		_, _ = large.Write([]byte(strings.Repeat("界", maxStreamBytes/3)))
+	}
+	_, _ = large.Write([]byte("END"))
+	output := large.output()
+	if !output.Truncated || len(output.Text) > maxStreamBytes || !strings.HasSuffix(output.Text, "END") || !strings.HasPrefix(output.Text, "界") {
+		t.Fatalf("tail = %d bytes truncated=%v prefix=%q", len(output.Text), output.Truncated, output.Text[:6])
+	}
+	var exact tailBuffer
+	_, _ = exact.Write([]byte(strings.Repeat("x", maxStreamBytes+1)))
+	if output := exact.output(); !output.Truncated || len(output.Text) != maxStreamBytes {
+		t.Fatalf("just over the limit = %d bytes truncated=%v", len(output.Text), output.Truncated)
 	}
 }
 

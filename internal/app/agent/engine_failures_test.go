@@ -163,7 +163,7 @@ func TestEngine_ContainsEveryDurableCompletionBoundary(t *testing.T) {
 			harness := startEngineHarness(t, 1, test.actions...)
 			if test.withTool {
 				scope := &plugin.Scope{}
-				if err := harness.tools.Register(&engineTool{name: "inspect", output: "ok"}, scope); err != nil {
+				if err := harness.tools.Register((&engineTool{name: "inspect", output: "ok"}).define(), scope); err != nil {
 					t.Fatal(err)
 				}
 			}

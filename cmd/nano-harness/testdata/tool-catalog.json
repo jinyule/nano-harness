@@ -1,0 +1,287 @@
+{
+  "source": "Model-visible tool catalog of the real cmd/nano-harness composition, in request order, as frozen into request/header and sent to the provider.",
+  "verify": "go test ./cmd/nano-harness -run TestComposition_ToolCatalogGolden",
+  "policy": "Reviewed fixture: CI only compares. Edit by hand when a definition change is intended; tools shared with upstream must also match testdata/upstream-base-tools.json.",
+  "tools": [
+    {
+      "name": "bash",
+      "description": "Execute a bash command (`bash -c`) and return its stdout/stderr. Each call runs in a fresh shell; pass `workdir` instead of using `cd`. Managed `$DSH_*` variables expose current harness environment facts. Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. Provide `description` before `command` in the arguments. Before any delete or move, verify that the resolved absolute target path is the intended one; never run it against a computed path you have not checked. An unset variable expands to an empty string, so guard variables in such paths with `${VAR:?}`. Commands may run under a file sandbox; a blocked file operation is reported as `[sandbox: file access denied under <mode> mode]`, a policy denial: do not retry another way.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Clear, concise description of what this command does in active voice, 5-10 words (shown in the UI). Examples: \"ls\" → \"List files in current directory\"; \"git status\" → \"Show working tree status\"; \"npm install\" → \"Install package dependencies\"."
+          },
+          "command": {
+            "type": "string",
+            "description": "The bash command to execute."
+          },
+          "timeoutMs": {
+            "type": "number",
+            "description": "Timeout in milliseconds. The executor applies its configured default and cap, and kills the command on expiry."
+          },
+          "workdir": {
+            "type": "string",
+            "description": "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it."
+          },
+          "sandbox_permissions": {
+            "type": "string",
+            "description": "The narrowest wider sandbox mode for a one-shot retry of the exact command the sandbox just denied; the retry asks the user for approval.",
+            "enum": [
+              "workspace-write",
+              "danger-full-access"
+            ]
+          },
+          "justification": {
+            "type": "string",
+            "description": "Required with sandbox_permissions: one sentence for the user explaining why this exact command needs the wider access. Use the language of the user’s current request."
+          }
+        },
+        "required": [
+          "description",
+          "command"
+        ]
+      }
+    },
+    {
+      "name": "edit",
+      "description": "Edit an existing UTF-8 text file by replacing literal text.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "Path to edit, resolved by the filesystem backend. Provide `file_path` before `old_string` and `new_string` in the arguments."
+          },
+          "old_string": {
+            "type": "string",
+            "description": "Literal text to replace."
+          },
+          "new_string": {
+            "type": "string",
+            "description": "Literal replacement text. Use an empty string to delete the match."
+          },
+          "replace_all": {
+            "type": "boolean",
+            "description": "Replace all matches. Defaults to false; when false, old_string must appear exactly once."
+          },
+          "sandbox_permissions": {
+            "type": "string",
+            "description": "The narrowest wider sandbox mode for a one-shot retry of the exact operation the sandbox just denied; the retry asks the user for approval.",
+            "enum": [
+              "workspace-write",
+              "danger-full-access"
+            ]
+          },
+          "justification": {
+            "type": "string",
+            "description": "Required with sandbox_permissions: one sentence for the user explaining why this exact file operation needs the wider access. Use the language of the user’s current request."
+          }
+        },
+        "required": [
+          "file_path",
+          "old_string",
+          "new_string"
+        ]
+      }
+    },
+    {
+      "name": "glob",
+      "description": "Find files, not directories, whose paths match a glob pattern, including hidden and ignored files. Returns up to 100 paths in modification-time order; a larger result keeps the first paths and reports where the complete list was saved.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Glob pattern to match file paths against (e.g. \"**/*.ts\", \"src/**/*.test.js\"). A pattern with no \"/\" matches the basename at any depth, so \"*\" and \"*.ts\" both search the whole tree; include a separator to anchor the depth."
+          },
+          "path": {
+            "type": "string",
+            "description": "Directory to search in. Defaults to the session workspace; a relative path resolves against it."
+          }
+        },
+        "required": [
+          "pattern"
+        ]
+      }
+    },
+    {
+      "name": "grep",
+      "description": "Search file contents with a ripgrep regular expression. Returns matching lines with line numbers, grouped by file. Returns up to 250 matches; a larger result reports where the complete match list was saved.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Regular expression to search for (ripgrep syntax)."
+          },
+          "path": {
+            "type": "string",
+            "description": "File or directory to search. Defaults to the session workspace; a relative path resolves against it."
+          },
+          "include": {
+            "type": "string",
+            "description": "One glob filter for which files to search (e.g. \"*.ts\", \"*.{js,jsx}\"). Not a list; negation is not supported."
+          }
+        },
+        "required": [
+          "pattern"
+        ]
+      }
+    },
+    {
+      "name": "list_subagents",
+      "description": "List in-process subagents created by this parent session.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "read",
+      "description": "Read a UTF-8 text file and return line-numbered content.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "Path to read, resolved by the filesystem backend."
+          },
+          "offset": {
+            "type": "number",
+            "description": "1-based first line to return. Defaults to 1."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum number of lines to return. Defaults to 2000."
+          }
+        },
+        "required": [
+          "file_path"
+        ]
+      }
+    },
+    {
+      "name": "spawn_subagent",
+      "description": "Create a full in-process subagent. one-shot waits for its report; continuable returns a handle after the initial report.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "one-shot",
+              "continuable"
+            ]
+          },
+          "persona": {
+            "type": "string"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "fork": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "label",
+          "task",
+          "mode"
+        ]
+      }
+    },
+    {
+      "name": "subagent_followup",
+      "description": "Send a follow-up task to a continuable in-process subagent and wait for its report.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "task"
+        ]
+      }
+    },
+    {
+      "name": "subagent_interrupt",
+      "description": "Cancel the active turn of an in-process subagent.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    },
+    {
+      "name": "subagent_report",
+      "description": "Return the current status and latest report of one in-process subagent.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    },
+    {
+      "name": "write",
+      "description": "Create or fully replace a UTF-8 text file.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "Path to write, resolved by the filesystem backend. Provide `file_path` before `content` in the arguments."
+          },
+          "content": {
+            "type": "string",
+            "description": "Full UTF-8 text content to write."
+          },
+          "sandbox_permissions": {
+            "type": "string",
+            "description": "The narrowest wider sandbox mode for a one-shot retry of the exact operation the sandbox just denied; the retry asks the user for approval.",
+            "enum": [
+              "workspace-write",
+              "danger-full-access"
+            ]
+          },
+          "justification": {
+            "type": "string",
+            "description": "Required with sandbox_permissions: one sentence for the user explaining why this exact file operation needs the wider access. Use the language of the user’s current request."
+          }
+        },
+        "required": [
+          "file_path",
+          "content"
+        ]
+      }
+    }
+  ]
+}

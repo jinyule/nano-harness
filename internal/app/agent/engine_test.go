@@ -121,21 +121,27 @@ func (engineApprover) Decide(context.Context, appTool.ApprovalRequest) (session.
 	return session.ApprovalAllowedOnce, nil
 }
 
+// engineTool records invocations of a no-argument tool registered as name.
 type engineTool struct {
 	name   string
 	output string
 	err    error
-	seen   []appTool.Execution
+	seen   []appTool.Invocation
 }
 
-func (tool *engineTool) Definition() session.ToolDefinition {
-	return session.ToolDefinition{Name: tool.name, Description: "test tool", Parameters: json.RawMessage(`{"type":"object"}`)}
+type engineArguments struct {
+	Value *float64 `json:"value"`
 }
-func (*engineTool) Concurrency() appTool.Concurrency      { return appTool.ConcurrencyExclusive }
-func (*engineTool) ApprovalReason(json.RawMessage) string { return "" }
-func (tool *engineTool) Execute(_ context.Context, execution appTool.Execution) (string, error) {
-	tool.seen = append(tool.seen, execution)
-	return tool.output, tool.err
+
+func (tool *engineTool) define() *appTool.Tool {
+	return appTool.Define(appTool.Spec[engineArguments]{
+		Name: tool.name, Description: "test tool", Parameters: appTool.Parameters{appTool.Optional("value", appTool.Number(""))},
+		Guidance: appTool.StaticGuidance(1, "inspect guidance"),
+		Execute: func(_ context.Context, invocation appTool.Invocation, _ engineArguments) (appTool.Result, error) {
+			tool.seen = append(tool.seen, invocation)
+			return appTool.Text(tool.output), tool.err
+		},
+	})
 }
 
 type engineHarness struct {
@@ -293,7 +299,7 @@ func TestEngine_ExecutesToolsSteersAndNextTurn(t *testing.T) {
 	)
 	candidate := &engineTool{name: "inspect", output: "tool output"}
 	providerScope := &plugin.Scope{}
-	if err := harness.tools.Register(candidate, providerScope); err != nil {
+	if err := harness.tools.Register(candidate.define(), providerScope); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = providerScope.Close(context.Background()) })
@@ -319,6 +325,11 @@ func TestEngine_ExecutesToolsSteersAndNextTurn(t *testing.T) {
 	if countType(types, session.RecordStepStart) != 2 || countType(types, session.RecordUserMessage) != 2 {
 		t.Fatalf("tool/steer records = %#v", types)
 	}
+	for _, event := range log.events {
+		if header := event.Record.Header; header != nil && (!strings.HasSuffix(header.System, "\n\ninspect guidance") || len(header.Tools) != 1 || header.Tools[0].Name != "inspect") {
+			t.Fatalf("request header lacks tool guidance: %#v", header)
+		}
+	}
 	second := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "later"), drain: func() []session.Message { return nil }})
 	if second.Turn != 2 || second.Outcome != session.OutcomeCompleted || second.Text != "second turn" {
 		t.Fatalf("second turn = %+v", second)
@@ -330,7 +341,7 @@ func TestEngine_StopsAtStepLimitAndClosesOpenScopes(t *testing.T) {
 	harness := startEngineHarness(t, 1, modelAction{completion: assistantCompletion("again", call)})
 	candidate := &engineTool{name: "inspect", output: "ok"}
 	scope := &plugin.Scope{}
-	if err := harness.tools.Register(candidate, scope); err != nil {
+	if err := harness.tools.Register(candidate.define(), scope); err != nil {
 		t.Fatal(err)
 	}
 	journal, log := turnJournal()

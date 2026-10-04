@@ -6,8 +6,11 @@ import (
 	modelprovider "github.com/jinyule/nano-harness/internal/adapter/model/provider"
 	sessionjsonl "github.com/jinyule/nano-harness/internal/adapter/session/jsonl"
 	settingsfile "github.com/jinyule/nano-harness/internal/adapter/settings/file"
+	filetool "github.com/jinyule/nano-harness/internal/adapter/tool/file"
+	searchtool "github.com/jinyule/nano-harness/internal/adapter/tool/search"
+	shelltool "github.com/jinyule/nano-harness/internal/adapter/tool/shell"
 	subagenttool "github.com/jinyule/nano-harness/internal/adapter/tool/subagent"
-	workspacetool "github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
+	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/approval"
 	"github.com/jinyule/nano-harness/internal/app/compaction"
@@ -47,7 +50,10 @@ var (
 	newAgentRegistry     = agent.NewRegistry
 	newRootBootstrap     = agent.NewBootstrap
 	newSubagentService   = subagent.New
-	newWorkspaceTools    = workspacetool.New
+	newWorkspace         = workspace.Resolve
+	newFileTools         = filetool.New
+	newSearchTools       = searchtool.New
+	newShellTools        = shelltool.New
 	newSubagentTools     = subagenttool.New
 )
 
@@ -112,7 +118,19 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
-	workspaceTools, err := newWorkspaceTools(toolRuntime, platformprocess.New(), config.workspaceRoot)
+	workspaceRoot, err := newWorkspace(config.workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	fileTools, err := newFileTools(toolRuntime, workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	searchTools, err := newSearchTools(toolRuntime, workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	shellTools, err := newShellTools(toolRuntime, platformprocess.New(), workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +142,7 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 		configuration, settingsProvider, credentials, modelRuntime,
 		providers[0], providers[1], providers[2], approvalService, toolRuntime,
 		images, assembler, retryService, compactionService, sessions, engine,
-		registry, root, subagents, workspaceTools, subagentTools,
+		registry, root, subagents, fileTools, searchTools, shellTools, subagentTools,
 	}
 	return &application{plugins: plugins, root: root, registry: registry, models: modelRuntime,
 		settings: configuration, approval: approvalService, images: images, subagents: subagents}, nil

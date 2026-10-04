@@ -2,7 +2,10 @@
 
 package process
 
-import "os/exec"
+import (
+	"os"
+	"os/exec"
+)
 
 func configureProcess(*exec.Cmd) {}
 
@@ -11,3 +14,6 @@ func killProcessGroup(command *exec.Cmd) {
 		_ = command.Process.Kill()
 	}
 }
+
+// exitSignal reports no signal on platforms without POSIX wait status.
+func exitSignal(*os.ProcessState) string { return "" }

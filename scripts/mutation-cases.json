@@ -28,18 +28,25 @@
     "test": "^TestSessionV2_(FrozenContract|RejectsChangedContract)$"
   },
   {
-    "id": "workspace-size",
-    "file": "internal/adapter/tool/workspace/files.go",
-    "before": "info.Size() > maxReadBytes",
-    "after": "info.Size() > maxReadBytes*2",
-    "test": "^TestReadTool_RejectsInvalidUnsafeAndUnreadableInput$"
+    "id": "read-byte-cap",
+    "file": "internal/adapter/tool/file/read.go",
+    "before": "builder.outputBytes+size > readMaxBytes",
+    "after": "builder.outputBytes+size > readMaxBytes*2",
+    "test": "^TestReadWindow_EnforcesLineRuneAndByteCaps$"
   },
   {
     "id": "workspace-escape",
     "file": "internal/adapter/tool/workspace/workspace.go",
-    "before": "clean == \"..\" || strings.HasPrefix(clean, \"..\"+string(filepath.Separator))",
-    "after": "clean == \"..\"",
-    "test": "^TestArgumentAndPathHelpers_RejectAmbiguityAndEscape$"
+    "before": "relative != \"..\" && !strings.HasPrefix(relative, \"..\"+string(filepath.Separator))",
+    "after": "relative != \"..\"",
+    "test": "^TestRoot_PathMatrix$"
+  },
+  {
+    "id": "workspace-symlink",
+    "file": "internal/adapter/tool/workspace/workspace.go",
+    "before": "if info.Mode()&fs.ModeSymlink != 0 {",
+    "after": "if false && info.Mode()&fs.ModeSymlink != 0 {",
+    "test": "^TestRoot_PathMatrix$"
   },
   {
     "id": "retry-after-commit",

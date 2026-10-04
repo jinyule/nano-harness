@@ -27,9 +27,15 @@ func TestAssemblerLifecycleAndSections(t *testing.T) {
 	if assembler.Start(context.Background(), &plugin.Scope{}) == nil {
 		t.Fatal("double start")
 	}
-	prompt, err := assembler.Build(Input{Workspace: "/work", Provider: "openai", Model: "model", Persona: "reviewer", Delegated: true, Tools: []session.ToolDefinition{{Name: "z"}, {Name: "a"}}})
-	if err != nil || !strings.Contains(prompt, "Delegation:") || !strings.Contains(prompt, "reviewer") || !strings.Contains(prompt, "a, z") || !strings.Contains(prompt, "workspace-relative paths") {
+	prompt, err := assembler.Build(Input{
+		Workspace: "/work", Provider: "openai", Model: "model", Persona: "reviewer", Delegated: true,
+		Tools: []session.ToolDefinition{{Name: "z"}, {Name: "a"}}, Guidance: []string{"first guidance", "second guidance"},
+	})
+	if err != nil || !strings.Contains(prompt, "Delegation:") || !strings.Contains(prompt, "reviewer") || !strings.Contains(prompt, "sandbox escalation") || !strings.Contains(prompt, "reject paths outside it") {
 		t.Fatalf("prompt=%q err=%v", prompt, err)
+	}
+	if !strings.HasSuffix(prompt, "Available tools: a, z. Follow each JSON schema exactly and use tool results as the only authority for side effects.\n\nfirst guidance\n\nsecond guidance") {
+		t.Fatalf("tool sections out of order: %q", prompt)
 	}
 	if _, err := assembler.Build(Input{Workspace: ""}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("invalid=%v", err)

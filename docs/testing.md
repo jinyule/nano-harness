@@ -65,7 +65,7 @@ loopback HTTP 证明协议实现，不声称证明远端服务部署。真实 pr
 - followup、steer、interrupt、idle、one-shot、shutdown drain 和 panic containment；
 - subagent spawn/fork/wait/followup/interrupt/report/list、parent identity、depth、publication race 和 cleanup failure。
 
-workspace 工具用真实临时目录验证路径 escape、symlink、UTF-8、大小/entry/hit/depth 限制、unified diff check/apply、sandbox invocation、host approval、delegated denial、timeout、process group 和 output truncation。写工具还须从测试进程重新读取文件，不能只断言工具返回文案。
+工具定义抽象用表驱动测试证明 schema 键序、参数违规列表、未知成员拒绝、类型化解码、并发分组、审批前校验和 panic containment。workspace 工具通过真实 runtime 调用并使用真实临时目录，覆盖路径允许/拒绝矩阵（相对、绝对、`..`、symlink 读取与写入）、read 窗口与行/字节上限、UTF-8/BOM/CRLF、原子写入与权限、edit 唯一匹配与 `replace_all`、glob 模式与修改时间排序、grep 的 hidden/ignore/include 规则与上限、sandbox escalation 的成对规则、delegated denial、timeout、process group 和 tail 截断。`bash` 另有真实 host 进程测试；本机存在 OS sandbox 时还验证 workspace 内可写、workspace 外被拒绝并返回拒绝标记。写工具须从测试进程重新读取文件，不能只断言工具返回文案。
 
 ## Session、设置、账户与图片
 
@@ -78,11 +78,11 @@ workspace 工具用真实临时目录验证路径 escape、symlink、UTF-8、大
 
 TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event forwarding/backpressure、所有 durable presentation event、text/reasoning stream、图片附加、普通/approval/auth 输入模式、全部命令、UI 消失与 cancellation。
 
-`cmd/nano-harness` assembled e2e 使用真实 CLI config、Plugin Runtime、设置/账户/LLM/tool/agent/session/TUI 构造链和 loopback OpenAI SSE。模型第一步发出 `read_file`，真实工具读取 workspace，第二步返回最终文本；测试从磁盘重新读取 v2 transcript 并断言 call/result/final assistant。另一个测试让默认 Bubble Tea runner 接收终止键，证明真实 terminal lifecycle 可以启动和关闭。独立测试前端复用 `composeApplication` 的共同插件链，验证无需构造 TUI 即可消费 durable 事件并先于 app 服务关闭；这不是 GUI 实现证据。
+`cmd/nano-harness` assembled e2e 使用真实 CLI config、Plugin Runtime、设置/账户/LLM/tool/agent/session/TUI 构造链和 loopback OpenAI SSE。模型第一步发出 `read`，真实工具读取 workspace，第二步返回最终文本；测试从磁盘重新读取 v2 transcript 并断言 call/result/final assistant 和工具 guidance。另一个测试让默认 Bubble Tea runner 接收终止键，证明真实 terminal lifecycle 可以启动和关闭。独立测试前端复用 `composeApplication` 的共同插件链，验证无需构造 TUI 即可消费 durable 事件并先于 app 服务关闭；这不是 GUI 实现证据。
 
 命令级 failure matrix 覆盖路径归一化、create/resume、每个 constructor、runtime start、TUI run、shutdown、usage/version output 和 write failure。发布 smoke 必须运行编译后的 `bin/nano-harness`，不能以 `go run` 或直接调用内部函数替代。
 
-`make tui-e2e` 是独立的本机 PTY 验证入口，需要 Python 3 和 Unix。`scripts/tui-e2e.py` 只替换远端模型，在 loopback 的动态端口提供 Responses SSE；TUI、composition、工具、审批、sandbox 和 session 均走编译后的真实 `cmd`。脚本从终端发送任务和审批答案，再独立检查根会话的十种工具调用、子会话的 read/followup 与 `never` 策略、两次审批决定、实际文件字节、长行末尾、打断、重启 replay、私有权限和退出后的 lock 清理。`subagent_interrupt` 场景针对已 idle 的 child；活动 turn 的取消由根 `/interrupt` 场景与 subagent 包测试覆盖。
+`make tui-e2e` 是独立的本机 PTY 验证入口，需要 Python 3 和 Unix。`scripts/tui-e2e.py` 只替换远端模型，在 loopback 的动态端口提供 Responses SSE；TUI、composition、工具、审批、sandbox 和 session 均走编译后的真实 `cmd`。脚本从终端发送任务和审批答案，再独立检查根会话的十一种工具调用、子会话的 read/followup 与 `never` 策略、`write`/`edit`/`bash` 的三次审批决定、实际文件字节、长行末尾、打断、重启 replay、私有权限和退出后的 lock 清理。`subagent_interrupt` 场景针对已 idle 的 child；活动 turn 的取消由根 `/interrupt` 场景与 subagent 包测试覆盖。
 
 TUI 回归测试还覆盖 v2 粘贴、按键释放、secret 遮罩、小窗口布局，以及 Scope 关闭正在运行的 terminal、取消并等待登录命令和拒绝迟到命令。PTY 在两种窗口尺寸下使用 bracketed paste 输入任务。TUI 回归测试证明流式输出与系统行不会串接、reasoning 不隐藏最终回答、中文长行可见、历史浏览保留位置，以及键盘输入和分页/鼠标滚动各自生效。断点调试另按[调试步骤](debugging.md)验证；直接 IDE 与 Remote 各自需要真实断点、调用栈和变量证据，协议 fixture 不等于远端模型 live 证据。
 
@@ -127,7 +127,7 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 
 ## 定向 mutation 与断言有效性
 
-`make mutation` 执行 `scripts/mutation-cases.json` 中七个已审查回归：Scope cleanup 顺序、approval never、会话序号、事件因果、文件大小、路径逃逸和已提交输出后的 retry。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
+`make mutation` 执行 `scripts/mutation-cases.json` 中八个已审查回归：Scope cleanup 顺序、approval never、会话序号、事件因果、read 字节上限、路径逃逸、写入跨 symlink 和已提交输出后的 retry。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
 
 执行器使用 Python 3 标准库，在 Unix 私有临时目录复制当前 cmd/internal、go.mod/go.sum（包含未提交源码与测试），拒绝源 symlink；不在工作树变异，不运行用户数据，不复用历史结果。每项先运行明确选择的真实测试且至少一个测试通过，再变异、独立编译、以 `-count=1` 重跑。只有 Go JSON 输出中的具名测试失败可认定 killed；build-error、timeout、infrastructure-error、no-tests、baseline failure、stale-site 和 survived 全部失败。当前列举的每个 site 都执行，不依赖 coverage 筛选，因此没有“缺失 coverage 就跳过”的成功路径。空集合、重复 ID 或找不到唯一替换位置均拒绝。超时终止并等待整个测试进程组；临时树最终清理。
 
@@ -140,6 +140,12 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 `internal/adapter/session/jsonl/testdata/session-v2.jsonl` 是手写、已审查的合成 v2 协议样本，没有生成器或自动刷新开关。`TestSessionV2_FrozenContract` 从真实 Manager/Inspect/Open 读取、投影并确认关闭会话不改字节；writer 使用独立构造的记录精确比较同一格式，避免 writer/reader 一起改错而 round-trip 仍绿。`TestSessionV2_RejectsChangedContract` 拒绝旧/未来版本、未知字段/记录、序号缺口和非法 step。
 
 修改持久化字段、枚举、顺序、版本或恢复语义时，PR 明确选择同版本兼容、严格拒绝旧版或迁移，给出样本与因果/事务证据并更新架构和 ADR。固定样本不是全部记录类型的 schema catalog，也不代替现有图片、compaction、subagent、错误恢复和 I/O rollback 测试。CI 不重写样本，nano v2 严格拒绝旧格式的承诺不变。
+
+## 模型可见工具目录
+
+`cmd/nano-harness/testdata/tool-catalog.json` 冻结真实 composition 的全部工具定义。`TestComposition_ToolCatalogGolden` 经 `cmd` 跑完一轮，从磁盘 transcript 的第一个 `request/header` 取出 tools，逐项比较名称、描述和紧凑化后的参数 JSON（保留键序），并确认 loopback provider 收到的 wire 定义与 header 相同。fixture 是人工审查的期望值，CI 只比较；有意变化时手工修改 fixture 并在同一变更中提升 composition 版本。
+
+`cmd/nano-harness/testdata/upstream-base-tools.json` 记录上游 Base 组合中 `read`、`write`、`edit`、`glob`、`grep`、`bash` 的定义，标注上游提交、来源文件和组合推导，测试不读取 submodule。`TestComposition_MatchesUpstreamBaseTools` 要求同名工具逐字节一致。更新参考指针时按 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md) 重新推导这份数据。
 
 ## 性能观测与预算
 

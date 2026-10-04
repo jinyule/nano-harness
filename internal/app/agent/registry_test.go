@@ -195,7 +195,7 @@ func TestRegistry_CreatesRootDelegatedAndRestoredAgents(t *testing.T) {
 	}
 
 	child, err := registry.Create(context.Background(), CreateRequest{
-		SessionID: "child", ParentID: "root", Label: "research", Mode: "one-shot", Persona: "focus", Tools: []string{"read_file"}, Depth: 1, Create: true,
+		SessionID: "child", ParentID: "root", Label: "research", Mode: "one-shot", Persona: "focus", Tools: []string{"read"}, Depth: 1, Create: true,
 	})
 	if err != nil {
 		t.Fatal(err)

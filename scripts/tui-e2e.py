@@ -60,22 +60,23 @@ class Fixture(http.server.BaseHTTPRequestHandler):
                 text = "CHILD_FOLLOW_OK"
                 call = None
             elif "CHILD_READ" in task:
-                call = None if outputs else ("read_file", {"path": "proof.txt"})
+                call = None if outputs else ("read", {"file_path": "proof.txt"})
                 text = "CHILD_READ_OK"
             else:
                 child = re.search(r"session=([^ ]+)", " ".join(outputs))
                 child_id = child.group(1) if child else "missing-child"
                 sequence = [
-                    ("list_files", {"path": "."}),
-                    ("search_files", {"pattern": "PTY_PROOF", "path": "."}),
-                    ("read_file", {"path": "proof.txt"}),
-                    ("spawn_subagent", {"label": "reader", "task": "CHILD_READ", "mode": "continuable", "tools": ["read_file"]}),
+                    ("glob", {"pattern": "*.txt"}),
+                    ("grep", {"pattern": "PTY_PROOF"}),
+                    ("read", {"file_path": "proof.txt"}),
+                    ("spawn_subagent", {"label": "reader", "task": "CHILD_READ", "mode": "continuable", "tools": ["read"]}),
                     ("subagent_followup", {"session_id": child_id, "task": "CHILD_FOLLOW"}),
                     ("subagent_report", {"session_id": child_id}),
                     ("list_subagents", {}),
                     ("subagent_interrupt", {"session_id": child_id}),
-                    ("apply_patch", {"patch": "--- /dev/null\n+++ b/patched.txt\n@@ -0,0 +1 @@\n+PATCH_PROOF\n"}),
-                    ("run_shell", {"command": "printf SHELL_PROOF > shell.txt"}),
+                    ("write", {"file_path": "written.txt", "content": "WRITE_PROOF\n"}),
+                    ("edit", {"file_path": "written.txt", "old_string": "WRITE_PROOF", "new_string": "EDIT_PROOF"}),
+                    ("bash", {"description": "Write the shell proof file", "command": "printf SHELL_PROOF > shell.txt"}),
                 ]
                 call = sequence[len(outputs)] if len(outputs) < len(sequence) else None
                 text = "TOOLS_VERIFIED " + "中文long-line-" * 12 + " WRAP_END"
@@ -192,10 +193,9 @@ def verify(binary):
                 terminal.expect("/help")
                 terminal.resize(60, 20)
                 terminal.send("\x1b[200~verify tools\x1b[201~\r")
-                terminal.expect("Approval required:")
-                terminal.send("y\r")
-                terminal.expect("Approval required:")
-                terminal.send("y\r")
+                for _ in range(3):
+                    terminal.expect("Approval required:")
+                    terminal.send("y\r")
                 terminal.expect("WRAP_END")
                 terminal.expect("turn> completed")
                 terminal.resize(100, 32)
@@ -216,20 +216,23 @@ def verify(binary):
             assert len(logs) == 1, "expected an independent child session"
             root_records = [entry["record"] for entry in root[1:]]
             calls = [entry["call"]["name"] for entry in root_records if entry["type"] == "tool/call"]
-            assert calls == ["list_files", "search_files", "read_file", "spawn_subagent", "subagent_followup",
-                             "subagent_report", "list_subagents", "subagent_interrupt", "apply_patch", "run_shell"], calls
+            assert calls == ["glob", "grep", "read", "spawn_subagent", "subagent_followup", "subagent_report",
+                             "list_subagents", "subagent_interrupt", "write", "edit", "bash"], calls
             results = [entry["result"] for entry in root_records if entry["type"] == "tool/result"]
-            assert len(results) == 10 and all(not entry.get("is_error", False) for entry in results), results
+            assert len(results) == 11 and all(not entry.get("is_error", False) for entry in results), results
+            assert results[0]["output"] == "proof.txt", results[0]
+            assert results[1]["output"] == "Found 1 match\n\nproof.txt\nLine 1: PTY_PROOF", results[1]
+            assert "1: PTY_PROOF" in results[2]["output"], results[2]
             decisions = [entry["approval"]["outcome"] for entry in root_records if entry["type"] == "approval/decided"]
-            assert decisions == ["allowed-once", "allowed-once"], decisions
+            assert decisions == ["allowed-once", "allowed-once", "allowed-once"], decisions
             assert (workspace / "proof.txt").read_text() == "PTY_PROOF\n"
-            assert (workspace / "patched.txt").read_text() == "PATCH_PROOF\n"
+            assert (workspace / "written.txt").read_text() == "EDIT_PROOF\n"
             assert (workspace / "shell.txt").read_text() == "SHELL_PROOF"
             child = next(iter(logs.values()))
             assert child[0]["header"]["parent_session_id"] == "session-pty"
             child_records = [entry["record"] for entry in child[1:]]
             assert any(entry["type"] == "approval/policy" and entry["approval"]["policy"] == "never" for entry in child_records)
-            assert [entry["call"]["name"] for entry in child_records if entry["type"] == "tool/call"] == ["read_file"]
+            assert [entry["call"]["name"] for entry in child_records if entry["type"] == "tool/call"] == ["read"]
             assert [entry["outcome"] for entry in child_records if entry["type"] == "turn/end"] == ["completed", "completed"]
             assert "CHILD_READ_OK" in json.dumps(child) and "CHILD_FOLLOW_OK" in json.dumps(child)
             assert not list((directory / "sessions").glob("*.lock"))
@@ -241,7 +244,7 @@ def verify(binary):
                 assert terminal.process.wait(timeout=10) == 0
             finally:
                 terminal.close()
-            print("PASS: real binary/PTY, 10 root tools, child read/followup, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
+            print("PASS: real binary/PTY, 11 root tools, child read/followup, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
 
 
 def main():
@@ -252,7 +255,7 @@ def main():
     if args.serve:
         with fixture(args.serve.resolve()) as (workspace, settings):
             print(f"fixture ready: root={workspace} settings={settings}; NANO_FIXTURE_KEY=fixture-key", flush=True)
-            print("TUI input: verify tools (approve twice), /agents, wait, /interrupt, /quit", flush=True)
+            print("TUI input: verify tools (approve three times), /agents, wait, /interrupt, /quit", flush=True)
             try:
                 threading.Event().wait()
             except KeyboardInterrupt:

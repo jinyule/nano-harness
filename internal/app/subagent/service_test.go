@@ -104,15 +104,15 @@ func (testApprover) Decide(context.Context, appTool.ApprovalRequest) (session.Ap
 	return session.ApprovalAllowedOnce, nil
 }
 
-type largeResultTool struct{ output string }
+type noArguments struct{}
 
-func (largeResultTool) Definition() session.ToolDefinition {
-	return session.ToolDefinition{Name: "test_tool", Description: "return test output", Parameters: json.RawMessage(`{"type":"object"}`)}
-}
-func (largeResultTool) Concurrency() appTool.Concurrency      { return appTool.ConcurrencyExclusive }
-func (largeResultTool) ApprovalReason(json.RawMessage) string { return "" }
-func (tool largeResultTool) Execute(context.Context, appTool.Execution) (string, error) {
-	return tool.output, nil
+func largeResultTool(output string) *appTool.Tool {
+	return appTool.Define(appTool.Spec[noArguments]{
+		Name: "test_tool", Description: "return test output",
+		Execute: func(context.Context, appTool.Invocation, noArguments) (appTool.Result, error) {
+			return appTool.Text(output), nil
+		},
+	})
 }
 
 type serviceHarness struct {
@@ -265,7 +265,7 @@ func TestService_SpawnsWaitsReportsListsAndFollowsUp(t *testing.T) {
 	if _, err := service.Followup(context.Background(), "root", "missing", "task"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing followup error = %v", err)
 	}
-	one, err := service.Spawn(context.Background(), SpawnRequest{ParentSessionID: "root", Label: "one", Mode: "one-shot", Task: "do one", Persona: "focused", Tools: []string{"read_file"}})
+	one, err := service.Spawn(context.Background(), SpawnRequest{ParentSessionID: "root", Label: "one", Mode: "one-shot", Task: "do one", Persona: "focused", Tools: []string{"read"}})
 	if err != nil || one.ParentID != "root" || one.Mode != "one-shot" || one.Depth != 1 {
 		t.Fatalf("one-shot spawn = %+v, %v", one, err)
 	}
@@ -505,7 +505,7 @@ func TestDelegatedMessage_IncludesToolFactsAndBoundsForkContext(t *testing.T) {
 		testAction{text: "finished"},
 	)
 	toolScope := &plugin.Scope{}
-	if err := harness.tools.Register(largeResultTool{output: strings.Repeat("r", session.MaxTextBytes/2+1024)}, toolScope); err != nil {
+	if err := harness.tools.Register(largeResultTool(strings.Repeat("r", session.MaxTextBytes/2+1024)), toolScope); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = toolScope.Close(context.Background()) })

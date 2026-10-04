@@ -40,7 +40,7 @@ make tui-fixture
 make debug-fixture
 ```
 
-该命令在 `127.0.0.1:2345` 等待 GoLand 连接，TUI 输入输出保留在第二个终端。端口被占用时应先停止自己的旧调试实例。fixture 使用 `.cache/tui-fixture/` 中的测试数据和固定假 key；服务启动时重写本地端口配置。重复工具链会再次尝试创建 `patched.txt`，已存在时 patch 会报告失败；需要全新文件场景时执行 `make tui-e2e`。
+该命令在 `127.0.0.1:2345` 等待 GoLand 连接，TUI 输入输出保留在第二个终端。端口被占用时应先停止自己的旧调试实例。fixture 使用 `.cache/tui-fixture/` 中的测试数据和固定假 key；服务启动时重写本地端口配置。重复工具链会先用 `write` 覆盖 `written.txt` 再编辑，因此可以多次执行；需要全新 workspace 时执行 `make tui-e2e`。
 
 在 GoLand 打开仓库，选择共享配置 **Nano TUI Remote**，在下列位置设置行断点后点击 Debug：
 
@@ -48,9 +48,9 @@ make debug-fixture
 |---|---|
 | `internal/adapter/tui/model.go` 的 `model.submit` | TUI 提交的文本与输入模式 |
 | `internal/app/subagent/service.go` 的 `Service.Spawn` | parent session、label、mode、task、tool allowlist |
-| `internal/adapter/tool/workspace/files.go` 的 `readTool.Execute` | session ID、arguments、delegated/elevated 状态 |
+| `internal/adapter/tool/file/read.go` 的 `Provider.read` | session ID、类型化参数、delegated/approved 状态 |
 
-在第二个终端输入 `verify tools`，遇到断点后在 GoLand 查看变量，使用 Step Over 单步或 Resume 继续。子代理的 `execution.Delegated` 为 `true`，`Elevated` 为 `false`。终端中的两次写入审批各输入 `y`；任务完成后可用 `/agents` 查看 child。输入 `wait` 后用 `/interrupt` 验证取消，再用 `/quit` 正常退出。最后在第一个终端按 Ctrl+C 停止 fixture；GoLand 的 Stop 会终止调试目标，正常验证优先使用 TUI 的 `/quit`。
+在第二个终端输入 `verify tools`，遇到断点后在 GoLand 查看变量，使用 Step Over 单步或 Resume 继续。子代理的 `invocation.Delegated` 为 `true`，`Approved` 为 `false`。终端中 `write`、`edit`、`bash` 的三次审批各输入 `y`；任务完成后可用 `/agents` 查看 child。输入 `wait` 后用 `/interrupt` 验证取消，再用 `/quit` 正常退出。最后在第一个终端按 Ctrl+C 停止 fixture；GoLand 的 Stop 会终止调试目标，正常验证优先使用 TUI 的 `/quit`。
 
 Remote 流程用于把 TUI 输入输出留在 Codex 终端，同时在 GoLand 查看断点；它也为 IDE 内置 Delve 无法支持本机 Go 工具链时提供固定 Delve 1.27.1 的替代路径。版本选择见 [Delve 发布记录](https://github.com/go-delve/delve/releases)，终端模拟选项见 [GoLand Run 配置](https://www.jetbrains.com/help/go/running-applications.html)。
 

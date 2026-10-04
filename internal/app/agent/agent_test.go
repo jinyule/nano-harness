@@ -119,7 +119,7 @@ func TestAgent_SteersAtToolBoundaryAndWaitsForIdle(t *testing.T) {
 	)
 	candidate := &engineTool{name: "inspect", output: "ok"}
 	toolScope := &plugin.Scope{}
-	if err := harness.tools.Register(candidate, toolScope); err != nil {
+	if err := harness.tools.Register(candidate.define(), toolScope); err != nil {
 		t.Fatal(err)
 	}
 	repository, policy := newMemoryRepository(), newMemoryPolicy()

@@ -20,7 +20,11 @@ import (
 	modelprovider "github.com/jinyule/nano-harness/internal/adapter/model/provider"
 	sessionjsonl "github.com/jinyule/nano-harness/internal/adapter/session/jsonl"
 	settingsfile "github.com/jinyule/nano-harness/internal/adapter/settings/file"
+	filetool "github.com/jinyule/nano-harness/internal/adapter/tool/file"
+	searchtool "github.com/jinyule/nano-harness/internal/adapter/tool/search"
+	shelltool "github.com/jinyule/nano-harness/internal/adapter/tool/shell"
 	subagenttool "github.com/jinyule/nano-harness/internal/adapter/tool/subagent"
+	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
 	"github.com/jinyule/nano-harness/internal/adapter/tui"
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/compaction"
@@ -35,29 +39,45 @@ import (
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
-func TestComposition_EndToEndToolChain(t *testing.T) {
+// toolChain is the observable outcome of one real composition turn.
+type toolChain struct {
+	transcript []byte
+	// wireTools is the tool list the loopback provider received.
+	wireTools []session.ToolDefinition
+}
+
+// runToolChain drives the real cmd composition through one turn in which
+// the model reads proof.txt with the read tool and then answers.
+func runToolChain(t *testing.T) toolChain {
+	t.Helper()
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	var calls atomic.Int32
+	wire := make(chan []session.ToolDefinition, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/responses" || request.Header.Get("Authorization") != "Bearer test-key" {
 			http.Error(writer, "bad request", http.StatusBadRequest)
 			return
 		}
-		var body map[string]any
+		var body struct {
+			Reasoning struct {
+				Effort string `json:"effort"`
+			} `json:"reasoning"`
+			Tools []session.ToolDefinition `json:"tools"`
+		}
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			http.Error(writer, "bad json", http.StatusBadRequest)
 			return
 		}
-		reasoning, _ := body["reasoning"].(map[string]any)
-		if reasoning["effort"] != "max" {
+		if body.Reasoning.Effort != "max" {
 			http.Error(writer, "missing max reasoning effort", http.StatusBadRequest)
 			return
 		}
+		wire <- body.Tools
 		writer.Header().Set("Content-Type", "text/event-stream")
 		if calls.Add(1) == 1 {
-			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read_file\"}}\n\n")
-			_, _ = io.WriteString(writer, "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{\\\"path\\\":\\\"proof.txt\\\"}\"}\n\n")
-			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"proof.txt\\\"}\"}}\n\n")
+			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read\"}}\n\n")
+			_, _ = io.WriteString(writer, "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{\\\"file_path\\\":\\\"proof.txt\\\"}\"}\n\n")
+			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read\",\"arguments\":\"{\\\"file_path\\\":\\\"proof.txt\\\"}\"}}\n\n")
 		} else {
 			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"verified proof\"}\n\n")
 		}
@@ -111,9 +131,112 @@ func TestComposition_EndToEndToolChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fact := range []string{`"tool/call"`, `"tool/result"`, `"effort":"max"`, "verified proof", "evidence"} {
-		if !bytes.Contains(encoded, []byte(fact)) {
+	return toolChain{transcript: encoded, wireTools: <-wire}
+}
+
+func TestComposition_EndToEndToolChain(t *testing.T) {
+	chain := runToolChain(t)
+	for _, fact := range []string{`"tool/call"`, `"tool/result"`, `"effort":"max"`, "verified proof", `1: evidence`, `(End of file - total 1 lines)`, "Use the read tool"} {
+		if !bytes.Contains(chain.transcript, []byte(fact)) {
 			t.Fatalf("transcript lacks %s", fact)
+		}
+	}
+}
+
+// catalogEntry is one model-visible tool definition in a reviewed fixture.
+type catalogEntry struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+// headerTools returns the tool schemas frozen into the first request header.
+func headerTools(t *testing.T, transcript []byte) []session.ToolDefinition {
+	t.Helper()
+	for line := range bytes.SplitSeq(transcript, []byte("\n")) {
+		var entry struct {
+			Record struct {
+				Header *session.RequestHeader `json:"header"`
+			} `json:"record"`
+		}
+		if json.Unmarshal(line, &entry) == nil && entry.Record.Header != nil {
+			return entry.Record.Header.Tools
+		}
+	}
+	t.Fatal("transcript has no request header")
+	return nil
+}
+
+func compactJSON(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var buffer bytes.Buffer
+	if err := json.Compact(&buffer, raw); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.String()
+}
+
+func loadCatalog(t *testing.T, path string) []catalogEntry {
+	t.Helper()
+	data, err := os.ReadFile(path) //nolint:gosec // fixed repository testdata path
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Tools []catalogEntry `json:"tools"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document.Tools
+}
+
+// TestComposition_ToolCatalogGolden freezes every model-visible tool schema
+// the real composition persists and sends. CI only compares; a reviewed
+// change edits testdata/tool-catalog.json by hand.
+func TestComposition_ToolCatalogGolden(t *testing.T) {
+	chain := runToolChain(t)
+	frozen := headerTools(t, chain.transcript)
+	golden := loadCatalog(t, filepath.Join("testdata", "tool-catalog.json"))
+	if len(frozen) != len(golden) || len(chain.wireTools) != len(frozen) {
+		t.Fatalf("catalog sizes: header=%d wire=%d golden=%d", len(frozen), len(chain.wireTools), len(golden))
+	}
+	for index, want := range golden {
+		got := frozen[index]
+		if got.Name != want.Name || got.Description != want.Description || compactJSON(t, got.Parameters) != compactJSON(t, want.Parameters) {
+			encoded, _ := json.MarshalIndent(got, "", "  ")
+			t.Errorf("tool %d differs from golden %q:\n%s", index, want.Name, encoded)
+		}
+		wire := chain.wireTools[index]
+		if wire.Name != got.Name || wire.Description != got.Description || compactJSON(t, wire.Parameters) != compactJSON(t, got.Parameters) {
+			t.Errorf("provider received a different %q definition than the request header", got.Name)
+		}
+	}
+}
+
+// TestComposition_MatchesUpstreamBaseTools proves each tool that shares a
+// name with the upstream Base composition is byte-identical in name,
+// description, and parameter schema, including property order.
+func TestComposition_MatchesUpstreamBaseTools(t *testing.T) {
+	frozen := map[string]session.ToolDefinition{}
+	for _, definition := range headerTools(t, runToolChain(t).transcript) {
+		frozen[definition.Name] = definition
+	}
+	upstream := loadCatalog(t, filepath.Join("testdata", "upstream-base-tools.json"))
+	if len(upstream) != 6 {
+		t.Fatalf("upstream fixture lists %d tools", len(upstream))
+	}
+	for _, want := range upstream {
+		got, ok := frozen[want.Name]
+		if !ok {
+			t.Errorf("composition lacks upstream tool %q", want.Name)
+			continue
+		}
+		if got.Description != want.Description {
+			t.Errorf("%s description\n got: %q\nwant: %q", want.Name, got.Description, want.Description)
+		}
+		if compactJSON(t, got.Parameters) != compactJSON(t, want.Parameters) {
+			t.Errorf("%s parameters\n got: %s\nwant: %s", want.Name, got.Parameters, compactJSON(t, want.Parameters))
 		}
 	}
 }
@@ -215,14 +338,16 @@ func restoreMainHooks(t *testing.T) {
 	modelProvider, toolRuntime, retryService := newModelProvider, newToolRuntime, newRetryService
 	compactor, sessions, engine := newCompactionService, newSessionManager, newAgentEngine
 	registry, root, subagents := newAgentRegistry, newRootBootstrap, newSubagentService
-	workspaceTools, subagentTools, terminal := newWorkspaceTools, newSubagentTools, newTerminal
+	workspaceRoot, fileTools, searchTools, shellTools := newWorkspace, newFileTools, newSearchTools, newShellTools
+	subagentTools, terminal := newSubagentTools, newTerminal
 	t.Cleanup(func() {
 		currentWorkingDirectory, userConfigDirectory, readRandom, inspectPath, absolutePath, evaluateLinks = cwd, config, random, inspect, absolute, links
 		newSettingsProvider, newCredentialStore, newModelRuntime = settingsProvider, credentials, modelRuntime
 		newModelProvider, newToolRuntime, newRetryService = modelProvider, toolRuntime, retryService
 		newCompactionService, newSessionManager, newAgentEngine = compactor, sessions, engine
 		newAgentRegistry, newRootBootstrap, newSubagentService = registry, root, subagents
-		newWorkspaceTools, newSubagentTools, newTerminal = workspaceTools, subagentTools, terminal
+		newWorkspace, newFileTools, newSearchTools, newShellTools = workspaceRoot, fileTools, searchTools, shellTools
+		newSubagentTools, newTerminal = subagentTools, terminal
 	})
 }
 
@@ -384,6 +509,20 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 			newRootBootstrap = func(*agent.Registry, agent.CreateRequest) (*agent.Bootstrap, error) { return nil, failure }
 		}},
 		{name: "subagents", set: func() { newSubagentService = func(*agent.Registry) (*subagent.Service, error) { return nil, failure } }},
+		{name: "workspace", set: func() {
+			newWorkspace = func(string) (workspace.Root, error) { return workspace.Root{}, failure }
+		}},
+		{name: "file tools", set: func() {
+			newFileTools = func(*appTool.Runtime, workspace.Root) (*filetool.Provider, error) { return nil, failure }
+		}},
+		{name: "search tools", set: func() {
+			newSearchTools = func(*appTool.Runtime, workspace.Root) (*searchtool.Provider, error) { return nil, failure }
+		}},
+		{name: "shell tools", set: func() {
+			newShellTools = func(*appTool.Runtime, shelltool.Runner, workspace.Root) (*shelltool.Provider, error) {
+				return nil, failure
+			}
+		}},
 		{name: "subagent tools", set: func() {
 			newSubagentTools = func(*appTool.Runtime, subagenttool.Service) (*subagenttool.Provider, error) { return nil, failure }
 		}},

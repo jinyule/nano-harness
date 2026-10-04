@@ -14,7 +14,7 @@
 - OAuth access token 临近过期时，LLM runtime 在 credential store 的串行 read-decide-write 事务内调用 provider refresh，避免并发刷新覆盖新 grant。refresh 失败不回退到过期 token。
 - `codex-import` 只有用户显式执行时才读取 `<codex-home>/auth.json`。它要求普通 owner-only 小文件和 `chatgpt` 登录，strict decode access/refresh token 与 account ID，然后写入 nano-harness 自己的 store；绝不修改 Codex cache，也不会在每次请求重新读取它。
 - HTTP Authorization、cookie、token、account ID、完整 prompt、完整环境和敏感文件正文不得进入诊断日志。provider 错误只保留稳定类别、HTTP status 和安全 retry hint，不拼接远端 response body。
-- 子进程使用固定 allowlist 环境，不继承父进程 secret。当前只提供固定 `PATH`、locale、`TMPDIR`、`NANO_WORKSPACE` 及调用方显式且名称合法的非 NUL 值。
+- 子进程使用固定 allowlist 环境，不继承父进程 secret。当前只提供固定 `PATH`、locale、`TMPDIR`、`NANO_WORKSPACE` 及调用方显式且名称合法的非 NUL 值；`bash` 传入的值见 [Approval、shell 与进程](#approvalshell-与进程)。
 
 产品代码不查询 ChatGPT/Codex 用量，也不包含 subscription quota gate。真实 provider 验证中的用量预检是操作者在产品外执行的保护步骤，不改变模型、工具或 session 语义。
 
@@ -37,24 +37,32 @@
 
 ## Workspace 文件边界
 
-所有模型文件路径相对启动时解析并固定的 workspace root：
+所有模型路径由 `internal/adapter/tool/workspace.Root` 统一约束。root 在启动时解析 symlink 并固定：
 
-- lexical path 拒绝绝对路径和 `..` escape；读取存在路径后解析 symlink 并再次确认位于 root 内。
-- `read_file` 仅接受最多 256 KiB 的 UTF-8 普通文件，并限制行范围。
-- `list_files` 不跟随 symlink，限制 depth 与 20,000 entries。
-- `search_files` 跳过 symlink、非普通文件和超过 2 MiB 的文件，限制 regexp、扫描 entry 和 200 hits。
-- `apply_patch` 只接受最大 2 MiB 的 unified diff，拒绝绝对/逃逸路径、binary、rename、copy、symlink mode 和跨 symlink parent；先执行 `git apply --check`，再在同一 sandbox 运行 apply。
+- 相对路径按 workspace 解析。绝对路径只有在词法上位于已解析 root 内时才接受，必须使用提示词显示的 root 拼写。`..` 逃逸和 root 外的绝对路径一律拒绝；上游描述中的 “resolved by the filesystem backend” 在本仓即指这一约束。
+- `read`、`glob`/`grep` 的显式 `path` 和 `bash` 的 `workdir` 可以经过 symlink，但解析后必须仍在 root 内。
+- `write` 和 `edit` 拒绝 root 与目标之间任何已存在的 symlink 组件，包括目标本身；审批前检查一次，执行点再检查一次。
+- `glob`/`grep` 遍历不跟随 symlink，并跳过 FIFO、socket 和设备等非普通文件。`grep` 只读取 workspace 内的 ignore 文件；判断是否位于 Git 仓库时，只探测 root 上级目录是否存在 `.git`。
+
+| 工具 | 边界 |
+|---|---|
+| `read` | 只读 UTF-8 普通文件；前 8 KiB 含 NUL 视为二进制，任何非法 UTF-8 都拒绝。流式读取不设文件大小上限，单次最多 2000 行、每行 2000 字符、所选行合计 50 KiB |
+| `write` | 内容受参数上限 128 KiB 约束。写入同目录随机命名的 `0600` 临时文件，`fsync` 后 rename；新文件为 `0600`，新目录为 `0700`，替换文件保留原权限位 |
+| `edit` | 文件最多 10 MiB；拒绝 NUL 与非法 UTF-8；以同样方式原子写回 |
+| `glob` | 匹配路径文本合计最多 20,000,000 字节；每次调用 30 s |
+| `grep` | Go RE2 正则；单行超过 8 MiB 时停止扫描该文件；每次调用 30 s；内联最多 250 个匹配，每行预览 2000 字节 |
 
 这些检查约束 harness 自身，不宣称抵御同一用户下主动制造 TOCTOU 的恶意进程。需要更强对手模型时应使用独立容器/VM 或基于 descriptor 的安全打开，并新增 ADR。
 
 ## Approval、shell 与进程
 
-- `apply_patch` 和 `run_shell` 在真正执行操作的位置请求一次性 approval。问题与结果均写入 session；UI 不存在、取消、unknown outcome 或持久化失败都不会授权。
+- `write`、`edit` 和 `bash` 在真正执行操作的位置请求一次性 approval，原因由类型化参数生成（目标路径、命令描述或升级理由）。问题与结果均写入 session；UI 不存在、取消、unknown outcome 或持久化失败都不会授权。参数无效或路径不安全的调用不会进入审批。
 - root policy 默认 `ask`，可切换为 `never`。delegated agent 的 policy 持久化为 `never`，approval service 不向 broker 提问，因此 subagent 无法写文件或运行 shell。
-- workspace shell 仍需要一次性 approval，然后通过 macOS `sandbox-exec` 或 Linux `bwrap` 执行。sandbox 允许写 workspace 和 owned temp；Linux 使用只读 root bind、workspace 可写 bind、独立 namespace、`--die-with-parent`。sandbox executable 缺失时拒绝执行。
-- host shell 是明确的高风险模式，需要单独的一次性 approval；delegated request 在 tool 执行点无条件拒绝 host mode。
-- shell command 最多 128 KiB，timeout 为 100 ms–10 min（默认 2 min），combined output 最多 256 KiB。timeout/cancel 终止进程组并等待退出。
-- 进程使用 argv 启动；只有明确的 `run_shell` 才由 `/bin/sh -lc` 解释文本。启动错误、exit status、timeout 和 output truncation 保持独立可诊断语义。
+- `bash` 默认通过 macOS `sandbox-exec` 或 Linux `bwrap` 执行。sandbox 只允许写 workspace 和 provider 拥有的临时目录；Linux 使用只读 root bind、workspace 可写 bind、独立 namespace、`--die-with-parent`。sandbox executable 缺失时拒绝执行。失败命令的 stderr 命中当前后端的拒绝签名时，结果追加 `[sandbox: file access denied under workspace-write mode]` 和一次性升级提示。
+- 模型参数沿用上游 `sandbox_permissions` 与 `justification`，按上游规则校验：`write`/`edit` 要求两者成对出现；`bash` 重复 `workspace-write` 时可省略 justification，未给模式时空白 justification 被忽略。`workspace-write` 等同默认模式。`danger-full-access` 只对 `bash` 有效：需要非空 justification，approval 原因为 `escalate sandbox to danger-full-access: <justification>`，批准后仅这一条命令在 host 上运行；delegated request 在执行点无条件拒绝。`write` 和 `edit` 在审批前拒绝 `danger-full-access`，文件工具从不离开 workspace。
+- `bash` 运行 `bash -c`，只支持前台执行。`timeoutMs` 默认 60 s、上限 10 min，超过上限按上限执行，非正值拒绝；stdout 与 stderr 各保留最后 64,000 字节。超时或取消时终止整个进程组并等待退出；命令结束后，同一进程组中残留的后台进程也会被终止。非零退出码、信号和超时以 `[exit code: N]`、`[killed by signal: S]`、`[timed out after Nms]` 标记返回，不是 tool error；取消返回 `tool call aborted`。
+- 子进程环境在固定 allowlist 之外只增加 `NO_COLOR=1`、`TERM=dumb`、`PAGER=cat`、`GIT_PAGER=cat`、`DSH_SHELL=1` 和当前 `DSH_SESSION_ID`。
+- 进程使用 argv 启动；只有 `bash` 工具才由 `bash -c` 解释文本。启动错误、sandbox 不可用、exit status、signal、timeout 和 output truncation 保持独立可诊断语义。
 
 工具 schema omission、prompt 声明或 UI 隐藏都不构成授权。新写工具必须把 approval/sandbox 决策放在不可绕过的 execution path，并测试允许/拒绝矩阵。
 

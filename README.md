@@ -56,7 +56,7 @@ make build
 /quit
 ```
 
-`/attach` 接受 JPEG 或 PNG；图片会缩放、规范化并随下一条消息持久化。`/permission ask` 是默认策略：`apply_patch` 和 `run_shell` 在实际执行前请求一次性授权。普通 shell 在 workspace sandbox 中运行；host 模式仍需一次性授权，而且 subagent 不能请求 host 执行。
+`/attach` 接受 JPEG 或 PNG；图片会缩放、规范化并随下一条消息持久化。`/permission ask` 是默认策略：`write`、`edit` 和 `bash` 在实际执行前请求一次性授权。`bash` 默认在 workspace sandbox 中运行；模型可以用 `sandbox_permissions: danger-full-access` 和理由请求让单条命令离开 sandbox，这仍需一次性授权，subagent 不能请求。
 
 TUI 使用 Bubble Tea v2、Lip Gloss v2 和 Bubbles v2，并作为可回收插件接入共享应用。后续 GUI 可独立复用同一组装，见[前端插件决策](docs/decisions/0005-selectable-frontend-plugins.md)。
 
@@ -76,7 +76,7 @@ GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点�
 
 - provider-neutral 的 Models → Provider → wire API 路由；provider 拥有 catalog、认证、刷新和流协议。
 - OpenAI Responses/ChatGPT Codex Responses、Anthropic Messages、OpenRouter Chat Completions 的流式适配。
-- `read_file`、`list_files`、`search_files`、`apply_patch`、`run_shell`，以及 spawn/followup/interrupt/report/list subagent 工具。
+- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash`，以及 spawn/followup/interrupt/report/list subagent 工具。
 - 失败关闭的 approval、相邻只读工具并发、写入与 shell 的独占 barrier。
 - 指数退避 retry、主动/被动 context compaction、followup、steer、interrupt 和恢复。
 - v2 严格 JSONL 事件日志；流式 text/reasoning/tool、审批、重试、压缩和 subagent 身份均可审计。
