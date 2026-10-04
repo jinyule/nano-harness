@@ -95,7 +95,7 @@ func TestWrite_RejectsUnsafeTargetsWithoutTouchingFiles(t *testing.T) {
 		t.Fatalf("invalid arguments reached approval: %q", h.approver.reasons)
 	}
 	h.approver.outcome = session.ApprovalRejected
-	if result := h.call(t, "write", map[string]any{"file_path": "denied.txt", "content": "x"}); !result.IsError || result.Output != "tool error: approval rejected" {
+	if result := h.call(t, "write", map[string]any{"file_path": "denied.txt", "content": "x"}); !result.IsError || result.Output != "Error: approval rejected" {
 		t.Fatalf("rejected = %#v", result)
 	}
 	if _, err := os.Stat(h.path("denied.txt")); !errors.Is(err, os.ErrNotExist) {

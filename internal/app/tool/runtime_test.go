@@ -199,7 +199,8 @@ func TestRuntime_SchedulesConcurrentGroupsAndExclusiveBarriers(t *testing.T) {
 		},
 	})
 	exclusive := simpleTool("exclusive", false, "write", func(_ context.Context, invocation Invocation) (Result, error) {
-		if !invocation.Approved || invocation.SessionID != "s" || invocation.Cwd != "/work" || !invocation.Delegated {
+		if !invocation.Approved || invocation.SessionID != "s" || invocation.Cwd != "/work" || !invocation.Delegated ||
+			invocation.Turn != 1 || invocation.Step != 2 || invocation.CallID != "3" || invocation.Journal != (fakeJournal{}) {
 			t.Errorf("invocation = %+v", invocation)
 		}
 		record("exclusive")
@@ -220,7 +221,7 @@ func TestRuntime_SchedulesConcurrentGroupsAndExclusiveBarriers(t *testing.T) {
 	}
 	done := make(chan []session.ToolResult)
 	go func() {
-		done <- runtime.ExecuteBatch(context.Background(), BatchRequest{SessionID: "s", Cwd: "/work", Turn: 1, Step: 1, Calls: calls, Delegated: true, Journal: fakeJournal{}})
+		done <- runtime.ExecuteBatch(context.Background(), BatchRequest{SessionID: "s", Cwd: "/work", Turn: 1, Step: 2, Calls: calls, Delegated: true, Journal: fakeJournal{}})
 	}()
 	// Both members of the first group must be running before either finishes.
 	first, second := <-entered, <-entered
@@ -237,10 +238,10 @@ func TestRuntime_SchedulesConcurrentGroupsAndExclusiveBarriers(t *testing.T) {
 			t.Fatalf("result %d = %#v", index, results[index])
 		}
 	}
-	if !results[4].IsError || results[4].Output != "tool error: unknown tool missing" {
+	if !results[4].IsError || results[4].Output != `Error: unknown tool "missing"` {
 		t.Fatalf("unknown = %#v", results[4])
 	}
-	if !results[5].IsError || results[5].Output != `tool error: invalid arguments: "value" must be a string` {
+	if !results[5].IsError || results[5].Output != `Error: invalid arguments: "value" must be a string` {
 		t.Fatalf("invalid = %#v", results[5])
 	}
 	mu.Lock()
@@ -267,6 +268,9 @@ func TestRuntime_ContainsApprovalFailuresPanicsAndLargeOutput(t *testing.T) {
 			return Text(strings.Repeat("é", session.MaxTextBytes)), nil
 		}),
 		simpleTool("invalid_utf8", false, "", func(context.Context, Invocation) (Result, error) { return Text("a\xffb"), nil }),
+		simpleTool("large_error", false, "", func(context.Context, Invocation) (Result, error) {
+			return Result{}, errors.New(strings.Repeat("界", session.MaxTextBytes))
+		}),
 		Define(Spec[noArguments]{Name: "check_panic", Description: "panics while classifying", Concurrent: func(noArguments) bool { panic("classifier") }, Execute: never2}),
 		Define(Spec[noArguments]{Name: "checked", Description: "semantic error", Check: func(noArguments) error { return errors.New("semantic") }, Execute: never2}),
 	}
@@ -281,7 +285,7 @@ func TestRuntime_ContainsApprovalFailuresPanicsAndLargeOutput(t *testing.T) {
 		calls[index] = session.ToolCall{ID: name, Name: name, Arguments: json.RawMessage(`{}`)}
 	}
 	results := runtime.ExecuteBatch(context.Background(), BatchRequest{SessionID: "s", Turn: 1, Step: 1, Calls: calls, Journal: fakeJournal{}})
-	want := []string{"tool error: approval rejected", "tool error: failed", "tool error: implementation panicked"}
+	want := []string{"Error: approval rejected", "Error: failed", "Error: implementation panicked"}
 	for index, output := range want {
 		if !results[index].IsError || results[index].Output != output {
 			t.Errorf("result %d = %#v", index, results[index])
@@ -297,15 +301,19 @@ func TestRuntime_ContainsApprovalFailuresPanicsAndLargeOutput(t *testing.T) {
 	if results[4].Output != "a�b" {
 		t.Fatalf("invalid UTF-8 = %q", results[4].Output)
 	}
-	if !results[5].IsError || results[5].Output != "tool error: implementation panicked" {
-		t.Fatalf("classifier panic = %#v", results[5])
+	largeError := results[5]
+	if !largeError.IsError || !strings.HasPrefix(largeError.Output, "Error: 界") || len(largeError.Output) > session.MaxTextBytes || !utf8.ValidString(largeError.Output) {
+		t.Fatalf("large error = %d bytes, valid=%v", len(largeError.Output), utf8.ValidString(largeError.Output))
 	}
-	if !results[6].IsError || results[6].Output != "tool error: semantic" {
-		t.Fatalf("check = %#v", results[6])
+	if !results[6].IsError || results[6].Output != "Error: implementation panicked" {
+		t.Fatalf("classifier panic = %#v", results[6])
+	}
+	if !results[7].IsError || results[7].Output != "Error: semantic" {
+		t.Fatalf("check = %#v", results[7])
 	}
 	approver.outcome, approver.err = session.ApprovalAllowedOnce, errors.New("approval")
 	result := runtime.ExecuteBatch(context.Background(), BatchRequest{SessionID: "s", Turn: 1, Step: 1, Calls: calls[:1], Journal: fakeJournal{}})[0]
-	if !result.IsError || result.Output != "tool error: approval could not be recorded" {
+	if !result.IsError || result.Output != "Error: approval could not be recorded" {
 		t.Fatalf("approval error = %#v", result)
 	}
 }
@@ -358,7 +366,7 @@ func TestRuntime_ChecksEachCallAfterEarlierCallsInTheBatch(t *testing.T) {
 		{ID: "2", Name: "create", Arguments: json.RawMessage(`{}`)},
 		{ID: "3", Name: "use", Arguments: json.RawMessage(`{}`)},
 	}})
-	if !results[0].IsError || results[0].Output != "tool error: state is missing" || results[1].Output != "created" || results[2].IsError || results[2].Output != "used" {
+	if !results[0].IsError || results[0].Output != "Error: state is missing" || results[1].Output != "created" || results[2].IsError || results[2].Output != "used" {
 		t.Fatalf("results = %#v", results)
 	}
 }

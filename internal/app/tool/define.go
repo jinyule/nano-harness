@@ -23,10 +23,18 @@ const (
 	OrderGrep = 1500
 )
 
-// Invocation is the runtime context of one validated call.
+// Invocation is the runtime context of one validated call. Journal is the
+// calling agent's durable log; Turn, Step, and CallID locate the committed
+// call so a tool may record facts that cite it before its result exists.
+// Journal is nil for callers without a session, and tools that need it must
+// fail rather than skip the record.
 type Invocation struct {
 	SessionID string
 	Cwd       string
+	Turn      uint64
+	Step      uint64
+	CallID    string
+	Journal   Journal
 	Delegated bool
 	// Approved reports that the call's approval reason received a one-shot
 	// grant. Tools that require approval must still check it at their

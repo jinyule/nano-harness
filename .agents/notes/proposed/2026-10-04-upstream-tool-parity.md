@@ -36,7 +36,7 @@
 
 | WP | 内容 | 依赖 | ADR | 状态 |
 |---|---|---|---|---|
-| WP1 | 工具定义抽象、schema golden、`read`/`write`/`edit`/`glob`/`grep`/`bash` 改名与定义对齐 | — | 0007 | 待开始 |
+| WP1 | 工具定义抽象、schema golden、`read`/`write`/`edit`/`glob`/`grep`/`bash` 改名与定义对齐 | — | 0007 | 已合入 `a2b565d` |
 | WP2 | 文件工具完整能力：大文件窗口、glob 排序与上限、grep 分组、spill、先读后写保护 | WP1 | 0008 | 待开始 |
 | WP3 | 后台任务运行时与 `job_*`，`bash` 后台运行与超时转后台 | WP1 | 0009 | 待开始 |
 | WP4 | `todo_write`、`todo/write` 事件与 TUI 清单 | WP1 | 0010 | 待开始 |

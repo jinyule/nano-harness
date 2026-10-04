@@ -36,6 +36,8 @@ subagent 工具名称不变；它们的 schema 改用共享子集表达，去掉
 
 参数在调度前校验，违规按上游遍历顺序全部列出。缺少必填、类型不符、null、非有限数和 `-0` 的处理与上游相同。本仓额外拒绝重复键和未声明的根成员：上游根对象开放，会静默忽略拼错的参数名，与本仓“边界严格校验、禁止静默接受错误输入”的规则冲突。模型可见 schema 不因此改变。语义检查（例如非空路径、正整数行号、升级参数成对）和路径约束在该调用轮到时、审批之前完成，因此能观察同一批次前序调用的效果。
 
+失败结果的文本采用上游 `Error: <message>` 格式（未知工具为 `Error: unknown tool "<name>"`），session resume 补写的中断结果也使用同一格式，模型在本仓和上游看到相同的失败形态。审批失败沿用本仓的 `Error: approval <outcome>`，因为上游 Base 只在 sandbox 升级时询问，没有对应文案。执行上下文 `Invocation` 提供当前 call ID、turn、step 和调用方 durable journal，供需要写会话事实的工具使用；没有 journal 时这类工具失败关闭。
+
 并发按 `Concurrent(A)` 决定，对应上游 `isConcurrencySafe(args)`；省略、无效参数和未知工具都是 exclusive。`read`、`glob`、`grep` 声明并发安全；上游 `glob`/`grep` 省略该声明，本仓认为只读遍历可以并行。approval 原因由 `Approval(A)` 基于类型化参数生成。执行结果是 `tool.Result`，目前只含文本，多模态结果扩展该类型。
 
 ### Prompt guidance

@@ -219,7 +219,7 @@ func (runtime *Runtime) prepare(candidate session.ToolCall) (result prepared) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			result.call = nil
-			result.result.Output, result.result.IsError = "tool error: implementation panicked", true
+			result.result.Output, result.result.IsError = "Error: implementation panicked", true
 		}
 	}()
 	runtime.mu.RLock()
@@ -229,12 +229,12 @@ func (runtime *Runtime) prepare(candidate session.ToolCall) (result prepared) {
 	}
 	runtime.mu.RUnlock()
 	if registered == nil {
-		result.result.Output, result.result.IsError = finishText("tool error: unknown tool "+candidate.Name), true
+		result.result.Output, result.result.IsError = finishText(fmt.Sprintf("Error: unknown tool %q", candidate.Name)), true
 		return result
 	}
 	validated, err := registered.prepare(candidate.Arguments)
 	if err != nil {
-		result.result.Output, result.result.IsError = finishText("tool error: "+err.Error()), true
+		result.result.Output, result.result.IsError = errorText(err), true
 		return result
 	}
 	result.call = validated
@@ -248,11 +248,11 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 	result.CallID = candidate.ID
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			result.Output, result.IsError = "tool error: implementation panicked", true
+			result.Output, result.IsError = "Error: implementation panicked", true
 		}
 	}()
 	if err := validated.call.check(); err != nil {
-		result.Output, result.IsError = finishText("tool error: "+err.Error()), true
+		result.Output, result.IsError = errorText(err), true
 		return result
 	}
 	approved := false
@@ -262,23 +262,29 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 			Call: candidate, Reason: clamp(reason, maxReasonBytes, "…"), Delegated: request.Delegated, Journal: request.Journal,
 		})
 		if err != nil {
-			result.Output, result.IsError = "tool error: approval could not be recorded", true
+			result.Output, result.IsError = "Error: approval could not be recorded", true
 			return result
 		}
 		if outcome != session.ApprovalAllowedOnce {
-			result.Output, result.IsError = "tool error: approval "+string(outcome), true
+			result.Output, result.IsError = "Error: approval "+string(outcome), true
 			return result
 		}
 		approved = true
 	}
-	output, err := validated.call.execute(ctx, Invocation{SessionID: request.SessionID, Cwd: request.Cwd, Delegated: request.Delegated, Approved: approved})
+	output, err := validated.call.execute(ctx, Invocation{
+		SessionID: request.SessionID, Cwd: request.Cwd, Turn: request.Turn, Step: request.Step, CallID: candidate.ID,
+		Journal: request.Journal, Delegated: request.Delegated, Approved: approved,
+	})
 	if err != nil {
-		result.Output, result.IsError = finishText("tool error: "+err.Error()), true
+		result.Output, result.IsError = errorText(err), true
 		return result
 	}
 	result.Output = finishText(output.Text)
 	return result
 }
+
+// errorText renders a failed call with the upstream "Error: " envelope.
+func errorText(err error) string { return finishText("Error: " + err.Error()) }
 
 // finishText makes tool output durable: invalid UTF-8 is replaced and the
 // complete text, including the truncation marker, fits one tool result.

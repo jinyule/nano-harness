@@ -257,7 +257,7 @@ func TestBash_MapsArgumentsToSandboxedRequests(t *testing.T) {
 	}
 	h.approver.outcome = session.ApprovalRejected
 	before := len(runner.requests)
-	if result := h.call(t, map[string]any{"description": "List", "command": "ls"}); !result.IsError || result.Output != "tool error: approval rejected" || len(runner.requests) != before {
+	if result := h.call(t, map[string]any{"description": "List", "command": "ls"}); !result.IsError || result.Output != "Error: approval rejected" || len(runner.requests) != before {
 		t.Fatalf("rejected = %#v", result)
 	}
 }
