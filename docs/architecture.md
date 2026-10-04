@@ -138,7 +138,7 @@ Submit user message
 - schema 采用上游 `defineTool` 子集中本仓用到的部分：可带 enum 的 string、number、boolean、必须声明 items 的 array，以及显式声明开放性的嵌套 object。序列化键序与上游编译器一致；根对象只输出 `type`、`properties` 和 `required`。
 - 批次开始前，runtime 按 schema 校验并解码每个调用，再用 `Concurrent(A)` 分类。缺少必填、类型不符、null、非有限数、`-0`、重复键和未声明成员（包括根对象）都成为 `invalid arguments: ...` 结果，并按上游遍历顺序列出全部违规。上游根对象对未知成员开放，本仓更严格，模型可见 schema 不变。
 - `Concurrent(A)` 为 true 的相邻调用并行；其余调用、未知工具和无效参数形成独占 barrier。结果顺序始终与原始 call 顺序一致。
-- 每个调用轮到执行时依次运行 `Check(A)`、`Approval(A)` 和 `Execute`。`Check` 因此能观察同一批次前序调用的效果，并在提问前拒绝语义错误或不安全路径；`Approval` 返回非空原因时请求一次性 approval，原因截断到 1 KiB。执行函数仍须在执行点确认 `Invocation.Approved`。`Invocation` 同时携带调用方 session 的 durable `Journal` 与 `Turn`、`Step`、`CallID`，需要记录引用该调用的会话事实的工具由此写入调用方自己的日志。
+- 每个调用轮到执行时依次运行 `Check(A)`、`Approval(A)` 和 `Execute`。`Check` 因此能观察同一批次前序调用的效果，并在提问前拒绝语义错误或不安全路径；`Approval` 返回非空原因时请求一次性 approval，原因截断到 1 KiB。执行函数仍须在执行点确认 `Invocation.Approved`。
 - `tool.Result` 目前只有文本。runtime 统一替换非法 UTF-8，并把完整结果截断到 256 KiB；多模态结果扩展这个类型，不改变只返回文本的工具。
 - `Runtime.Catalog(allow)` 一次冻结按名称排序的 schema 和可见工具贡献的 guidance。guidance 按上游 section order 排序，engine 把它追加在 system prompt 的工具列表之后，与 schema 一起写入 `request/header`。
 - `Invocation` 携带 session、cwd、delegation、approval 结果，以及当前 tool/call 的 call ID、turn、step 和调用方 durable journal。需要记录会话事实的工具在 tool/result 之前向该 journal 追加；没有 journal 的调用方必须失败关闭。
