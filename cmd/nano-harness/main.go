@@ -17,25 +17,9 @@ import (
 	"syscall"
 	"time"
 
-	credentialfile "github.com/jinyule/nano-harness/internal/adapter/credential/file"
-	mediaimage "github.com/jinyule/nano-harness/internal/adapter/media/image"
-	modelprovider "github.com/jinyule/nano-harness/internal/adapter/model/provider"
-	sessionjsonl "github.com/jinyule/nano-harness/internal/adapter/session/jsonl"
-	settingsfile "github.com/jinyule/nano-harness/internal/adapter/settings/file"
-	subagenttool "github.com/jinyule/nano-harness/internal/adapter/tool/subagent"
-	workspacetool "github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
 	"github.com/jinyule/nano-harness/internal/adapter/tui"
 	"github.com/jinyule/nano-harness/internal/app/agent"
-	"github.com/jinyule/nano-harness/internal/app/approval"
-	"github.com/jinyule/nano-harness/internal/app/compaction"
-	"github.com/jinyule/nano-harness/internal/app/llm"
-	"github.com/jinyule/nano-harness/internal/app/prompt"
-	"github.com/jinyule/nano-harness/internal/app/retry"
-	"github.com/jinyule/nano-harness/internal/app/settings"
-	"github.com/jinyule/nano-harness/internal/app/subagent"
-	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
-	platformprocess "github.com/jinyule/nano-harness/internal/platform/process"
 	"github.com/jinyule/nano-harness/internal/version"
 )
 
@@ -50,24 +34,10 @@ var (
 	inspectPath             = os.Lstat
 	absolutePath            = filepath.Abs
 	evaluateLinks           = filepath.EvalSymlinks
-	newSettingsProvider     = settingsfile.New
-	newCredentialStore      = credentialfile.New
-	newModelRuntime         = llm.New
-	newModelProvider        = modelprovider.New
-	newToolRuntime          = appTool.New
-	newRetryService         = retry.New
-	newCompactionService    = compaction.New
-	newSessionManager       = sessionjsonl.New
-	newAgentEngine          = agent.NewEngine
-	newAgentRegistry        = agent.NewRegistry
-	newRootBootstrap        = agent.NewBootstrap
-	newSubagentService      = subagent.New
-	newWorkspaceTools       = workspacetool.New
-	newSubagentTools        = subagenttool.New
 	newTerminal             = tui.New
 )
 
-type tuiConfig struct {
+type applicationConfig struct {
 	workspaceRoot  string
 	sessionRoot    string
 	settingsPath   string
@@ -172,24 +142,24 @@ func runTUI(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 	return 0
 }
 
-func parseTUIConfig(args []string, stderr io.Writer) (tuiConfig, error) {
+func parseTUIConfig(args []string, stderr io.Writer) (applicationConfig, error) {
 	workspaceRoot, err := currentWorkingDirectory()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "resolve workspace root: %v\n", err)
-		return tuiConfig{}, err
+		return applicationConfig{}, err
 	}
 	configRoot, err := userConfigDirectory()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "resolve configuration root: %v\n", err)
-		return tuiConfig{}, err
+		return applicationConfig{}, err
 	}
 	applicationRoot := filepath.Join(configRoot, "nano-harness")
 	sessionID, err := newSessionID()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "generate session ID: %v\n", err)
-		return tuiConfig{}, err
+		return applicationConfig{}, err
 	}
-	config := tuiConfig{
+	config := applicationConfig{
 		workspaceRoot: workspaceRoot, sessionRoot: filepath.Join(applicationRoot, "sessions"),
 		settingsPath:   filepath.Join(applicationRoot, "settings.yaml"),
 		credentialPath: filepath.Join(applicationRoot, "credentials.yaml"),
@@ -205,19 +175,19 @@ func parseTUIConfig(args []string, stderr io.Writer) (tuiConfig, error) {
 	flags.StringVar(&config.codexHome, "codex-home", "", "Codex home used only by explicit codex-import login")
 	flags.IntVar(&config.maxSteps, "max-steps", config.maxSteps, "maximum model steps per turn (1-256)")
 	if err := flags.Parse(args); err != nil {
-		return tuiConfig{}, err
+		return applicationConfig{}, err
 	}
 	if flags.NArg() != 0 {
 		err := errors.New("tui accepts flags but no positional arguments")
 		_, _ = fmt.Fprintln(stderr, err)
-		return tuiConfig{}, err
+		return applicationConfig{}, err
 	}
 	return normalizeConfig(config)
 }
 
-func normalizeConfig(config tuiConfig) (tuiConfig, error) {
+func normalizeConfig(config applicationConfig) (applicationConfig, error) {
 	if config.maxSteps < 1 || config.maxSteps > 256 || config.sessionID == "" {
-		return tuiConfig{}, errors.New("session ID and max-steps 1-256 are required")
+		return applicationConfig{}, errors.New("session ID and max-steps 1-256 are required")
 	}
 	for name, value := range map[string]*string{
 		"workspace": &config.workspaceRoot, "session root": &config.sessionRoot,
@@ -225,13 +195,13 @@ func normalizeConfig(config tuiConfig) (tuiConfig, error) {
 	} {
 		absolute, err := absolutePath(*value)
 		if err != nil {
-			return tuiConfig{}, fmt.Errorf("resolve %s path: %w", name, err)
+			return applicationConfig{}, fmt.Errorf("resolve %s path: %w", name, err)
 		}
 		*value = absolute
 	}
 	resolved, err := evaluateLinks(config.workspaceRoot)
 	if err != nil {
-		return tuiConfig{}, fmt.Errorf("resolve workspace links: %w", err)
+		return applicationConfig{}, fmt.Errorf("resolve workspace links: %w", err)
 	}
 	config.workspaceRoot = resolved
 	path := filepath.Join(config.sessionRoot, config.sessionID+".jsonl")
@@ -240,9 +210,9 @@ func normalizeConfig(config tuiConfig) (tuiConfig, error) {
 	case errors.Is(err, os.ErrNotExist):
 		config.create = true
 	case err != nil:
-		return tuiConfig{}, fmt.Errorf("inspect session: %w", err)
+		return applicationConfig{}, fmt.Errorf("inspect session: %w", err)
 	case !info.Mode().IsRegular():
-		return tuiConfig{}, errors.New("session path is not a regular file")
+		return applicationConfig{}, errors.New("session path is not a regular file")
 	default:
 		config.create = false
 	}
@@ -257,100 +227,31 @@ func newSessionID() (string, error) {
 	return "session-" + hex.EncodeToString(random[:]), nil
 }
 
-func composeTUI(config tuiConfig, deps dependencies) (*composition, error) {
-	configuration := settings.New()
-	settingsProvider, err := newSettingsProvider(configuration, settingsfile.Config{Path: config.settingsPath})
-	if err != nil {
-		return nil, err
-	}
-	credentials, err := newCredentialStore(config.credentialPath)
-	if err != nil {
-		return nil, err
-	}
-	modelRuntime, err := newModelRuntime(credentials)
-	if err != nil {
-		return nil, err
-	}
-	providers := make([]*modelprovider.Provider, 0, 3)
-	for _, id := range []string{"openai", "anthropic", "openrouter"} {
-		provider, providerErr := newModelProvider(modelRuntime, configuration, modelprovider.Config{
-			ID: id, HTTPClient: deps.httpClient, CodexHome: config.codexHome,
-			ChatGPTBaseURL: deps.chatGPTBaseURL, OpenAIAuthURL: deps.openAIAuthURL,
-			AnthropicAuthURL: deps.anthropicAuthURL, OpenRouterAuthURL: deps.openRouterAuthURL,
-		})
-		if providerErr != nil {
-			return nil, providerErr
-		}
-		providers = append(providers, provider)
-	}
-	approvalService := approval.New()
-	toolRuntime, err := newToolRuntime(approvalService)
-	if err != nil {
-		return nil, err
-	}
-	images := mediaimage.New()
-	assembler := prompt.New()
-	retryService, err := newRetryService(configuration)
-	if err != nil {
-		return nil, err
-	}
-	compactionService, err := newCompactionService(modelRuntime, configuration)
-	if err != nil {
-		return nil, err
-	}
-	sessions, err := newSessionManager(sessionjsonl.Config{Root: config.sessionRoot, CompositionID: compositionID(config)})
-	if err != nil {
-		return nil, err
-	}
-	engine, err := newAgentEngine(modelRuntime, toolRuntime, retryService, compactionService, assembler, configuration, agent.EngineConfig{MaxSteps: config.maxSteps})
-	if err != nil {
-		return nil, err
-	}
-	registry, err := newAgentRegistry(sessions, engine, approvalService, config.workspaceRoot)
-	if err != nil {
-		return nil, err
-	}
-	root, err := newRootBootstrap(registry, agent.CreateRequest{SessionID: config.sessionID, Create: config.create})
-	if err != nil {
-		return nil, err
-	}
-	subagents, err := newSubagentService(registry)
-	if err != nil {
-		return nil, err
-	}
-	workspaceTools, err := newWorkspaceTools(toolRuntime, platformprocess.New(), config.workspaceRoot)
-	if err != nil {
-		return nil, err
-	}
-	subagentTools, err := newSubagentTools(toolRuntime, subagents)
+func composeTUI(config applicationConfig, deps dependencies) (*composition, error) {
+	app, err := composeApplication(config, deps)
 	if err != nil {
 		return nil, err
 	}
 	terminal, err := newTerminal(tui.Config{
-		Root: root, Registry: registry, LLM: modelRuntime, Settings: configuration,
-		Approval: approvalService, Images: images, Subagents: subagents,
+		Root: app.root, Registry: app.registry, LLM: app.models, Settings: app.settings,
+		Approval: app.approval, Images: app.images, Subagents: app.subagents,
 	})
 	if err != nil {
 		return nil, err
 	}
-	plugins := []plugin.Plugin{
-		configuration, settingsProvider, credentials, modelRuntime,
-		providers[0], providers[1], providers[2], approvalService, toolRuntime,
-		images, assembler, retryService, compactionService, sessions, engine,
-		registry, root, subagents, workspaceTools, subagentTools, terminal,
-	}
+	app.plugins = append(app.plugins, terminal)
 	newRuntime := deps.newRuntime
 	if newRuntime == nil {
 		newRuntime = plugin.New
 	}
-	runtime, err := newRuntime(plugins...)
+	runtime, err := newRuntime(app.plugins...)
 	if err != nil {
 		return nil, err
 	}
-	return &composition{runtime: runtime, terminal: terminal, root: root}, nil
+	return &composition{runtime: runtime, terminal: terminal, root: app.root}, nil
 }
 
-func compositionID(config tuiConfig) string {
+func compositionID(config applicationConfig) string {
 	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00workspace-tools-v1\x00subagent-tools-v1\x00session-v2"
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])

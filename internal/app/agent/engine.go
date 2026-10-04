@@ -157,7 +157,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			return result
 		}
 		model := findModel(document, document.Route.Provider, document.Route.Model)
-		header := &session.RequestHeader{Provider: document.Route.Provider, Model: document.Route.Model, System: system, Tools: definitions, ContextWindow: model.ContextWindow}
+		header := &session.RequestHeader{Provider: document.Route.Provider, Model: document.Route.Model, Effort: model.Effort, System: system, Tools: definitions, ContextWindow: model.ContextWindow}
 		if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordRequestHeader, Turn: turn, Step: step, Header: header}); err != nil {
 			result.Err, result.Outcome = err, session.OutcomeError
 			return result

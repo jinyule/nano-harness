@@ -153,6 +153,9 @@ func (record Record) requireHeader() error {
 	if err := validateIdentifier("model", header.Model, 256); err != nil {
 		return err
 	}
+	if header.Effort != "" && !ValidEffort(header.Effort) {
+		return invalid("request/header effort is invalid")
+	}
 	if len(header.System) > MaxTextBytes || header.ContextWindow < 0 || len(header.Tools) > 64 {
 		return invalid("request/header fields exceed limits")
 	}
@@ -167,6 +170,11 @@ func (record Record) requireHeader() error {
 		}
 	}
 	return nil
+}
+
+// ValidEffort reports whether effort is one of the provider-neutral levels.
+func ValidEffort(effort Effort) bool {
+	return effort == EffortNone || effort == EffortMinimal || effort == EffortLow || effort == EffortMedium || effort == EffortHigh || effort == EffortXHigh || effort == EffortMax
 }
 
 func validateToolDefinition(tool ToolDefinition) error {
@@ -307,11 +315,11 @@ func (record Record) requireCompaction() error {
 	}
 	switch record.Type {
 	case RecordCompactionStart:
-		if len(data.ShadowedSeqs) != 0 || len(data.Summary) != 0 || data.Provider != "" || data.Model != "" || data.Error != "" || data.ShadowedTokenCount != 0 {
+		if len(data.ShadowedSeqs) != 0 || len(data.Summary) != 0 || data.Provider != "" || data.Model != "" || data.Effort != "" || data.Error != "" || data.ShadowedTokenCount != 0 {
 			return invalid("compaction/start has unrelated fields")
 		}
 	case RecordCompactionSummary:
-		if len(data.ShadowedSeqs) == 0 || len(data.Summary) == 0 || len(data.Summary) > MaxContentBlocks || data.ShadowedTokenCount <= 0 || validateIdentifier("provider", data.Provider, 64) != nil || validateIdentifier("model", data.Model, 256) != nil || data.Error != "" {
+		if len(data.ShadowedSeqs) == 0 || len(data.Summary) == 0 || len(data.Summary) > MaxContentBlocks || data.ShadowedTokenCount <= 0 || validateIdentifier("provider", data.Provider, 64) != nil || validateIdentifier("model", data.Model, 256) != nil || data.Effort != "" && !ValidEffort(data.Effort) || data.Error != "" {
 			return invalid("compaction/summary fields are invalid")
 		}
 		if !slices.IsSorted(data.ShadowedSeqs) || slices.ContainsFunc(data.ShadowedSeqs, func(seq uint64) bool { return seq == 0 }) {
@@ -323,7 +331,7 @@ func (record Record) requireCompaction() error {
 			}
 		}
 	case RecordCompactionEnd:
-		if len(data.ShadowedSeqs) != 0 || len(data.Summary) != 0 || data.Provider != "" || data.Model != "" || data.ShadowedTokenCount != 0 || len(data.Error) > 2048 {
+		if len(data.ShadowedSeqs) != 0 || len(data.Summary) != 0 || data.Provider != "" || data.Model != "" || data.Effort != "" || data.ShadowedTokenCount != 0 || len(data.Error) > 2048 {
 			return invalid("compaction/end fields are invalid")
 		}
 	case RecordTurnStart, RecordUserMessage, RecordStepStart, RecordRequestHeader,

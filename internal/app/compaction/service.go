@@ -125,6 +125,7 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 	if err != nil {
 		return false, service.finishError(ctx, request, id, err)
 	}
+	modelInfo := call.Info()
 	var completion llm.Completion
 	for attempt := 0; ; attempt++ {
 		completion, err = call.Stream(ctx, llm.Request{
@@ -153,7 +154,7 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 	data := &session.CompactionData{
 		ID: id, ShadowedSeqs: sequences, ShadowedTokenCount: count,
 		Summary:  []session.ContentBlock{{Type: session.ContentText, Text: text}},
-		Provider: document.Route.Provider, Model: document.Route.Model,
+		Provider: modelInfo.Provider, Model: modelInfo.ID, Effort: modelInfo.Effort,
 	}
 	if _, err := request.Journal.Append(ctx, session.Record{Type: session.RecordCompactionSummary, Turn: request.Turn, Compaction: data}); err != nil {
 		return false, service.finishError(ctx, request, id, err)

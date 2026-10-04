@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/approval"
@@ -54,9 +54,14 @@ func TestNewModelInitAndWaitUI(t *testing.T) {
 	if message := current.Init()(); message.(operationMessage).text != "event" {
 		t.Fatalf("Init message = %#v", message)
 	}
+	cancelled := make(chan struct{})
+	close(cancelled)
+	if waitUI(make(chan any), nil, cancelled)() == nil {
+		t.Fatal("UI cancellation did not stop event wait")
+	}
 	events, stop := make(chan any), make(chan struct{})
 	close(stop)
-	if message := waitUI(events, stop)(); message == nil {
+	if message := waitUI(events, stop, nil)(); message == nil {
 		t.Fatal("stop did not return tea.Quit message")
 	}
 }
@@ -64,7 +69,7 @@ func TestNewModelInitAndWaitUI(t *testing.T) {
 func TestModelUpdate_HandlesEveryEnvelopeAndTerminalInput(t *testing.T) {
 	_, current := modelFixture(t)
 	current, command := update(t, current, tea.WindowSizeMsg{Width: 100, Height: 40})
-	if command != nil || current.width != 100 || current.viewport.Width != 96 || current.viewport.Height != 33 || current.input.Width != 92 {
+	if command != nil || current.width != 100 || current.viewport.Width() != 96 || current.viewport.Height() != 36 || current.input.Width() != 92 {
 		t.Fatalf("window model = %+v", current)
 	}
 	event := session.Event{Record: session.Record{Type: session.RecordTurnEnd, Turn: 1, Outcome: session.OutcomeCompleted}}
@@ -107,18 +112,18 @@ func TestModelUpdate_HandlesEveryEnvelopeAndTerminalInput(t *testing.T) {
 	if !strings.Contains(strings.Join(current.lines, "\n"), "turn> error") {
 		t.Fatalf("turn lines = %#v", current.lines)
 	}
-	current, command = update(t, current, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	current, command = update(t, current, tea.KeyPressMsg{Code: 'x', Text: "x"})
 	if !strings.Contains(current.input.Value(), "x") {
 		t.Fatalf("key update input=%q cmd=%v", current.input.Value(), command)
 	}
 	current.restoreInput()
-	current, command = update(t, current, tea.KeyMsg{Type: tea.KeyCtrlC})
+	current, command = update(t, current, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if !current.quitting || command == nil {
 		t.Fatal("ctrl+c update did not quit")
 	}
 	current.quitting = false
 	current.input.SetValue("/help")
-	current, command = update(t, current, tea.KeyMsg{Type: tea.KeyEnter})
+	current, command = update(t, current, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if command != nil || !strings.Contains(current.lines[len(current.lines)-1], "commands>") {
 		t.Fatal("enter update did not submit")
 	}
@@ -245,7 +250,7 @@ func TestModelCommand_ExecutesAllAsyncUseCases(t *testing.T) {
 	fixture, current := modelFixture(t)
 	fixture.images.image = session.Image{Name: "attached.png"}
 	fixture.models.accounts = []llm.AccountInfo{{Provider: "openai", Kind: llm.CredentialOAuth, Source: "stored"}}
-	fixture.models.models = []llm.ModelInfo{{Provider: "openai", ID: "model", ContextWindow: 1000, Vision: true, Tools: true}}
+	fixture.models.models = []llm.ModelInfo{{Provider: "openai", ID: "model", Effort: session.EffortMax, ContextWindow: 1000, Vision: true, Tools: true}}
 	fixture.subagents.infos = []appSubagent.Info{{SessionID: "child", Label: "worker", Mode: "one-shot", Busy: true, Last: agent.TurnResult{Outcome: session.OutcomeCompleted}}}
 	fixture.controller.compact = true
 
@@ -255,7 +260,7 @@ func TestModelCommand_ExecutesAllAsyncUseCases(t *testing.T) {
 	}{
 		{value: "/attach /tmp/image.png"},
 		{value: "/accounts", want: "openai kind=oauth source=stored"},
-		{value: "/models openai", want: "openai/model context=1000 vision=true tools=true"},
+		{value: "/models openai", want: "openai/model context=1000 vision=true tools=true effort=max"},
 		{value: "/login openai oauth", want: "login stored for openai"},
 		{value: "/logout openai", want: "logged out openai"},
 		{value: "/model openai gpt-5.6-luna", want: "route=openai/gpt-5.6-luna"},
@@ -339,7 +344,7 @@ func TestApplyEvent_ProjectsAllDurablePresentationFacts(t *testing.T) {
 	image := &session.Image{Name: "image"}
 	events := []session.Event{
 		{Record: session.Record{Type: session.RecordUserMessage, Message: &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: "hello"}, {Type: session.ContentImage, Image: image}}}}},
-		{Record: session.Record{Type: session.RecordRequestHeader, Header: &session.RequestHeader{Provider: "openai", Model: "model"}}},
+		{Record: session.Record{Type: session.RecordRequestHeader, Header: &session.RequestHeader{Provider: "openai", Model: "model", Effort: session.EffortMax}}},
 		{Record: session.Record{Type: session.RecordAssistantChunk, Chunk: &session.AssistantChunk{Kind: session.ChunkText, Text: "one"}}},
 		{Record: session.Record{Type: session.RecordAssistantChunk, Chunk: &session.AssistantChunk{Kind: session.ChunkText, Text: " two"}}},
 		{Record: session.Record{Type: session.RecordAssistantChunk, Chunk: &session.AssistantChunk{Kind: session.ChunkReasoning, Text: "think"}}},
@@ -358,7 +363,7 @@ func TestApplyEvent_ProjectsAllDurablePresentationFacts(t *testing.T) {
 		current.applyEvent(event, true)
 	}
 	joined := strings.Join(current.lines, "\n")
-	for _, expected := range []string{"you> hello [images=1]", "route> openai/model", "assistant> one two", "reasoning> think", "tool> read", "approval> write", "result> ok", "tool-error> bad", "retry> attempt=2", "compact> started", "compact> completed", "compact> failed", "turn> completed"} {
+	for _, expected := range []string{"you> hello [images=1]", "route> openai/model effort=max", "assistant> one two", "reasoning> think", "tool> read", "approval> write", "result> ok", "tool-error> bad", "retry> attempt=2", "compact> started", "compact> completed", "compact> failed", "turn> completed"} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("projection missing %q in %s", expected, joined)
 		}
@@ -394,27 +399,27 @@ func TestLineBufferViewAndInputRestoration(t *testing.T) {
 	if current.mode != modeNormal || current.input.Value() != "" || current.input.EchoMode != textinput.EchoNormal {
 		t.Fatalf("restored input = %+v", current.input)
 	}
-	if current.View() == "" {
+	if current.View().Content == "" {
 		t.Fatal("normal view is empty")
 	}
 	current.images = []session.Image{{Name: "ready"}}
-	if !strings.Contains(current.View(), "image(s) ready") {
+	if !strings.Contains(current.View().Content, "image(s) ready") {
 		t.Fatal("image prompt missing")
 	}
 	current.images = nil
 	approvalResult := make(chan session.ApprovalOutcome, 1)
 	current.mode, current.approval = modeApproval, &approvalEnvelope{question: approval.Question{Reason: "write", ToolName: "shell"}, result: approvalResult}
-	if !strings.Contains(current.View(), "Approval required") {
+	if !strings.Contains(current.View().Content, "Approval required") {
 		t.Fatal("approval prompt missing")
 	}
 	current.mode, current.auth = modeAuth, &authEnvelope{prompt: llm.AuthPrompt{Message: "sign in"}}
-	if !strings.Contains(current.View(), "Authentication") {
+	if !strings.Contains(current.View().Content, "Authentication") {
 		t.Fatal("auth prompt missing")
 	}
 	fixture.settings.snapErr = errors.New("ignored")
-	_ = current.View()
+	_ = current.View().Content
 	current.quitting = true
-	if current.View() != "" {
+	if current.View().Content != "" {
 		t.Fatal("quitting view is not empty")
 	}
 }

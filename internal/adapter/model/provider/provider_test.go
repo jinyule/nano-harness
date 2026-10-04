@@ -108,9 +108,19 @@ func providerRequest() llm.Request {
 func protocolServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			http.Error(writer, "invalid request", http.StatusBadRequest)
+			return
+		}
 		writer.Header().Set("Content-Type", "text/event-stream")
 		switch request.URL.Path {
 		case "/v1/responses", "/backend-api/codex/responses":
+			reasoning, _ := payload["reasoning"].(map[string]any)
+			if reasoning["effort"] != "max" {
+				http.Error(writer, "missing Responses effort", http.StatusBadRequest)
+				return
+			}
 			_, _ = io.WriteString(writer, "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"think\"}\n\n")
 			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n")
 			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"c\",\"name\":\"tool\"}}\n\n")
@@ -118,6 +128,11 @@ func protocolServer(t *testing.T) *httptest.Server {
 			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"c\",\"name\":\"tool\",\"arguments\":\"{}\"}}\n\n")
 			_, _ = io.WriteString(writer, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":2,\"output_tokens\":1,\"input_tokens_details\":{\"cached_tokens\":1}}}}\n\n")
 		case "/v1/messages":
+			outputConfig, _ := payload["output_config"].(map[string]any)
+			if outputConfig["effort"] != "max" {
+				http.Error(writer, "missing Messages effort", http.StatusBadRequest)
+				return
+			}
 			_, _ = io.WriteString(writer, "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":2,\"cache_read_input_tokens\":1}}}\n\n")
 			_, _ = io.WriteString(writer, "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"think\"}}\n\n")
 			_, _ = io.WriteString(writer, "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n")
@@ -126,6 +141,10 @@ func protocolServer(t *testing.T) *httptest.Server {
 			_, _ = io.WriteString(writer, "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":1}}\n\n")
 			_, _ = io.WriteString(writer, "data: {\"type\":\"message_stop\"}\n\n")
 		case "/chat/completions":
+			if payload["reasoning_effort"] != "max" {
+				http.Error(writer, "missing Chat Completions effort", http.StatusBadRequest)
+				return
+			}
 			_, _ = io.WriteString(writer, "data: {\"choices\":[{\"delta\":{\"reasoning\":\"think\",\"content\":\"hello\",\"tool_calls\":[{\"index\":0,\"id\":\"c\",\"function\":{\"name\":\"tool\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}\n\n")
 		default:
 			http.NotFound(writer, request)
@@ -150,7 +169,7 @@ func TestProviderProtocolsAndLifecycle(t *testing.T) {
 	document := appsettings.Defaults()
 	for id, configured := range document.Providers {
 		configured.BaseURL = server.URL
-		configured.Models = []appsettings.Model{{ID: "model", Name: "Model", ContextWindow: 8192, Vision: true, Tools: true}}
+		configured.Models = []appsettings.Model{{ID: "model", Name: "Model", Effort: session.EffortMax, ContextWindow: 8192, Vision: true, Tools: true}}
 		document.Providers[id] = configured
 	}
 	document.Route = appsettings.Route{Provider: "openai", Model: "model"}
@@ -173,7 +192,7 @@ func TestProviderProtocolsAndLifecycle(t *testing.T) {
 			t.Fatal("models alias")
 		}
 		prepared, err := candidate.Prepare("model")
-		if err != nil || prepared.Info().ID != "model" || prepared.CredentialEnv() == "" {
+		if err != nil || prepared.Info().ID != "model" || prepared.Info().Effort != session.EffortMax || prepared.CredentialEnv() == "" {
 			t.Fatal(err)
 		}
 		var chunks []session.AssistantChunk
@@ -218,15 +237,19 @@ func TestProviderProtocolsAndLifecycle(t *testing.T) {
 
 func TestRequestValidationAndParsers(t *testing.T) {
 	provider := &Provider{id: "openai"}
-	model := llm.ModelInfo{Provider: "openai", ID: "m", Vision: true, Tools: true}
+	model := llm.ModelInfo{Provider: "openai", ID: "m", Effort: session.EffortMax, Vision: true, Tools: true}
 	request := providerRequest()
 	responses, err := provider.responsesRequest(model, request)
-	if err != nil || len(responses.Input) != 4 || len(responses.Tools) != 1 {
+	if err != nil || len(responses.Input) != 4 || len(responses.Tools) != 1 || responses.Reasoning == nil || responses.Reasoning.Effort != session.EffortMax {
 		t.Fatal(err)
 	}
 	responsesJSON, _ := json.Marshal(responses)
 	if strings.Contains(string(responsesJSON), `"strict"`) {
 		t.Fatal("Responses enabled strict schemas for tools with optional properties")
+	}
+	withoutReasoning, err := provider.responsesRequest(llm.ModelInfo{Provider: "openai", ID: "m", Vision: true, Tools: true}, request)
+	if err != nil || withoutReasoning.Reasoning != nil {
+		t.Fatalf("optional reasoning = %#v, err=%v", withoutReasoning.Reasoning, err)
 	}
 	toolOnly, err := provider.responsesRequest(model, llm.Request{Surface: []session.SurfaceNode{
 		{Message: &session.Message{Role: session.RoleAssistant, Source: session.MessageSource{Kind: "provider"}}},
@@ -238,8 +261,12 @@ func TestRequestValidationAndParsers(t *testing.T) {
 	}
 	provider.id = "anthropic"
 	anthropic, err := provider.anthropicRequest(model, request)
-	if err != nil || len(anthropic.Messages) == 0 || anthropic.MaxTokens != 64 {
+	if err != nil || len(anthropic.Messages) == 0 || anthropic.MaxTokens != 64 || anthropic.OutputConfig == nil || anthropic.OutputConfig.Effort != session.EffortMax {
 		t.Fatal(err)
+	}
+	withoutEffort, err := provider.anthropicRequest(llm.ModelInfo{Provider: "anthropic", ID: "m", Vision: true, Tools: true}, request)
+	if err != nil || withoutEffort.OutputConfig != nil {
+		t.Fatalf("optional Anthropic output config = %#v, err=%v", withoutEffort.OutputConfig, err)
 	}
 	request.MaxTokens = 0
 	anthropic, _ = provider.anthropicRequest(model, request)
@@ -248,12 +275,17 @@ func TestRequestValidationAndParsers(t *testing.T) {
 	}
 	provider.id = "openrouter"
 	chat, err := provider.chatRequest(model, request)
-	if err != nil || len(chat.Messages) == 0 || !chat.StreamOptions.IncludeUsage {
+	if err != nil || len(chat.Messages) == 0 || !chat.StreamOptions.IncludeUsage || chat.ReasoningEffort != session.EffortMax {
 		t.Fatal(err)
 	}
 	chatJSON, _ := json.Marshal(chat)
 	if strings.Contains(string(chatJSON), `"strict"`) {
 		t.Fatal("OpenRouter enabled strict schemas for tools with optional properties")
+	}
+	withoutChatEffort, err := provider.chatRequest(llm.ModelInfo{Provider: "openrouter", ID: "m", Vision: true, Tools: true}, request)
+	withoutChatEffortJSON, _ := json.Marshal(withoutChatEffort)
+	if err != nil || strings.Contains(string(withoutChatEffortJSON), `"reasoning_effort"`) {
+		t.Fatalf("optional OpenAI-compatible effort payload=%s err=%v", withoutChatEffortJSON, err)
 	}
 	callOnly, err := provider.chatRequest(model, llm.Request{Surface: []session.SurfaceNode{{Call: &session.ToolCall{ID: "c", Name: "tool", Arguments: json.RawMessage(`{}`)}}}})
 	if err != nil || len(callOnly.Messages) != 1 || len(callOnly.Messages[0].ToolCalls) != 1 {

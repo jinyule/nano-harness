@@ -36,7 +36,7 @@ internal/platform
 
 ## 产品启动入口
 
-`cmd/nano-harness` 是支持的产品启动入口，拥有配置、构造注入、Plugin Runtime 和退出处理。示例、未来 headless 或协议模式沿同一入口扩展，不能另建一套跳过设置、approval 或 Scope 的应用树。包内单元测试可以直接构造组件；产品行为证据还必须经过真实 composition，发布证据运行编译后的 binary。`internal/tools` 是仓库工具，不属于产品启动入口。
+`cmd/nano-harness` 是支持的产品启动入口，拥有配置、构造注入、Plugin Runtime 和退出处理。`composeApplication` 构造共享服务与有序插件，前端组装追加选中的 UI 插件；当前 `composeTUI` 追加终端，后续 GUI 复用同一应用构造。示例、未来 headless 或协议模式沿同一入口扩展，不能另建一套跳过设置、approval 或 Scope 的应用树。包内单元测试可以直接构造组件；产品行为证据还必须经过真实 composition，发布证据运行编译后的 binary。`internal/tools` 是仓库工具，不属于产品启动入口。
 
 ## Plugin 与 Scope 生命周期
 
@@ -98,8 +98,8 @@ OpenAI Responses | Anthropic Messages | OpenRouter Chat Completions
 
 - provider 拥有自己的 model catalog、认证方法、OAuth 刷新和 wire/SSE 解析；agent 不判断 provider 类型。
 - `PrepareCall` 先冻结 provider/model/settings，再解析账户，并在 OAuth 即将过期时通过 credential store 的跨进程互斥事务刷新。一次 call 不会在流中途切换 route、endpoint 或 credential。
-- 请求由 system、replay surface、tool schema 和可选 max tokens 组成；输出归一为按序 text/reasoning/tool chunk、assistant message、tool calls、usage 和 stop reason。
-- OpenAI API key 使用 Responses；导入或自有 ChatGPT OAuth 使用 Codex Responses 边界。Anthropic 使用 Messages，OpenRouter 使用 Chat Completions。
+- 请求由 system、replay surface、tool schema 和可选 max tokens 组成；模型目录还可冻结 provider-neutral `effort`。输出归一为按序 text/reasoning/tool chunk、assistant message、tool calls、usage 和 stop reason。
+- OpenAI API key 使用 Responses；导入或自有 ChatGPT OAuth 使用 Codex Responses 边界，两者把 `effort` 写入 `reasoning.effort`。Anthropic Messages 写入 `output_config.effort`，OpenRouter 的 OpenAI compatible Chat Completions 写入 `reasoning_effort`。未配置时省略字段；配置的取值无法由目标协议表达时，settings 校验失败，不降级或丢弃。
 - provider 只暴露稳定错误类别：认证、限流、服务端、超时、transport、protocol、非法请求、context window 和空响应。远端正文不进入安全错误。
 - 产品没有订阅配额查询或本地 quota gate。step、大小、超时、并发和 context 限制仍由各自 owner 强制。
 
@@ -121,7 +121,7 @@ Submit user message
 ```
 
 - 一个 agent 串行处理 turn；一个 turn 最多 256 个 step，产品默认 32。一个 step 是一次模型调用与其产生的全部工具执行。
-- 每个 step 从权威 log 重新折叠 model surface。request header 在调用前固定 provider、model、system、tool schema 和 context window。
+- 每个 step 从权威 log 重新折叠 model surface。request header 在调用前固定 provider、model、effort、system、tool schema 和 context window；compaction summary 同样记录其冻结的 provider、model 和 effort。
 - streaming chunk 按 provider 顺序持久化。完成的 assistant message 和全部 tool call 先提交，工具才能执行；每个 call 最终得到唯一 tool result。
 - 没有输出提交的 retryable provider 失败按热策略指数退避；一旦流内容已提交就不自动重试，避免重复事实。
 - 主动 compaction 在估算上下文超过阈值时运行；context-window 错误触发强制 compaction 后重试新 step。raw log 不删除，surface 用持久化 summary 替换旧 prefix。
@@ -143,7 +143,7 @@ Submit user message
 
 读、列举和搜索可并行；patch 与 shell 是 exclusive。写入和 shell 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。
 
-subagent 工具为 `subagent_spawn`、`subagent_followup`、`subagent_interrupt`、`subagent_report` 和 `subagent_list`。它们调用进程内 `app/subagent`，不启动 Codex、Claude 或另一个 harness 进程。
+subagent 工具为 `spawn_subagent`、`subagent_followup`、`subagent_interrupt`、`subagent_report` 和 `list_subagents`。它们调用进程内 `app/subagent`，不启动 Codex、Claude 或另一个 harness 进程。
 
 ## Subagent
 
@@ -173,7 +173,7 @@ subagent/descriptor, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、workspace/subagent tool 语义和 session v2。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/tool/system。
+- composition ID 绑定 harness v2、解析后的 workspace、workspace/subagent tool 语义和 session v2。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。
@@ -186,15 +186,15 @@ subagent/descriptor, step/end, turn/end
 
 ## 设置与账户
 
-settings owner 将内建 defaults 与稀疏用户 YAML 合并。文件 provider 使用 strict YAML、owner-only 权限、原子替换和 writer lock；250 ms polling 只发布通过完整校验的新 revision，非法外部编辑保留 last-good snapshot。TUI 的 `/model` 使用 optimistic revision update，避免覆盖并发修改。
+settings owner 将内建 defaults 与稀疏用户 YAML 合并。模型目录的可选 `effort` 使用 `none|minimal|low|medium|high|xhigh|max` 的领域并集；OpenAI/OpenRouter 接受完整集合，Anthropic 接受 `low|medium|high|xhigh|max`。具体模型是否支持已选择级别仍由远端服务裁决并返回明确请求错误。默认 `openai/gpt-5.6-luna` 使用 `max`。文件 provider 使用 strict YAML、owner-only 权限、原子替换和 writer lock；250 ms polling 只发布通过完整校验的新 revision，非法外部编辑保留 last-good snapshot。TUI 的 `/model` 使用 optimistic revision update，避免覆盖并发修改。
 
 credential store 按 provider 保存一个 API key 或 OAuth grant，使用 strict versioned YAML、`0600` 文件、随机临时文件、原子 rename 与跨进程 lock。认证与 refresh token 不进入 session、prompt、TUI 列表或错误。环境 API key 是无持久化 fallback；显式 login 会原子替换对应 provider record。
 
 ## TUI 与投影
 
-`internal/adapter/tui` 是 alternate-screen Bubble Tea 插件。它从 durable event replay 初始化，再订阅已提交事件，展示 route、streamed text/reasoning、tool call/result、approval、retry、compaction 和 turn outcome。TUI 同时实现本地 approval broker 与 auth interaction；secret prompt 使用 password echo。
+`internal/adapter/tui` 是使用 Bubble Tea v2、Lip Gloss v2 与 Bubbles v2 的 alternate-screen 插件。`tea.View` 声明终端模式，输入、viewport、命令与事件投影保留在 adapter；app/core 不依赖 Charm。它从 durable event replay 初始化，再订阅已提交事件，展示 route、streamed text/reasoning、tool call/result、approval、retry、compaction 和 turn outcome。TUI 同时实现本地 approval broker 与 auth interaction；secret prompt 使用 password echo。
 
-UI 命令调用 app 用例，不直接修改文件或 provider 内部状态。退出会 interrupt root 活动 turn；Scope cleanup 撤销 broker、停止 event forwarding，并等待 UI 相关 goroutine 静止。
+UI 命令调用 app 用例，不直接修改文件或 provider 内部状态。退出会 interrupt root 活动 turn；Scope cleanup 撤销 broker、停止 event forwarding，取消并等待终端程序与异步命令静止。Run 退出先取消命令 context，关闭命令执行入口，再等待已开始的操作；迟到命令不再调用 app。前端独立选择，当前只有所选 UI 注册 approval broker；GUI 的扩展边界见 [ADR-0005](decisions/0005-selectable-frontend-plugins.md)。
 
 ## 公共 API 与完成条件
 

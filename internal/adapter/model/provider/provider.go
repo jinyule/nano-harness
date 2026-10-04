@@ -97,7 +97,7 @@ func (provider *Provider) install(document appsettings.Document) {
 	for index, model := range configured.Models {
 		models[index] = llm.ModelInfo{
 			Provider: provider.id, ID: model.ID, Name: model.Name,
-			ContextWindow: model.ContextWindow, Vision: model.Vision, Tools: model.Tools,
+			Effort: model.Effort, ContextWindow: model.ContextWindow, Vision: model.Vision, Tools: model.Tools,
 		}
 	}
 	provider.current.Store(&snapshot{baseURL: strings.TrimRight(configured.BaseURL, "/"), apiKeyEnv: configured.APIKeyEnv, models: models})
