@@ -54,5 +54,19 @@
     "before": "emitted || !retryable || retryNumber >= policy.MaxRetries",
     "after": "!emitted || !retryable || retryNumber >= policy.MaxRetries",
     "test": "^TestServiceRetriesAndStops$"
+  },
+  {
+    "id": "web-fetch-public-address",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "if !publicAddress(address) {",
+    "after": "if false && !publicAddress(address) {",
+    "test": "^TestFetch_AddressPolicyMatrix$"
+  },
+  {
+    "id": "web-fetch-redirect-origin",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "if !sameOrigin(current, next) {",
+    "after": "if false && !sameOrigin(current, next) {",
+    "test": "^TestFetch_RefusesUnsafeRedirects$"
   }
 ]

@@ -60,6 +60,16 @@ func (provider *Provider) streamAnthropic(ctx context.Context, current *snapshot
 	if err != nil {
 		return llm.Completion{}, err
 	}
+	headers, err := anthropicHeaders(credential)
+	if err != nil {
+		return llm.Completion{}, err
+	}
+	return provider.streamRequest(ctx, current.baseURL+"/v1/messages", payload, headers, func(body io.Reader) (llm.Completion, error) {
+		return provider.consumeAnthropic(body, emit)
+	})
+}
+
+func anthropicHeaders(credential llm.Credential) (map[string]string, error) {
 	headers := map[string]string{"anthropic-version": "2023-06-01"}
 	switch credential.Kind {
 	case llm.CredentialAPIKey:
@@ -68,11 +78,9 @@ func (provider *Provider) streamAnthropic(ctx context.Context, current *snapshot
 		headers["Authorization"] = "Bearer " + credential.AccessToken
 		headers["anthropic-beta"] = "oauth-2025-04-20"
 	default:
-		return llm.Completion{}, llm.ErrNoCredential
+		return nil, llm.ErrNoCredential
 	}
-	return provider.streamRequest(ctx, current.baseURL+"/v1/messages", payload, headers, func(body io.Reader) (llm.Completion, error) {
-		return provider.consumeAnthropic(body, emit)
-	})
+	return headers, nil
 }
 
 func (provider *Provider) anthropicRequest(model llm.ModelInfo, request llm.Request) (anthropicRequest, error) {

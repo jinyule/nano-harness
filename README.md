@@ -3,7 +3,7 @@
 [![CI](https://github.com/jinyule/nano-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/jinyule/nano-harness/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`nano-harness` 是一个以 Go 实现的本地 coding agent harness。它包含可重放的流式 agent loop、OpenAI/Anthropic/OpenRouter provider、API key 与 OAuth 账户、图片输入、受控文件与 shell 工具、上下文压缩、进程内 subagent，以及全屏 TUI。
+`nano-harness` 是一个以 Go 实现的本地 coding agent harness。它包含可重放的流式 agent loop、OpenAI/Anthropic/OpenRouter provider、API key 与 OAuth 账户、图片输入、受控文件与 shell 工具、web 检索与公网抓取、上下文压缩、进程内 subagent，以及全屏 TUI。
 
 ## 快速开始
 
@@ -66,7 +66,22 @@ TUI 使用 Bubble Tea v2、Lip Gloss v2 和 Bubbles v2，并作为可回收插�
 
 会话默认保存在用户配置目录下的 `nano-harness/sessions`，账户和设置分别保存在同目录的 `credentials.yaml` 与 `settings.yaml`。这些文件使用 owner-only 权限。可以用 `--session ID` 恢复同一会话，用 `--session-root DIR`、`--credentials FILE` 和 `--settings FILE` 改变位置。已有会话的 composition fingerprint 必须与 workspace 和工具/会话语义一致，否则拒绝恢复。
 
-设置采用默认值与稀疏用户 YAML 合并，并支持运行期热重载。可配置 route、三个 provider 的 HTTPS/loopback endpoint、模型目录、每个模型的可选 `effort`、retry 和 compaction；无效编辑不会替换最后一个有效快照。`effort` 在 OpenAI Responses、OpenAI compatible Chat Completions 和 Anthropic Messages 中映射为各自协议字段，并在不支持的取值上失败。产品代码不会读取或强制任何订阅配额，模型请求受 provider 账户自身的服务限制约束。
+设置采用默认值与稀疏用户 YAML 合并，并支持运行期热重载。可配置 route、三个 provider 的 HTTPS/loopback endpoint、模型目录、每个模型的可选 `effort`、retry、compaction 和 web 检索 route；无效编辑不会替换最后一个有效快照。`effort` 在 OpenAI Responses、OpenAI compatible Chat Completions 和 Anthropic Messages 中映射为各自协议字段，并在不支持的取值上失败。产品代码不会读取或强制任何订阅配额，模型请求受 provider 账户自身的服务限制约束。
+
+## Web 检索与抓取
+
+`web_fetch` 无需配置：它只抓取公网 HTTP(S) 地址，逐跳校验解析结果并只连接已校验的 IP，最多跟随 5 次同源重定向，把 HTML 转为 Markdown 文本。
+
+`web_search` 复用已登录 provider 的服务端检索（OpenAI/Codex Responses、Anthropic Messages 或 OpenRouter），每次检索是一次额外计费的模型请求，因此默认关闭，需要在 `settings.yaml` 中显式选择 route：
+
+```yaml
+web:
+  search:
+    provider: openai
+    model: gpt-5.4
+```
+
+model 必须在该 provider 的模型目录中，否则设置加载失败。未配置时工具仍对模型可见，每次调用返回 `WEB_PROVIDER_UNAVAILABLE`。检索 route 独立于会话 route，修改后对下一次检索生效。
 
 ## 终端验证与 GoLand 调试
 
@@ -78,7 +93,7 @@ GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点�
 
 - provider-neutral 的 Models → Provider → wire API 路由；provider 拥有 catalog、认证、刷新和流协议。
 - OpenAI Responses/ChatGPT Codex Responses、Anthropic Messages、OpenRouter Chat Completions 的流式适配。
-- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash` 和记录会话任务计划的 `todo_write`，以及 spawn/followup/interrupt/report/list subagent 工具。
+- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`web_search`、`web_fetch` 和记录会话任务计划的 `todo_write`，以及 spawn/followup/interrupt/report/list subagent 工具。
 - 失败关闭的 approval、相邻只读工具并发、写入与 shell 的独占 barrier。
 - 指数退避 retry、主动/被动 context compaction、followup、steer、interrupt 和恢复。
 - v2 严格 JSONL 事件日志；流式 text/reasoning/tool、审批、重试、压缩、任务计划和 subagent 身份均可审计。
@@ -94,7 +109,8 @@ internal/app/{llm,tool,...}/      用例与消费方能力接口
 internal/adapter/model/provider/  OpenAI、Anthropic、OpenRouter provider
 internal/adapter/credential/file/ owner-only 账户存储
 internal/adapter/session/jsonl/   严格 JSONL 会话 provider
-internal/adapter/tool/            workspace、subagent 与 todo 工具
+internal/adapter/tool/            file、search、shell、subagent、todo、web 工具与 workspace 根
+internal/adapter/web/fetch/       公网 HTTP(S) 抓取与地址策略
 internal/adapter/media/image/     图片解码、缩放与规范化
 internal/adapter/tui/             全屏终端 UI
 internal/platform/process/        受限进程与 OS sandbox

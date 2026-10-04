@@ -60,6 +60,16 @@ func TestDocumentResolveAndValidation(t *testing.T) {
 	if defaults.Providers["openai"].BaseURL == "" {
 		t.Fatal("Resolve aliased defaults")
 	}
+	if defaults.Web.Search.Configured() || resolved.Web.Search.Configured() {
+		t.Fatalf("web search is configured by default: %#v", defaults.Web)
+	}
+	searching, err := Resolve(Document{Web: Web{Search: WebSearch{Provider: "anthropic", Model: "claude-sonnet-4-5"}}})
+	if err != nil || searching.Web.Search != (WebSearch{Provider: "anthropic", Model: "claude-sonnet-4-5"}) || searching.Route.Provider != "openai" {
+		t.Fatalf("web search overlay=%#v err=%v", searching.Web, err)
+	}
+	if _, err := Resolve(Document{Web: Web{Search: WebSearch{Provider: "openai", Model: "missing"}}}); !errors.Is(err, ErrInvalidDocument) {
+		t.Fatalf("unknown web search model resolved: %v", err)
+	}
 
 	mutations := []func(*Document){
 		func(document *Document) { document.Route.Provider = "" },
@@ -108,6 +118,11 @@ func TestDocumentResolveAndValidation(t *testing.T) {
 		func(document *Document) { document.Route.Model = "missing" },
 		func(document *Document) { document.Retry.Mode = "bad" },
 		func(document *Document) { document.Compaction.ThresholdRatio = 1 },
+		func(document *Document) { document.Web.Search = WebSearch{Provider: "openai"} },
+		func(document *Document) { document.Web.Search = WebSearch{Model: "gpt-5.4"} },
+		func(document *Document) { document.Web.Search = WebSearch{Provider: " openai", Model: "gpt-5.4"} },
+		func(document *Document) { document.Web.Search = WebSearch{Provider: "deepseek", Model: "gpt-5.4"} },
+		func(document *Document) { document.Web.Search = WebSearch{Provider: "anthropic", Model: "gpt-5.4"} },
 	}
 	for index, mutate := range mutations {
 		document := Defaults()

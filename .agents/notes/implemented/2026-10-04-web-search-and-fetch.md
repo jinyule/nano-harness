@@ -1,0 +1,56 @@
+# web_search 与 web_fetch 对齐参考 Base 工具
+
+- Status: implemented
+- Date: 2026-10-04
+
+## Context
+
+[工具对齐计划](../proposed/2026-10-04-upstream-tool-parity.md)的 WP5 要求补齐参考 Base 组合的 `web_search` 与 `web_fetch`。参考提交 `5badb15009ae` 的 `packages/web/` 把能力拆为 `ctx.web` 服务、DeepSeek Messages 检索 provider、匿名 HTTP 抓取 provider 和 `tool-web` 消费方；生成目录给出两个工具的精确 schema，Base 把检索时限设为 60 s，抓取只到公网 HTTP(S)、逐个校验并固定连接，两者都不需要逐次确认。维护者确定 `web_search` 复用已配置 LLM provider 的服务端检索，不新增凭据。
+
+本仓此前没有 web 能力、HTML/字符集依赖或网络地址策略；provider 请求会跟随 HTTP 重定向。WP1（[ADR-0007](../../../docs/decisions/0007-upstream-base-tool-definitions.md)）已提供 `tool.Spec`/`tool.Define`、guidance 与 `Error: ` 结果格式，本 WP 基于它实现。
+
+非目标：HTTP 代理、交互浏览、结构化来源持久化（参考 web 结果卡片的 meta）、逐 URL 授权策略和 live provider 验证。
+
+## Decision
+
+长期决定见 [ADR-0011](../../../docs/decisions/0011-provider-web-search-and-public-fetch.md)，事实归 [架构](../../../docs/architecture.md#web-检索与抓取)与[安全规则](../../../docs/security.md#网络边界)。本次实施：
+
+- **插件与 composition。** `internal/app/web.Service`（ID `web`）位于 compaction 之后、sessions 之前；cleanup 先拒绝新操作，再取消全部在途操作并等待结束。`internal/adapter/tool/web.Provider`（ID `web-tools`）位于 subagent tools 之后，Start 依次登记两个 `tool.Define` 编译的工具，每次登记由 tool runtime 在同一 Scope 中挂 cleanup；第二次登记失败时关闭该 Scope 会回收第一项。`internal/adapter/web/fetch.Client` 没有生命周期 effect（每跳 transport 在返回前关闭），作为依赖注入 `app/web`，不是插件。`cmd` 的 `dependencies` 增加 `webResolver`/`webDial`，生产为 nil。
+- **llm 与 provider。** `llm.PreparedModel` 增加 `Search`，`llm.Call.Search` 校验非空查询和正的结果上限后委托 provider。`internal/adapter/model/provider/search.go` 实现三种 wire；`responsesTarget`、`anthropicHeaders` 从对话路径抽出供两者共用；通用 `send` 取代原 `streamRequest` 主体，对所有 provider 请求拒绝重定向（protocol 错误）。
+- **settings。** `Document.Web.Search{Provider,Model}` 默认为空，YAML/JSON 在为空时省略；两者必须同时给出且 model 在 provider 目录中。
+- **工具定义。** 两个工具用 `tool.Spec` 声明，`Concurrent` 恒为 true，没有 `Approval`，也没有 `Check`（语义校验只在 `app/web`）。根对象未声明参数按 ADR-0007 被拒绝且不触达 service。`internal/app/tool/define.go` 增加参考 section 表的 `OrderWebSearch = 2000`、`OrderWebFetch = 2100`；guidance 由 `Runtime.Catalog` 渲染，prompt assembler 没有 web 专用分支。
+- **证据 fixture。** `cmd/nano-harness/testdata/tool-catalog.json` 与 `upstream-base-tools.json` 收录两个工具，后者的条目已与参考 `docs/tool-catalog.md` 的 JSON 块逐项比对。
+- **composition ID** 在 `todo-tools-v1` 之后、`session-v2` 之前增加 `web-tools-v1`。
+- **依赖。** `golang.org/x/net` v0.59.0 提供 HTML tokenizer 与 WHATWG charset 查找，`golang.org/x/text` v0.42.0 提供编码表；两者 Go 团队维护、BSD-3-Clause、纯 Go。`golang.org/x/sync` 作为传递依赖从 v0.22.0 升到 v0.23.0。`CGO_ENABLED=0 go build -trimpath` 的 darwin/arm64 二进制从 14,395,842 增至 15,676,146 字节（+1.28 MB，含本 WP 全部代码）。替代方案是自写 HTML 解析与多字节编码表或只支持 UTF-8，前者安全负担高，后者无法解码 GBK/Shift_JIS 等页面，与参考 `TextDecoder` 不一致。
+- **定向 mutation** 增加 `web-fetch-public-address` 与 `web-fetch-redirect-origin`。
+
+与其他工作包共享的接触面：`internal/app/llm/runtime.go`（类型与接口）、四个 PreparedModel 测试替身（agent、compaction、subagent、llm）各加一个 `Search` 桩、`internal/app/tool/define.go`（两个 order 常量）、`internal/app/settings/settings.go`、provider 包的 `wire_common.go`/`responses.go`/`anthropic.go`、`cmd/nano-harness/application.go`/`main.go`/`main_test.go`（上游工具数量断言 7→9；e2e 复用 todo 测试的 `readTranscript`）、两个 testdata fixture 和 `scripts/mutation-cases.json`。
+
+## Consequences
+
+模型获得与参考 schema 一致的检索和抓取；检索复用现有账户，抓取以地址策略阻断 SSRF 与 DNS 重绑定，并在设置热重载时保持工具集合不变。对话请求也不再跟随重定向，这是对既有凭据转发风险的收紧；依赖 endpoint 重定向的部署需要改为直接配置最终 HTTPS 地址。
+
+代价：检索默认关闭，用户必须在 `settings.yaml` 选择 route，每次检索额外计费；Codex Responses 边界对 `web_search` 工具的接受度没有 live 证据。抓取不读取代理环境变量；没有逐次确认，模型仍可把数据编码进公网 URL。检索结果超过 `session.MaxTextBytes` 时沿用 tool runtime 的通用截断，未提供参考的 spill。HTML 转换是近似 Markdown，不追求与 turndown 逐字节一致。旧会话因 composition ID 变化而拒绝恢复，本仓尚无发布数据。
+
+参考 `docs/reference-deepseek-harness.md` 中“新工具暂缓”的那一行由总体计划在全部 WP 合并后更新，本 WP 未改动。
+
+## Verification
+
+在 worktree `wp/wp5-web` 上实际运行：
+
+- `go test -race -count=1 ./...`：全部包通过。
+- `make check`（fmt-check、mod-check、vet、race test、architecture、submodule、agent-notes、skills、workflow-tools、golangci-lint、coverage、mutation、build）：通过；`coverage: every product source file is 100.0%`，lint `0 issues`，十个 mutation 全部 killed，`./bin/nano-harness version` 输出 `nano-harness dev`。
+- `make vuln`：`No vulnerabilities found.`
+- `python3 scripts/mutation-check.py`：两个新变异分别被 `TestFetch_AddressPolicyMatrix`（放行私网答案后 loopback 被联系）和 `TestFetch_RefusesUnsafeRedirects`（跨源/跨 scheme 重定向返回错误代码改变）杀死。
+
+行为证据：
+
+- provider：`TestSearch_WireRequestsAndNormalizedResults` 对 OpenAI API key、Codex OAuth、Anthropic API key/OAuth、OpenRouter 断言精确请求体、路径、Accept 与认证头，以及归一后的回答与来源；未设置 effort 时三种 wire 都省略字段。`TestSearch_RefusesRedirectsWithoutContactingTarget` 证明检索与对话请求都不联系重定向目标。另覆盖凭据前置失败不触网、429 的 retry hint 与远端正文不泄漏、transport 失败、请求中取消，以及畸形/不完整/缺检索证据/超大响应。
+- app：真实 LLM runtime 与 settings 下验证查询校验、未配置、barrier 证明并发、首个失败取消兄弟并等待、轮转合并、60 s 时限（测试缩短）、调用方取消、缺账户、prepare 失败，以及 shutdown 取消并等待在途检索和抓取。
+- fetch：loopback HTTP/TLS 与注入 resolver/dialer 验证允许/拒绝矩阵、dialer 只收到已校验 IP:端口、重绑定、5 跳上限、同源/跨源、无/坏 Location、charset（GBK）、gzip 与解压炸弹截断、字节与字符截断、超时、取消、断开正文和 TLS 主机名；`TestNew_ProductionDefaultsRefuseLoopback` 用真实系统 resolver 证明 `127.0.0.1` 与 `localhost` 被拒且 server 未被联系。
+- 工具：`Runtime.Catalog` 中的 schema 与参考逐字节比较，guidance 文本、顺序（检索先于抓取）和可见性变体与参考一致；真实 tool runtime 中两个工具通过 barrier 证明同一并发组、approval 从未被调用；未声明根参数、类型错误和缺失必填都返回 `Error: invalid arguments: ...` 且不调用 service，service 失败返回 `Error: <CODE>: <消息>`；检索/抓取展示与 512 层嵌套省略。
+- 目录：`TestComposition_ToolCatalogGolden` 与 `TestComposition_MatchesUpstreamBaseTools` 从真实 composition 的 `request/header` 和 provider 收到的请求比较 14 个工具，其中 9 个与参考 Base 逐字节一致。
+- assembled：`TestComposition_WebSearchAndFetchEndToEnd` 经真实 settings 文件与 composition 让模型一步调用两个工具，从磁盘 transcript 断言 request header 中冻结的 schema、system prompt 指引、检索来源与转换后的页面（脚本被删除），抓取只拨号 `93.184.216.34:80`；`TestComposition_WebSearchUnconfiguredFailsClosed` 证明默认配置返回 `WEB_PROVIDER_UNAVAILABLE` 且不联系 provider。
+- settings 文件：未配置时不写入 `web:`；配置值往返；README 示例可解析；未知子字段被 strict YAML 拒绝。
+
+未获得的证据：没有对 OpenAI、Codex、Anthropic 或 OpenRouter 的 live 检索调用，也没有访问真实公网页面；`make tui-e2e` 与跨平台构建未在本 WP 运行。

@@ -11,7 +11,9 @@ import (
 	shelltool "github.com/jinyule/nano-harness/internal/adapter/tool/shell"
 	subagenttool "github.com/jinyule/nano-harness/internal/adapter/tool/subagent"
 	todotool "github.com/jinyule/nano-harness/internal/adapter/tool/todo"
+	webtool "github.com/jinyule/nano-harness/internal/adapter/tool/web"
 	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
+	webfetch "github.com/jinyule/nano-harness/internal/adapter/web/fetch"
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/approval"
 	"github.com/jinyule/nano-harness/internal/app/compaction"
@@ -21,6 +23,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/app/settings"
 	"github.com/jinyule/nano-harness/internal/app/subagent"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
+	appweb "github.com/jinyule/nano-harness/internal/app/web"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	platformprocess "github.com/jinyule/nano-harness/internal/platform/process"
 )
@@ -57,6 +60,8 @@ var (
 	newShellTools        = shelltool.New
 	newSubagentTools     = subagenttool.New
 	newTodoTools         = todotool.New
+	newWebService        = appweb.New
+	newWebTools          = webtool.New
 )
 
 func composeApplication(config applicationConfig, deps dependencies) (*application, error) {
@@ -97,6 +102,10 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 		return nil, err
 	}
 	compactionService, err := newCompactionService(modelRuntime, configuration)
+	if err != nil {
+		return nil, err
+	}
+	webService, err := newWebService(modelRuntime, configuration, webfetch.New(webfetch.Config{Resolver: deps.webResolver, Dial: deps.webDial}))
 	if err != nil {
 		return nil, err
 	}
@@ -145,11 +154,15 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
+	webTools, err := newWebTools(toolRuntime, webService)
+	if err != nil {
+		return nil, err
+	}
 	plugins := []plugin.Plugin{
 		configuration, settingsProvider, credentials, modelRuntime,
 		providers[0], providers[1], providers[2], approvalService, toolRuntime,
-		images, assembler, retryService, compactionService, sessions, engine,
-		registry, root, subagents, fileTools, searchTools, shellTools, subagentTools, todoTools,
+		images, assembler, retryService, compactionService, webService, sessions, engine,
+		registry, root, subagents, fileTools, searchTools, shellTools, subagentTools, todoTools, webTools,
 	}
 	return &application{plugins: plugins, root: root, registry: registry, models: modelRuntime,
 		settings: configuration, approval: approvalService, images: images, subagents: subagents}, nil

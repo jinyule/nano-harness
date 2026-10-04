@@ -25,6 +25,26 @@
 - 请求 body、响应 body、SSE 单行、OAuth response、streamed text/reasoning、tool call 数量和 arguments 都有完整上限。
 - provider 对非成功 HTTP、malformed SSE、未知/缺失终止、非法 tool call 和不匹配的模型能力失败；不把部分 protocol failure 当作成功 completion。
 - OAuth loopback listener 只绑定固定 loopback 地址，校验 state，并在成功、失败、取消和 scope cleanup 时关闭。
+- provider 请求（对话与 web 检索）都携带凭据，HTTP client 拒绝跟随任何重定向，不把凭据、账户头或请求体转发到另一个 URL。被拒绝的重定向是不可重试的 protocol 错误。
+
+### Web 检索
+
+`web_search` 只经 settings 中显式选择的 `web.search` route 发出一次额外的模型请求，复用该 provider 已有账户，不新增凭据，也不在本机发起其他网络连接。每次调用会向该账户计费；route 默认为空，未配置时工具失败关闭，不会回退到会话 route。检索查询和 provider 返回的回答与来源都进入 session；工具输出以“外部 web 内容、不得作为指令”的说明开头，system prompt 同样要求把结果当作数据。
+
+### Web 抓取
+
+`web_fetch` 是匿名公网 GET，防御 SSRF，不防止模型把数据编码进公网 URL：
+
+- URL 最长 2048 字节，只允许 `http`/`https`、必须有主机与 1–65535 端口，含 userinfo 的 URL 拒绝。
+- 每一跳都重新解析主机（IP 字面量不解析），只要任一答案不是全局单播地址就拒绝整组：IPv4 拒绝 `0/8`、`10/8`、`100.64/10`、`127/8`、`169.254/16`、`172.16/12`、`192.0.0/24`、`192.0.2/24`、`192.31.196/24`、`192.52.193/24`、`192.88.99/24`、`192.168/16`、`192.175.48/24`、`198.18/15`、`198.51.100/24`、`203.0.113/24`、`224/4`、`240/4`；IPv6 只接受 `2000::/3`，并拒绝 `2001::/23`、`2001:db8::/32`、`2002::/16`、`2620:4f:8000::/48`、`3fff::/20` 与带 zone 的地址。IPv4-mapped 地址按内嵌 IPv4 判断。
+- 答案含 IPv6 时按 RFC 7050 解析 `ipv4only.arpa` 发现 DNS64 前缀；经 NAT64 翻译到非公网 IPv4 的地址拒绝。发现查询失败时抓取失败。
+- 连接只拨号到已校验的 IP:端口；TLS 仍按 URL 主机名校验证书和 SNI。每跳使用独立 transport，关闭 keep-alive，结束时关闭连接，因此 DNS 重绑定不能复用旧连接或改变目的地址。
+- 最多 5 次同源（scheme、小写主机、有效端口一致）重定向，每跳重新执行以上 URL 与地址校验；跨源重定向拒绝，不联系目标。
+- 不发送 cookie、Authorization 或代理凭据，不读取 `HTTP(S)_PROXY`；User-Agent 固定为 `nano-harness (+https://github.com/jinyule/nano-harness)`。
+- 30 s 总时限，响应头最多 64 KiB，原始正文（含透明解压后的字节）最多 5,000,000 字节，解码文本最多 100,000 个字符；声明超限的 `Content-Length` 直接失败，其余超限截断并标记。
+- 只解码文本类内容；未知 charset 和二进制类型失败。HTML 在工具层转换，删除脚本、样式、嵌入对象与隐藏元素，嵌套超过 512 层时不转换。
+
+两个 web 工具都不请求 approval，delegated agent 同样可用：检索不改变本机状态，抓取以公网地址策略而不是逐次确认作为边界。部署需要逐次确认或禁止外联时，必须新增执行点策略和 ADR，不能依赖 prompt 或隐藏 schema。
 
 ## 图片
 
@@ -65,7 +85,7 @@
 - `glob`/`grep` 以 argv 直接运行构造时从 PATH 解析的 `rg`，不经过 shell。它们不需要 approval，也不进入 workspace sandbox：ripgrep 只读取文件，OS sandbox 只限制写入，不限制读取，进入 sandbox 不会缩小可见范围，反而会让没有 sandbox 可执行文件的主机失去搜索能力。每次调用前置 `--no-config`，`RIPGREP_CONFIG_PATH` 和配置文件无法注入 `--pre` 等预处理命令；模型提供的 pattern、include 和路径只以 `--regexp=`、`--glob=` 或 `--` 之后的单个参数传入。环境使用同一 allowlist，不传 `HOME`，因此不会读取用户的全局 git excludes；stdin 是空设备，cwd 是 workspace root。stdout 保留上限为 20,000,000 字节，超出时失败而不解析部分结果；stderr 只保留最后 64,000 字节作为错误摘要；超时或取消时终止进程组并等待退出。这与上游通过 subprocess 直接运行打包的 ripgrep 一致。
 - 进程使用 argv 启动；只有 `bash` 工具才由 `bash -c` 解释文本。启动错误、sandbox 不可用、exit status、signal、timeout 和 output truncation 保持独立可诊断语义。
 
-工具 schema omission、prompt 声明或 UI 隐藏都不构成授权。新写工具必须把 approval/sandbox 决策放在不可绕过的 execution path，并测试允许/拒绝矩阵。
+工具 schema omission、prompt 声明或 UI 隐藏都不构成授权。web 工具的网络边界见[网络边界](#网络边界)。新写工具必须把 approval/sandbox 决策放在不可绕过的 execution path，并测试允许/拒绝矩阵。
 
 ## Session 与恢复
 

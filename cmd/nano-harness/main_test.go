@@ -25,6 +25,7 @@ import (
 	shelltool "github.com/jinyule/nano-harness/internal/adapter/tool/shell"
 	subagenttool "github.com/jinyule/nano-harness/internal/adapter/tool/subagent"
 	todotool "github.com/jinyule/nano-harness/internal/adapter/tool/todo"
+	webtool "github.com/jinyule/nano-harness/internal/adapter/tool/web"
 	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
 	"github.com/jinyule/nano-harness/internal/adapter/tui"
 	"github.com/jinyule/nano-harness/internal/app/agent"
@@ -36,6 +37,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/app/subagent"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/app/transcript"
+	appweb "github.com/jinyule/nano-harness/internal/app/web"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
@@ -224,7 +226,7 @@ func TestComposition_MatchesUpstreamBaseTools(t *testing.T) {
 		frozen[definition.Name] = definition
 	}
 	upstream := loadCatalog(t, filepath.Join("testdata", "upstream-base-tools.json"))
-	if len(upstream) != 7 {
+	if len(upstream) != 9 {
 		t.Fatalf("upstream fixture lists %d tools", len(upstream))
 	}
 	for _, want := range upstream {
@@ -341,7 +343,9 @@ func restoreMainHooks(t *testing.T) {
 	registry, root, subagents := newAgentRegistry, newRootBootstrap, newSubagentService
 	workspaceRoot, fileTools, searchTools, shellTools := newWorkspace, newFileTools, newSearchTools, newShellTools
 	subagentTools, todoTools, terminal := newSubagentTools, newTodoTools, newTerminal
+	webService, webTools := newWebService, newWebTools
 	t.Cleanup(func() {
+		newWebService, newWebTools = webService, webTools
 		currentWorkingDirectory, userConfigDirectory, readRandom, inspectPath, absolutePath, evaluateLinks = cwd, config, random, inspect, absolute, links
 		newSettingsProvider, newCredentialStore, newModelRuntime = settingsProvider, credentials, modelRuntime
 		newModelProvider, newToolRuntime, newRetryService = modelProvider, toolRuntime, retryService
@@ -530,6 +534,12 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 			newSubagentTools = func(*appTool.Runtime, subagenttool.Service) (*subagenttool.Provider, error) { return nil, failure }
 		}},
 		{name: "todo tools", set: func() { newTodoTools = func(*appTool.Runtime) (*todotool.Provider, error) { return nil, failure } }},
+		{name: "web service", set: func() {
+			newWebService = func(*llm.Runtime, *settings.Service, appweb.Fetcher) (*appweb.Service, error) { return nil, failure }
+		}},
+		{name: "web tools", set: func() {
+			newWebTools = func(*appTool.Runtime, webtool.Service) (*webtool.Provider, error) { return nil, failure }
+		}},
 		{name: "terminal", set: func() { newTerminal = func(tui.Config) (*tui.App, error) { return nil, failure } }},
 	}
 	for _, test := range tests {

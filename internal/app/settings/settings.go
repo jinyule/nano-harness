@@ -64,12 +64,29 @@ type Compaction struct {
 	Retries        int     `yaml:"retries" json:"retries"`
 }
 
+// WebSearch selects the provider route whose server-side web search backs the
+// web_search tool. The zero value means search is not configured: the tool stays
+// registered and fails each call with a structured unavailable error.
+type WebSearch struct {
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Model    string `yaml:"model,omitempty" json:"model,omitempty"`
+}
+
+// Configured reports whether a search route was selected.
+func (search WebSearch) Configured() bool { return search.Provider != "" || search.Model != "" }
+
+// Web configures provider-backed web capabilities.
+type Web struct {
+	Search WebSearch `yaml:"search,omitempty" json:"search,omitzero"`
+}
+
 // Document is the complete hot-reloadable configuration.
 type Document struct {
 	Route      Route               `yaml:"route" json:"route"`
 	Providers  map[string]Provider `yaml:"providers" json:"providers"`
 	Retry      Retry               `yaml:"retry" json:"retry"`
 	Compaction Compaction          `yaml:"compaction" json:"compaction"`
+	Web        Web                 `yaml:"web,omitempty" json:"web,omitzero"`
 }
 
 // Defaults returns a detached usable document.
@@ -123,6 +140,9 @@ func Resolve(user Document) (Document, error) {
 	if user.Compaction.ThresholdRatio != 0 {
 		resolved.Compaction = user.Compaction
 	}
+	if user.Web.Search.Configured() {
+		resolved.Web.Search = user.Web.Search
+	}
 	if err := resolved.Validate(); err != nil {
 		return Document{}, err
 	}
@@ -155,6 +175,24 @@ func (document Document) Validate() error {
 	}
 	if document.Compaction.ThresholdRatio <= 0 || document.Compaction.ThresholdRatio >= 1 || document.Compaction.RetainRatio < 0 || document.Compaction.RetainRatio >= document.Compaction.ThresholdRatio || document.Compaction.MaxTokens < 256 || document.Compaction.MaxTokens > 65_536 || document.Compaction.Retries < 0 || document.Compaction.Retries > 4 {
 		return invalid("compaction policy is invalid")
+	}
+	return validateWebSearch(document)
+}
+
+func validateWebSearch(document Document) error {
+	search := document.Web.Search
+	if !search.Configured() {
+		return nil
+	}
+	if !validName(search.Provider, 64) || !validName(search.Model, 256) {
+		return invalid("web search route requires both provider and model")
+	}
+	provider, ok := document.Providers[search.Provider]
+	if !ok {
+		return invalid("web search provider %q is not installed", search.Provider)
+	}
+	if !slices.ContainsFunc(provider.Models, func(model Model) bool { return model.ID == search.Model }) {
+		return invalid("web search model %q is not in provider %q", search.Model, search.Provider)
 	}
 	return nil
 }

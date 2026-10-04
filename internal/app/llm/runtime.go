@@ -214,12 +214,37 @@ type Completion struct {
 // Emit receives provider-neutral chunks in provider order.
 type Emit func(session.AssistantChunk) error
 
+// SearchRequest asks one prepared model to run a provider-side web search.
+// MaxResults is a positive upper bound the provider may forward as a
+// result-count hint; the consumer still enforces it on the returned sources.
+type SearchRequest struct {
+	Query      string
+	MaxResults int
+}
+
+// SearchSource is one citeable result. URL is always present; the other fields
+// are empty when the provider does not report them.
+type SearchSource struct {
+	URL         string
+	Title       string
+	Snippet     string
+	PublishedAt string
+}
+
+// SearchResult is the provider-neutral outcome of one server-side search:
+// optional provider-generated answer text and deduplicated sources in provider order.
+type SearchResult struct {
+	Content string
+	Sources []SearchSource
+}
+
 // PreparedModel captures all provider settings before credential I/O.
 type PreparedModel interface {
 	Info() ModelInfo
 	CredentialEnv() string
 	Refresh(context.Context, Credential) (Credential, error)
 	Stream(context.Context, Credential, Request, Emit) (Completion, error)
+	Search(context.Context, Credential, SearchRequest) (SearchResult, error)
 }
 
 // Provider owns model catalog, wire implementation, and authentication flows.
@@ -247,6 +272,14 @@ func (call *Call) Stream(ctx context.Context, request Request, emit Emit) (Compl
 		return Completion{}, ErrInvalidConfig
 	}
 	return call.prepared.Stream(ctx, call.credential, cloneRequest(request), emit)
+}
+
+// Search runs one provider-side web search through the frozen provider snapshot.
+func (call *Call) Search(ctx context.Context, request SearchRequest) (SearchResult, error) {
+	if strings.TrimSpace(request.Query) == "" || request.MaxResults < 1 {
+		return SearchResult{}, ErrInvalidConfig
+	}
+	return call.prepared.Search(ctx, call.credential, request)
 }
 
 // Runtime is the provider registry and authorization coordinator.

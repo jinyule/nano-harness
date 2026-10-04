@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jinyule/nano-harness/internal/adapter/tui"
+	webfetch "github.com/jinyule/nano-harness/internal/adapter/web/fetch"
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/version"
@@ -54,6 +55,8 @@ type dependencies struct {
 	openAIAuthURL     string
 	anthropicAuthURL  string
 	openRouterAuthURL string
+	webResolver       webfetch.Resolver // nil selects the system resolver
+	webDial           webfetch.DialFunc // nil selects a direct dialer
 	newRuntime        func(...plugin.Plugin) (*plugin.Runtime, error)
 	startRuntime      func(context.Context, *plugin.Runtime) error
 	runTerminal       func(context.Context, *tui.App, io.Reader, io.Writer) error
@@ -255,7 +258,7 @@ func composeTUI(config applicationConfig, deps dependencies) (*composition, erro
 // each tool provider, and the session format. Bump a provider token whenever
 // its model-visible definitions or behavior change incompatibly.
 func compositionID(config applicationConfig) string {
-	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00fs-tools-v1\x00search-tools-v2\x00shell-tools-v1\x00subagent-tools-v2\x00todo-tools-v1\x00session-v2"
+	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00fs-tools-v1\x00search-tools-v2\x00shell-tools-v1\x00subagent-tools-v2\x00todo-tools-v1\x00web-tools-v1\x00session-v2"
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
 }

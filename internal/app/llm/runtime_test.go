@@ -84,6 +84,8 @@ type fakePrepared struct {
 	completion  Completion
 	streamErr   error
 	request     Request
+	search      SearchRequest
+	credential  Credential
 }
 
 func (prepared *fakePrepared) Info() ModelInfo       { return prepared.info }
@@ -101,6 +103,11 @@ func (prepared *fakePrepared) Stream(_ context.Context, _ Credential, request Re
 	}
 	_ = emit(session.AssistantChunk{Kind: session.ChunkText, Text: "x"})
 	return prepared.completion, prepared.streamErr
+}
+
+func (prepared *fakePrepared) Search(_ context.Context, credential Credential, request SearchRequest) (SearchResult, error) {
+	prepared.search, prepared.credential = request, credential
+	return SearchResult{Content: "answer", Sources: []SearchSource{{URL: "https://example.com"}}}, nil
 }
 
 type fakeInteraction struct{}
@@ -221,6 +228,15 @@ func TestRuntimeRouteLoginAndCleanup(t *testing.T) {
 	}
 	if _, err := call.Stream(context.Background(), Request{}, nil); err == nil {
 		t.Fatal("nil emit accepted")
+	}
+	found, err := call.Search(context.Background(), SearchRequest{Query: "go", MaxResults: 8})
+	if err != nil || found.Content != "answer" || prepared.search != (SearchRequest{Query: "go", MaxResults: 8}) || prepared.credential.APIKey != "key" {
+		t.Fatalf("search=%#v err=%v forwarded=%#v", found, err, prepared.search)
+	}
+	for _, invalid := range []SearchRequest{{Query: " ", MaxResults: 8}, {Query: "go"}} {
+		if _, err := call.Search(context.Background(), invalid); !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("invalid search %#v=%v", invalid, err)
+		}
 	}
 	if err := runtime.Login(context.Background(), "p", "api-key", nil); err == nil {
 		t.Fatal("nil interaction accepted")

@@ -59,6 +59,10 @@ func (*testModel) CredentialEnv() string { return "OPENAI_API_KEY" }
 func (*testModel) Refresh(_ context.Context, credential llm.Credential) (llm.Credential, error) {
 	return credential, nil
 }
+func (*testModel) Search(context.Context, llm.Credential, llm.SearchRequest) (llm.SearchResult, error) {
+	return llm.SearchResult{}, nil
+}
+
 func (model *testModel) Stream(ctx context.Context, _ llm.Credential, request llm.Request, _ llm.Emit) (llm.Completion, error) {
 	model.mu.Lock()
 	model.seen = append(model.seen, request)

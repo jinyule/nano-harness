@@ -210,6 +210,45 @@
       }
     },
     {
+      "name": "web_fetch",
+      "source": "docs/tool-catalog.md with packages/web/tool-web/src/fetch.ts",
+      "composition": "Base mounts @deepseek-ai/dsh-tool-web with fetch: true; the schema is independent of the fetch provider and timeout configuration",
+      "description": "Fetch the content of a specific HTTP(S) URL and return it decoded to text.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The HTTP(S) URL to fetch."
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
+      "name": "web_search",
+      "source": "docs/tool-catalog.md with packages/web/tool-web/src/search.ts",
+      "composition": "Base keeps the default searchMaxQueries of 4, which sets the queries description; searchTimeoutMs: 60000 and the DeepSeek search provider do not change the schema",
+      "description": "Search the web for current information. Returns an optional summary answer and a list of source URLs.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "queries": {
+            "type": "array",
+            "description": "1–4 search queries; their results are merged.",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "queries"
+        ]
+      }
+    },
+    {
       "name": "write",
       "source": "docs/tool-catalog.md with packages/fs/tool-fs/src/sandbox.ts and packages/sandbox/sandbox/src/escalation.ts",
       "composition": "Base mounts @deepseek-ai/dsh-fs-sandbox, so packages/fs/tool-fs/src/sandbox.ts adds sandbox_permissions and justification",

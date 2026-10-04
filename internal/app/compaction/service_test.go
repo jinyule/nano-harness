@@ -40,6 +40,10 @@ func (*compactionPrepared) CredentialEnv() string { return "OPENAI_API_KEY" }
 func (*compactionPrepared) Refresh(_ context.Context, credential llm.Credential) (llm.Credential, error) {
 	return credential, nil
 }
+func (*compactionPrepared) Search(context.Context, llm.Credential, llm.SearchRequest) (llm.SearchResult, error) {
+	return llm.SearchResult{}, nil
+}
+
 func (prepared *compactionPrepared) Stream(_ context.Context, _ llm.Credential, request llm.Request, emit llm.Emit) (llm.Completion, error) {
 	if request.Purpose != "compaction" || request.MaxTokens == 0 || emit == nil {
 		return llm.Completion{}, errors.New("bad compaction request")

@@ -57,26 +57,34 @@ func (provider *Provider) streamResponses(ctx context.Context, current *snapshot
 	if err != nil {
 		return llm.Completion{}, err
 	}
-	endpoint := current.baseURL + "/v1/responses"
-	headers := map[string]string{}
-	switch credential.Kind {
-	case llm.CredentialAPIKey:
-		headers["Authorization"] = "Bearer " + credential.APIKey
-	case llm.CredentialOAuth:
-		if credential.AccountID == "" {
-			return llm.Completion{}, &llm.Error{Code: llm.ErrorUnauthorized, Provider: provider.id, Cause: errors.New("ChatGPT account ID is missing")}
-		}
-		endpoint = provider.auth.chatGPTBaseURL + "/backend-api/codex/responses"
-		headers["Authorization"] = "Bearer " + credential.AccessToken
-		headers["ChatGPT-Account-Id"] = credential.AccountID
-		headers["Originator"] = "codex_cli_rs"
-		headers["OpenAI-Beta"] = "responses=experimental"
-	default:
-		return llm.Completion{}, llm.ErrNoCredential
+	endpoint, headers, err := provider.responsesTarget(current, credential)
+	if err != nil {
+		return llm.Completion{}, err
 	}
 	return provider.streamRequest(ctx, endpoint, payload, headers, func(body io.Reader) (llm.Completion, error) {
 		return provider.consumeResponses(body, emit)
 	})
+}
+
+// responsesTarget selects the public Responses API for API keys and the Codex
+// Responses boundary for ChatGPT OAuth grants.
+func (provider *Provider) responsesTarget(current *snapshot, credential llm.Credential) (string, map[string]string, error) {
+	switch credential.Kind {
+	case llm.CredentialAPIKey:
+		return current.baseURL + "/v1/responses", map[string]string{"Authorization": "Bearer " + credential.APIKey}, nil
+	case llm.CredentialOAuth:
+		if credential.AccountID == "" {
+			return "", nil, &llm.Error{Code: llm.ErrorUnauthorized, Provider: provider.id, Cause: errors.New("ChatGPT account ID is missing")}
+		}
+		return provider.auth.chatGPTBaseURL + "/backend-api/codex/responses", map[string]string{
+			"Authorization":      "Bearer " + credential.AccessToken,
+			"ChatGPT-Account-Id": credential.AccountID,
+			"Originator":         "codex_cli_rs",
+			"OpenAI-Beta":        "responses=experimental",
+		}, nil
+	default:
+		return "", nil, llm.ErrNoCredential
+	}
 }
 
 func (provider *Provider) responsesRequest(model llm.ModelInfo, request llm.Request) (responsesRequest, error) {

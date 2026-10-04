@@ -17,27 +17,43 @@ import (
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
+// errProviderRedirect marks a refused redirect on a credential-bearing request.
+var errProviderRedirect = errors.New("provider redirect refused")
+
 func (provider *Provider) streamRequest(ctx context.Context, endpoint string, payload any, headers map[string]string, consume func(io.Reader) (llm.Completion, error)) (llm.Completion, error) {
+	return send(ctx, provider, endpoint, "text/event-stream", payload, headers, consume)
+}
+
+// send posts one bounded JSON request and hands the bounded success body to
+// consume. Every provider request carries credentials, so the client refuses
+// redirects instead of forwarding credentials or the request body to another URL.
+func send[T any](ctx context.Context, provider *Provider, endpoint, accept string, payload any, headers map[string]string, consume func(io.Reader) (T, error)) (T, error) {
+	var zero T
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return llm.Completion{}, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
+		return zero, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
 	}
 	if len(encoded) > maxProviderRequestBytes {
-		return llm.Completion{}, &llm.Error{Code: llm.ErrorInvalid, Provider: provider.id, Cause: errors.New("request exceeds size limit")}
+		return zero, &llm.Error{Code: llm.ErrorInvalid, Provider: provider.id, Cause: errors.New("request exceeds size limit")}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
 	if err != nil {
-		return llm.Completion{}, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
+		return zero, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "text/event-stream")
+	request.Header.Set("Accept", accept)
 	request.Header.Set("User-Agent", "nano-harness")
 	for name, value := range headers {
 		request.Header.Set(name, value)
 	}
-	response, err := provider.client.Do(request)
+	client := *provider.client
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return errProviderRedirect }
+	response, err := client.Do(request)
+	if errors.Is(err, errProviderRedirect) {
+		return zero, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errProviderRedirect}
+	}
 	if err != nil {
-		return llm.Completion{}, transportError(provider.id, err)
+		return zero, transportError(provider.id, err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -46,9 +62,24 @@ func (provider *Provider) streamRequest(ctx context.Context, endpoint string, pa
 		if contextWindowFailure(body) {
 			failure = &llm.Error{Code: llm.ErrorContextWindow, Provider: provider.id, HTTPStatus: response.StatusCode}
 		}
-		return llm.Completion{}, failure
+		return zero, failure
 	}
 	return consume(io.LimitReader(response.Body, maxProviderResponseBytes+1))
+}
+
+// decodeJSON strictly bounds and decodes one non-streaming provider response.
+func decodeJSON(body io.Reader, providerID string, target any) error {
+	encoded, err := io.ReadAll(body)
+	if err != nil {
+		return &llm.Error{Code: llm.ErrorProtocol, Provider: providerID, Cause: err}
+	}
+	if len(encoded) > maxProviderResponseBytes {
+		return &llm.Error{Code: llm.ErrorProtocol, Provider: providerID, Cause: errors.New("response exceeds size limit")}
+	}
+	if err := json.Unmarshal(encoded, target); err != nil {
+		return &llm.Error{Code: llm.ErrorProtocol, Provider: providerID, Cause: err}
+	}
+	return nil
 }
 
 func contextWindowFailure(body []byte) bool {

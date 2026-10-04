@@ -21,6 +21,10 @@ const (
 	OrderGlob = 1400
 	// OrderGrep positions content-search guidance.
 	OrderGrep = 1500
+	// OrderWebSearch positions web-search guidance.
+	OrderWebSearch = 2000
+	// OrderWebFetch positions web-fetch guidance.
+	OrderWebFetch = 2100
 )
 
 // Invocation is the runtime context of one validated call. Journal is the
