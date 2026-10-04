@@ -22,4 +22,8 @@ Dependabot PR #3 更新手动发布 workflow 的 `actions/upload-artifact` v6 �
 ## Verification
 
 - 已核对官方 release notes、v7 action.yml 的 archive 默认值和 Node runtime，以及本仓上传/下载参数。
-- 基于主干 `ae65160` 的 `make check`、Actionlint v1.7.12 和 `make release-check` 通过；Go 1.27.0 / macOS arm64 的 race、lint、逐文件 100% coverage、binary smoke 全部通过。远端上传验证尚待执行，正式 publish 保持关闭。
+- 基于主干 `ae65160` 的 `make check`、Actionlint v1.7.12 和 `make release-check` 通过；Go 1.27.0 / macOS arm64 的 race、lint、逐文件 100% coverage、binary smoke 全部通过。正式 publish 保持关闭。
+
+- 对提交 `790034b8a27e42692b8b0e45d05f103b049f5f54` 执行 `gh workflow run release.yml --ref dependabot/github_actions/actions/upload-artifact-7 -f publish=false`；[run 37185008485](https://github.com/jinyule/nano-harness/actions/runs/37185008485) 成功，build/upload 通过，Publish GitHub Release 明确 skipped。v7 上传 artifact `11296617167`，包含预期命名的 zip 容器。
+- `gh run download 37185008485 --name nano-harness-release-37185008485 --dir /tmp/nano-pr3-upload-37185008485` 下载成功；`scripts/verify-release.sh /tmp/nano-pr3-upload-37185008485` 校验六个 archive 与 checksums.txt 的精确集合及全部 SHA-256。`scripts/smoke-release.sh /tmp/nano-pr3-upload-37185008485` 再次校验后运行 macOS arm64 包内 binary，输出 0.0.1-next 及上述提交；Linux 宿主 smoke 已由远端 build 完成，未宣称六个平台都原生执行。
+- 上述提交的 PR CI run `37185004864` 全部通过；此后只补充本 Note 的验证证据，workflow 和产品 tree 不变，最终文档提交仍须通过准确 head 的完整 CI。
