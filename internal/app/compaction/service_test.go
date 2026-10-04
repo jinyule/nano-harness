@@ -34,7 +34,7 @@ type compactionPrepared struct {
 }
 
 func (*compactionPrepared) Info() llm.ModelInfo {
-	return llm.ModelInfo{Provider: "openai", ID: "gpt-5.6-luna", ContextWindow: 200_000}
+	return llm.ModelInfo{Provider: "openai", ID: "gpt-5.6-luna", Effort: session.EffortMax, ContextWindow: 1_050_000}
 }
 func (*compactionPrepared) CredentialEnv() string { return "OPENAI_API_KEY" }
 func (*compactionPrepared) Refresh(_ context.Context, credential llm.Credential) (llm.Credential, error) {
@@ -175,6 +175,9 @@ func TestLifecyclePressureAndSuccessfulCompaction(t *testing.T) {
 	compacted, err = harness.service.Maybe(context.Background(), Request{Journal: journal, Turn: 1, Force: true})
 	if err != nil || !compacted || len(journal.records) != 3 || journal.records[1].Type != session.RecordCompactionSummary || journal.records[2].Type != session.RecordCompactionEnd {
 		t.Fatalf("compacted=%t records=%#v err=%v", compacted, journal.records, err)
+	}
+	if summary := journal.records[1].Compaction; summary.Provider != "openai" || summary.Model != "gpt-5.6-luna" || summary.Effort != session.EffortMax {
+		t.Fatalf("compaction model identity=%#v", summary)
 	}
 	if err := harness.serviceScope.Close(context.Background()); err != nil {
 		t.Fatal(err)
