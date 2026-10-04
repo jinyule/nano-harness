@@ -54,7 +54,7 @@ jobs:
           }
           [[ -f LICENSE ]] || { echo "LICENSE is required before publication" >&2; exit 1; }
       - name: Run source gates
-        run: make quick coverage build
+        run: make quick coverage mutation build
       - name: Build release candidate
         if: inputs.publish
         uses: goreleaser/goreleaser-action@v7
@@ -106,25 +106,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --draft --verify-tag --generate-notes --title "$TAG"
-          fi
-
-          remote_dir="$(mktemp -d)"
-          trap 'rm -rf -- "$remote_dir"' EXIT
-          remote_names="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
-          for artifact in release-artifacts/*; do
-            name="$(basename "$artifact")"
-            if grep -Fxq "$name" <<<"$remote_names"; then
-              gh release download "$TAG" --pattern "$name" --dir "$remote_dir"
-              cmp "$artifact" "$remote_dir/$name" || {
-                echo "release asset $name exists with different content" >&2
-                exit 1
-              }
-            else
-              gh release upload "$TAG" "$artifact"
-            fi
-          done
-          gh release edit "$TAG" --draft=false
+        run: scripts/publish-release.sh release-artifacts "$TAG"

@@ -1,0 +1,22 @@
+version: "2"
+run:
+  timeout: 5m
+  relative-path-mode: gomod
+  modules-download-mode: readonly
+  tests: false
+linters:
+  default: none
+  enable: [gocyclo]
+  settings:
+    gocyclo:
+      min-complexity: 10
+  exclusions:
+    generated: strict
+    presets: []
+    rules:
+      - path: internal/tools/
+        linters: [gocyclo]
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false

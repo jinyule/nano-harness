@@ -12,7 +12,7 @@
 
 1. `.goreleaser.yml` 定义发布目标；`scripts/verify-release.sh` 对应六个 OS/架构组合，要求同一版本、正确扩展名、六个唯一 checksum 条目和恰好七个普通文件。变更目标时同一 diff 更新配置、验证器、测试与 CI/CD 文档。
 2. `scripts/prepare-release.sh` 把候选 archive 与清单复制到新建 payload 目录，保留 symlink 形态以便验证器拒绝；不复用已有目录，不复制 GoReleaser build metadata。
-3. 验证器先检查清单语法与集合，再验证 SHA-256；smoke 完整复验后才解包和执行。publish 下载同一 artifact，调用同一验证器并要求版本等于 tag 后缀，然后沿既有逐 asset 比较路径上传。
+3. 验证器先检查清单语法与集合，再验证 SHA-256；smoke 完整复验后才解包和执行。publish 下载同一 artifact，调用同一验证器并要求版本等于 tag 后缀，然后按 [ADR-0006](0006-executable-engineering-evidence.md) 拒绝远端额外项、补齐合法子集，并重验远端完整集合和字节后发布。
 4. build 与 publish 的权限分离、Environment 审批、tag 手动触发和不重新构建产品的规则继续生效。publish 的 checkout 仅供执行该 release commit 的校验脚本。
 5. 永久回归测试同时验证正常 payload 和无效输入；损坏宿主 archive 的测试必须证明其中的可执行文件没有运行，而不只断言最终命令失败。
 

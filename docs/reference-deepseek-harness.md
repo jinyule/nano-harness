@@ -134,3 +134,11 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 4. 同步规则、适用门禁、Agent Note 和必要 ADR；运行 `make submodule`、相关负例、`make check`，发布面变化另做配置和真实 archive 验证。
 
 本次实施和实际检查记录见[2026-10-04 更新 Note](../.agents/notes/implemented/2026-10-04-refresh-deepseek-reference.md)。
+
+## 工程执行证据补充
+
+2026-10-04 复查远端默认分支仍为 `5badb15009ae1756c3afe0ae0cef1faafc290ccc`，不再更新 gitlink。上游入口检查与 `scripts/run-gates.ts` 的 duplication lane 补充了可采纳的执行方法。本仓现在按 [ADR-0006](decisions/0006-executable-engineering-evidence.md) 补齐跨平台源码依赖/入口检查、远端 Release 精确集合、定向 mutation 与固定 v2 样本；复杂度/重复/性能由独立观察 workflow 收集基线。
+
+三个参考工具固定调查于 crapper `9f1bead298b5a9d576bdd6319289fcf426e5b18a`、dryer `66ff6d21a42c04afcad89c78a80066176d1294b0`、mutator `c57f03879a08d2afe8c7e044e86c80bb164afd30`。采纳复杂度、结构重复候选和断言反例的方法；不直接引入 Python 工具。mutator 的编译失败计 killed、函数源码缓存不随测试变化失效、缺失 coverage 仍成功均有本机反例。本仓使用固定 Go 分析器及有限、无缓存、明确分类的回归变异，详细规范归[开发规范](development.md#复杂度与重复代码)与[测试策略](testing.md#定向-mutation-与断言有效性)。
+
+这次补充与此前只更新参考指针的工作范围不同，验证和重叠决定见[工程证据 Note](../.agents/notes/implemented/2026-10-04-engineering-evidence-gates.md)。未复制上游实现，不放宽插件化、逐文件 coverage、Agent Note、durable chunk 或数据责任。

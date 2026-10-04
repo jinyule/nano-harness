@@ -19,12 +19,15 @@
 | `lint` | Go 1.26.x 下运行固定版本 golangci-lint 与配置 schema |
 | `test` | Go 1.26/1.27 兼容、race 和单元测试 |
 | `coverage` | 主版本 Linux 下执行逐产品源文件 100% 门槛 |
+| `mutation` | 无缓存、私有副本执行七个已审查高风险回归；仅具名测试失败算 killed |
 | `build` | Linux/macOS/Windows 从真实 `cmd` 构建并运行 `version` |
 | `security` | `govulncheck` 的可达漏洞分析 |
 | `release-dry-run` | GoReleaser 构建跨平台制品，验证精确 payload 并执行 Linux 宿主 archive，不发布 |
 | `all-checks-passed` | fail-closed 汇总阻断结果 |
 
 新增阻断 lane 必须加入汇总 job。观察性/昂贵信号若暂不阻断，应位于单独 workflow，不能用 `continue-on-error` 伪装成绿色阻断项。
+
+Release build 也运行 `make mutation`，避免手动 tag 发布绕过已校准的回归门禁。
 
 Go matrix 包含 `go.mod` 最低版本和 `.go-version` 主版本。最低版本使用 `GOTOOLCHAIN=local`，确保没有自动下载更高工具链掩盖兼容错误。
 
@@ -82,4 +85,8 @@ PR dry-run、release build 和 publish 共用这些脚本；publish 额外传入
 
 ## 回滚与部分失败
 
-GitHub Release 和 tag 不应因普通缺陷被删除或覆盖。发现问题时撤下/标记受影响 release，并发布新 patch；必要时提供已知问题和缓解方式。若上传部分制品后失败，先比较已上传 asset 的哈希：相同则安全重跑，任何不同都停止并升版本调查不可复现构建。
+GitHub Release 和 tag 不应因普通缺陷被删除或覆盖。发现问题时撤下/标记受影响 release，并发布新 patch；必要时提供已知问题和缓解方式。[`publish-release.sh`](../scripts/publish-release.sh) 在恢复前要求远端 asset 名称为已验证 payload 的无重复子集，拒绝额外项而不删除。已有同名 asset 下载后逐字节比较，缺少项才上传；上传后重新读取完整集合并下载全部 asset 比较，全部一致才解除 draft。查询、下载、上传失败或任何不同均停止；调查不可复现构建并按需升版本。远端有额外项时由维护者调查，脚本不自动清理。并发外部修改不受本地检查原子保护；发布 workflow 保持串行。
+
+## 独立质量观察
+
+`.github/workflows/quality.yml` 在 PR、main push 或手动运行复杂度/跨包重复与性能两个 job，不属于 required 汇总。候选指标可以存在；分析器或 benchmark 运行错误使观察 job 失败，不使用 continue-on-error。报告作为 artifact 保存，PR 对比使用真实 base SHA；本地对应 `make quality-tests quality BASE_REF=<ref>` 和 `make benchmark`，细节分别由开发规范和测试策略拥有。只有校准并通过目标负例的门禁才进入 required 汇总。

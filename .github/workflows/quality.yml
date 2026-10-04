@@ -1,0 +1,67 @@
+name: Quality observations
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  quality:
+    name: Complexity and duplication report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Install pinned analyzer
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+      - name: Validate analyzers and write observations
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: make quality-tests quality
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: quality-observations
+          include-hidden-files: true
+          path: |
+            .cache/quality/lint.json
+            .cache/quality/summary.json
+            .cache/quality/duplicates.txt
+          if-no-files-found: warn
+
+  performance:
+    name: Session performance observations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+          cache: true
+      - run: make benchmark
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: performance-observations
+          include-hidden-files: true
+          path: .cache/benchmark/
+          if-no-files-found: warn

@@ -25,7 +25,7 @@ func assistantMessage(text string) *coresession.Message {
 	return &coresession.Message{Role: coresession.RoleAssistant, Source: coresession.MessageSource{Kind: "provider"}, Content: []coresession.ContentBlock{{Type: coresession.ContentText, Text: text}}}
 }
 
-func startManager(t *testing.T) (*Manager, *plugin.Scope) {
+func startManager(t testing.TB) (*Manager, *plugin.Scope) {
 	t.Helper()
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil { //nolint:gosec // directories require owner execute permission
@@ -42,7 +42,7 @@ func startManager(t *testing.T) (*Manager, *plugin.Scope) {
 	return manager, scope
 }
 
-func appendRecord(t *testing.T, log *Log, record coresession.Record) coresession.Event {
+func appendRecord(t testing.TB, log *Log, record coresession.Record) coresession.Event {
 	t.Helper()
 	event, err := log.Append(context.Background(), record)
 	if err != nil {
@@ -51,7 +51,7 @@ func appendRecord(t *testing.T, log *Log, record coresession.Record) coresession
 	return event
 }
 
-func appendClosedTurn(t *testing.T, log *Log, turn uint64) {
+func appendClosedTurn(t testing.TB, log *Log, turn uint64) {
 	t.Helper()
 	appendRecord(t, log, coresession.Record{Type: coresession.RecordTurnStart, Turn: turn})
 	appendRecord(t, log, coresession.Record{Type: coresession.RecordUserMessage, Turn: turn, Message: userMessage("hello")})

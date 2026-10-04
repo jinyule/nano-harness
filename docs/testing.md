@@ -29,7 +29,7 @@
 
 golden/expected output 由拥有行为的测试维护，CI 只比较，不自动重写。更新记录不能同时把被测工具产生的工作区内容当成新的正确答案；写操作还须独立比较期望文件树，并证明不相关文件字节未变。仅归一化路径、时间等明确的非语义差异，不能消除顺序、身份关系或失败状态。
 
-`make workflow-tools` 运行范围脚本、覆盖率原始计数和发布制品校验的永久回归测试；它同时进入本地 quick/check 与 CI static lane。
+`make workflow-tools` 运行范围脚本、覆盖率原始计数、发布制品与远端恢复校验，以及 mutation 执行器的永久回归测试（需要 Python 3）；它同时进入本地 quick/check 与 CI static lane。
 
 ## Plugin 生命周期
 
@@ -124,3 +124,27 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 ## 提交前证据
 
 优先运行覆盖变更面的最小 race 测试。准备交付时运行一次 `make check`；只有 CI 诊断、发布或明确要求时再运行 `make ci`。最终 Agent Note 记录实际执行命令、外部可观察结果、明确未执行项和无 submodule/credential/无关生成物的工作树审计。
+
+## 定向 mutation 与断言有效性
+
+`make mutation` 执行 `scripts/mutation-cases.json` 中七个已审查回归：Scope cleanup 顺序、approval never、会话序号、事件因果、文件大小、路径逃逸和已提交输出后的 retry。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
+
+执行器使用 Python 3 标准库，在 Unix 私有临时目录复制当前 cmd/internal、go.mod/go.sum（包含未提交源码与测试），拒绝源 symlink；不在工作树变异，不运行用户数据，不复用历史结果。每项先运行明确选择的真实测试且至少一个测试通过，再变异、独立编译、以 `-count=1` 重跑。只有 Go JSON 输出中的具名测试失败可认定 killed；build-error、timeout、infrastructure-error、no-tests、baseline failure、stale-site 和 survived 全部失败。当前列举的每个 site 都执行，不依赖 coverage 筛选，因此没有“缺失 coverage 就跳过”的成功路径。空集合、重复 ID 或找不到唯一替换位置均拒绝。超时终止并等待整个测试进程组；临时树最终清理。
+
+正例和反例必须共同约束可接受输入：仅断言非法记录返回错误，无法发现误拒全部合法输入。修改高风险行为时，同步维护 owning tests 与对应 mutation；新增 site 必须说明目标回归，不为提高分数添加无价值变异。等价变异先审查并解释，不以宽泛排除隐藏存活。未来若引入自动枚举器或 coverage 过滤，必须新增 invalid/uncovered/no-sites 分类和缺失证据负例；若引入缓存，键包含测试、依赖、工具链、命令、平台和 coverage 来源。
+
+`python3 scripts/mutation-check_test.py` 用真实 Go 模块证明有效断言杀死变异、删除断言后存活（无缓存）、编译失败不算 killed、零测试/陈旧 site/空集合失败，并验证进程超时分类。结果写入 `.cache/mutation/report.json`，CI 保存报告；超时不是成功证据。
+
+## 持久化固定样本
+
+`internal/adapter/session/jsonl/testdata/session-v2.jsonl` 是手写、已审查的合成 v2 协议样本，没有生成器或自动刷新开关。`TestSessionV2_FrozenContract` 从真实 Manager/Inspect/Open 读取、投影并确认关闭会话不改字节；writer 使用独立构造的记录精确比较同一格式，避免 writer/reader 一起改错而 round-trip 仍绿。`TestSessionV2_RejectsChangedContract` 拒绝旧/未来版本、未知字段/记录、序号缺口和非法 step。
+
+修改持久化字段、枚举、顺序、版本或恢复语义时，PR 明确选择同版本兼容、严格拒绝旧版或迁移，给出样本与因果/事务证据并更新架构和 ADR。固定样本不是全部记录类型的 schema catalog，也不代替现有图片、compaction、subagent、错误恢复和 I/O rollback 测试。CI 不重写样本，nano v2 严格拒绝旧格式的承诺不变。
+
+## 性能观测与预算
+
+`make benchmark` 保存五次固定迭代的原始 Go benchmark 样本及 Go/OS/架构到 `.cache/benchmark/`。Session 场景使用合成的 10/1000 turn、11 个事件/turn，测量真实 JSONL Inspect 加 Surface 且保持结果可达；创建输入不计时，首次读取以后可能命中 OS cache，不宣称冷启动。durable turn 计入创建、11 次验证/fsync append、关闭和 lock 释放；删除已完成文件不计时。TUI 场景测量 100/4000 行下的真实投影、换行及 viewport 渲染，并检查最新文本可见；它不覆盖终端 I/O、完整 View、键盘输入延迟或端到端响应时间。
+
+报告 ns/op、B/op、allocs/op 和输入尺寸；B/op 是分配总量，不是 retained heap 或峰值内存。需要保留堆/峰值结论时另加带存活对象的 heap/进程测量。不能把本地样本直接作为 CI 毫秒硬预算。性能变更先记录真实入口、用户操作终点、典型/尾部负载、冷暖状态、排除项、原始样本与失败语义；同一输入和结果责任下比较，不并发跑自己拥有的 CPU 密集任务。
+
+性能硬门禁须先在实际 CI runner 校准重复样本和方差，明确绝对值、比例和内存预算；注入延迟或重复工作作为负对照必须触发失败。未校准阶段只观察，不用幸运重跑或放宽预算隐藏回归；不通过取消校验、fsync、cleanup 或权威日志来换性能。
