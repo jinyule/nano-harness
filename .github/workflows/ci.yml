@@ -85,6 +85,26 @@ jobs:
       - name: Enforce product coverage floor
         run: make coverage
 
+  mutation:
+    name: Targeted mutation regressions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+          cache: true
+      - run: make mutation
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mutation-report
+          include-hidden-files: true
+          path: .cache/mutation/report.json
+          if-no-files-found: warn
+
   build:
     name: Build / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -144,7 +164,7 @@ jobs:
     name: All checks passed
     if: always()
     runs-on: ubuntu-latest
-    needs: [static, lint, test, coverage, build, security, release-dry-run]
+    needs: [static, lint, test, coverage, mutation, build, security, release-dry-run]
     steps:
       - name: Fail closed on every required job
         env:

@@ -1,0 +1,51 @@
+[
+  {
+    "id": "scope-cleanup-order",
+    "file": "internal/core/plugin/scope.go",
+    "before": "slices.Backward(cleanups)",
+    "after": "slices.All(cleanups)",
+    "test": "^TestScope_Close$"
+  },
+  {
+    "id": "approval-never",
+    "file": "internal/app/approval/service.go",
+    "before": "outcome, source = session.ApprovalRejected, \"policy\"",
+    "after": "outcome, source = session.ApprovalAllowedOnce, \"policy\"",
+    "test": "^TestServiceDecisionsAndPolicy$"
+  },
+  {
+    "id": "session-sequence",
+    "file": "internal/adapter/session/jsonl/jsonl.go",
+    "before": "event.Sequence != uint64(index+1)",
+    "after": "event.Sequence != uint64(index+2)",
+    "test": "^TestSessionV2_(FrozenContract|RejectsChangedContract)$"
+  },
+  {
+    "id": "session-causality",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": "state.turn != 0 || record.Turn != state.lastTurn+1",
+    "after": "state.turn != 0 || record.Turn != state.lastTurn",
+    "test": "^TestSessionV2_(FrozenContract|RejectsChangedContract)$"
+  },
+  {
+    "id": "workspace-size",
+    "file": "internal/adapter/tool/workspace/files.go",
+    "before": "info.Size() > maxReadBytes",
+    "after": "info.Size() > maxReadBytes*2",
+    "test": "^TestReadTool_RejectsInvalidUnsafeAndUnreadableInput$"
+  },
+  {
+    "id": "workspace-escape",
+    "file": "internal/adapter/tool/workspace/workspace.go",
+    "before": "clean == \"..\" || strings.HasPrefix(clean, \"..\"+string(filepath.Separator))",
+    "after": "clean == \"..\"",
+    "test": "^TestArgumentAndPathHelpers_RejectAmbiguityAndEscape$"
+  },
+  {
+    "id": "retry-after-commit",
+    "file": "internal/app/retry/service.go",
+    "before": "emitted || !retryable || retryNumber >= policy.MaxRetries",
+    "after": "!emitted || !retryable || retryNumber >= policy.MaxRetries",
+    "test": "^TestServiceRetriesAndStops$"
+  }
+]

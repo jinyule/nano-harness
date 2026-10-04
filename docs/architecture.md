@@ -30,9 +30,10 @@ internal/platform
 | `internal/app` | 用例、消费方接口、事务与生命周期协调 | `internal/app`、`internal/core` |
 | `internal/adapter/<capability>` | 网络、文件、终端、持久化等能力实现 | `app`、`core`、`platform`、同一 adapter 子树 |
 | `internal/platform` | 无领域含义的 OS、进程、时钟薄封装 | `internal/platform` |
+| `internal/version` | 纯构建版本元数据，仅供 cmd 使用 | 无本仓依赖 |
 | `internal/tools` | 仓库门禁 | 不进入产品依赖图 |
 
-`go run ./internal/tools/archcheck` 强制上述方向。新增例外必须先修改本文和 ADR，再修改检查器；不能用 lint 例外绕过依赖错误。
+`go run ./internal/tools/archcheck` 强制上述方向。检查器解析全部非测试 Go 源文件（含其他平台和自定义 build tags），以 Go 工具报告的标准库集合识别标准库；core/app 禁止第三方依赖，产品各层禁止导入仓库工具。cmd 仅可导入产品层与既有的纯 `internal/version` 元数据，其他 main 只允许位于 internal/tools。third_party、vendor、testdata 和构建输出不属于产品源码范围。新增例外必须先修改本文和 ADR，再修改检查器；不能用 lint 例外绕过依赖错误。
 
 ## 产品启动入口
 

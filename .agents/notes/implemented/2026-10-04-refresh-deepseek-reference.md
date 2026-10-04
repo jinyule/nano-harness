@@ -17,6 +17,8 @@
 
 ## Consequences
 
+[工程证据门禁 Note](2026-10-04-engineering-evidence-gates.md)补充架构/入口、远端发布恢复和质量检查；本 Note 仍保留参考更新及其原有实施证据，不归档。
+
 当前 checkout 提供新的研究基线，但不证明上游全部增量安全或测试通过。根 MIT LICENSE 未变，第三方 notices 和局部许可证有变化；未复制、安装或分发上游代码。上游 writer 常量为 4，而文档 publication record 仍为 3；本次只记录这项差异，不断言实际发布状态或跨项目格式兼容。
 
 [2026-09-05 Note](2026-09-05-refresh-deepseek-reference.md)继续拥有覆盖率与发布门禁的决策和回归证据，本 Note 只替换参考基线并补充增量取舍；两者双向链接，不归档。初始基线、skills 适配及核心 harness 的决定仍有效。归档记录未修改。

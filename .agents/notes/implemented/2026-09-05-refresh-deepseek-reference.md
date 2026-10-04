@@ -21,6 +21,8 @@ coverage gate 检查原始 block 的语句数和执行次数，保留已有逐�
 
 ## Consequences
 
+[工程证据门禁 Note](2026-10-04-engineering-evidence-gates.md)补充架构/入口、远端发布恢复和质量检查；本 Note 仍保留参考更新及其原有实施证据，不归档。
+
 [2026-10-04 参考更新](2026-10-04-refresh-deepseek-reference.md)拥有后续 gitlink 与上游增量再评估；本 Note 继续拥有测试及发布门禁的实施理由和回归证据，未被整体取代。
 
 精确规则获得负例与实际命令支持，损坏制品在执行前失败，格式化 coverage 不再掩盖未覆盖 block。增加发布目标时必须同步 GoReleaser 配置、集合验证、测试与文档；publish checkout 仅执行同一 release commit 的脚本，不重新编译产品。平台原生执行、远端发布与 live provider 证据仍独立报告。

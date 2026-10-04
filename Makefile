@@ -10,7 +10,7 @@ GO_FILES := $(shell find cmd internal -type f -name '*.go' 2>/dev/null)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap hooks fmt fmt-check tidy mod-check vet lint test coverage architecture submodule agent-notes skills change-scope workflow-tools build tui-e2e tui-fixture debug-tools debug-fixture vuln release-check quick check ci clean
+.PHONY: help bootstrap hooks fmt fmt-check tidy mod-check vet lint test coverage architecture submodule agent-notes skills change-scope workflow-tools quality quality-tests mutation benchmark build tui-e2e tui-fixture debug-tools debug-fixture vuln release-check quick check ci clean
 
 help: ## Show available commands.
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -67,6 +67,26 @@ workflow-tools: ## Test deterministic repository workflow helpers.
 	scripts/change-scope_test.sh
 	scripts/coverage_test.sh
 	scripts/verify-release_test.sh
+	python3 scripts/publish-release_test.py
+	python3 scripts/mutation-check_test.py
+
+quality: ## Report complexity and cross-package duplication (optional BASE_REF).
+	python3 scripts/quality-report.py $(if $(BASE_REF),--base "$(BASE_REF)")
+
+quality-tests: ## Prove quality analyzer findings and infrastructure failures.
+	python3 scripts/quality-report_test.py
+
+mutation: ## Kill the reviewed high-risk regression mutations in a private copy.
+	python3 scripts/mutation-check.py
+
+benchmark: ## Observe session replay, durable append and TUI rendering costs (no timing gate).
+	mkdir -p .cache/benchmark
+	$(GO) version > .cache/benchmark/environment.txt
+	$(GO) env GOOS GOARCH >> .cache/benchmark/environment.txt
+	$(GO) test -run '^$$' -bench '^BenchmarkSession' -benchmem -benchtime=1x -count=5 ./internal/adapter/session/jsonl > .cache/benchmark/session.txt
+	cat .cache/benchmark/session.txt
+	$(GO) test -run '^$$' -bench '^BenchmarkTranscriptUpdate' -benchmem -benchtime=1x -count=5 ./internal/adapter/tui > .cache/benchmark/tui.txt
+	cat .cache/benchmark/tui.txt
 
 build: ## Build the command from its real entry path.
 	mkdir -p bin
@@ -93,9 +113,9 @@ vuln: ## Check reachable dependencies against the Go vulnerability database.
 release-check: ## Validate the GoReleaser configuration.
 	goreleaser check
 
-quick: fmt-check mod-check vet test architecture submodule agent-notes skills workflow-tools ## Run dependency-free local gates.
+quick: fmt-check mod-check vet test architecture submodule agent-notes skills workflow-tools ## Run local gates without extra analyzers (Go, Git, Python 3).
 
-check: quick lint coverage build ## Run all normal pre-push gates.
+check: quick lint coverage mutation build ## Run all normal pre-push gates.
 
 ci: check vuln release-check ## Run the complete CI-equivalent gate set.
 

@@ -25,6 +25,9 @@ make coverage        # 每个产品源文件 100% coverage
 make agent-notes     # Agent Note 格式/PR 携带检查
 make skills          # repo-local skills 元数据、契约与链接检查
 make change-scope    # 首次提交前检查工作树；有提交后设置 BASE_REF
+make mutation        # 私有副本中验证高风险回归确实被测试拒绝
+make quality         # 复杂度/跨包重复观察，需固定版 golangci-lint
+make benchmark       # 合成负载性能观察，不设未经校准的硬预算
 make build           # 从真实 cmd 入口构建并 smoke test
 ```
 
@@ -77,6 +80,7 @@ make build           # 从真实 cmd 入口构建并 smoke test
 - 正常门禁运行 `go test -race -count=1 ./...`。每个产品源文件 statement coverage 必须为 100%；只有不可插桩生成代码等客观例外可通过局部配置排除，并须 Agent Note、替代证据和 reviewer 批准。不要为覆盖率保留无价值分支，优先删除死代码。
 - 每个插件必须测试启动贡献、逆序 cleanup、启动失败回滚和 shutdown 后静止；registry 贡献在 scope 关闭后必须不可见。
 - 修复缺陷必须先有可复现失败的永久测试。用户、模型、协议或持久化可见变化必须有 assembled/e2e 或 golden 证据。
+- 高风险回归使用 `make mutation` 的无缓存定向变异验证断言；复杂度、重复和性能按 docs/development.md 与 docs/testing.md 的证据和校准规则执行。
 - 新增或修复门禁必须用无效输入证明它会因目标规则失败；并发 fixture 按[测试策略](docs/testing.md)隔离端口、路径和进程全局状态，不能靠重跑变绿判断修复完成。
 
 ## 文档与决策
