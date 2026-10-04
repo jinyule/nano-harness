@@ -58,8 +58,9 @@ func TestRunnerRun_ValidatesRequestAndPaths(t *testing.T) {
 		func(request *Request) { request.Path = "" },
 		func(request *Request) { request.Root = "" },
 		func(request *Request) { request.Cwd = "" },
-		func(request *Request) { request.TempDir = "" },
+		func(request *Request) { request.TempDir, request.Mode = "", ModeWorkspace },
 		func(request *Request) { request.Mode = "unknown" },
+		func(request *Request) { request.StdoutLimit = -1 },
 		func(request *Request) { request.Timeout = 0 },
 		func(request *Request) { request.Timeout = 11 * time.Minute },
 		func(request *Request) { request.Cwd = filepath.Dir(temporary) },
@@ -99,6 +100,17 @@ func TestRunnerRun_ReportsStreamsExitSignalTimeoutAndCancellation(t *testing.T) 
 	if err != nil || result.ExitCode != 0 || result.Stdout.Text != "extra|"+root+"|"+resolvedWork+"|" || result.Stderr.Text != "oops" || result.Signal != "" || result.TimedOut {
 		t.Fatalf("result = %+v, error = %v", result, err)
 	}
+
+	// Host mode may omit the temporary directory; TMPDIR is then unset.
+	request.Args, request.TempDir = []string{"-c", `printf '%s' "${TMPDIR-unset}"`}, ""
+	if result, err = runner.Run(context.Background(), request); err != nil || result.Stdout.Text != "unset" {
+		t.Fatalf("no temporary directory = %+v, error = %v", result, err)
+	}
+	request.Args, request.StdoutLimit = []string{"-c", "printf 0123456789"}, 8
+	if result, err = runner.Run(context.Background(), request); err != nil || result.Stdout.Text != "23456789" || !result.Stdout.Truncated {
+		t.Fatalf("limited host result = %+v, error = %v", result, err)
+	}
+	request.TempDir, request.StdoutLimit = root, 0
 
 	request.Args = []string{"-c", "printf failure; exit 7"}
 	result, err = runner.Run(context.Background(), request)

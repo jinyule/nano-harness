@@ -126,11 +126,12 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
-	searchTools, err := newSearchTools(toolRuntime, workspaceRoot)
+	processes := platformprocess.New()
+	searchTools, err := newSearchTools(toolRuntime, processes, workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
-	shellTools, err := newShellTools(toolRuntime, platformprocess.New(), workspaceRoot)
+	shellTools, err := newShellTools(toolRuntime, processes, workspaceRoot)
 	if err != nil {
 		return nil, err
 	}

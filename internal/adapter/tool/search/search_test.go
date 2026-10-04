@@ -5,10 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -18,6 +17,7 @@ import (
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
+	platformProcess "github.com/jinyule/nano-harness/internal/platform/process"
 )
 
 type denyApprover struct{}
@@ -32,10 +32,31 @@ func (nopJournal) Append(context.Context, session.Record) (session.Event, error)
 	return session.Event{}, nil
 }
 
+// scriptedRunner answers the version probe like a supported ripgrep and
+// replays a fixed result for every search.
+type scriptedRunner struct {
+	version  platformProcess.Result
+	result   platformProcess.Result
+	err      error
+	requests []platformProcess.Request
+}
+
+func (runner *scriptedRunner) Run(_ context.Context, request platformProcess.Request) (platformProcess.Result, error) {
+	runner.requests = append(runner.requests, request)
+	if len(request.Args) == 1 && request.Args[0] == "--version" {
+		return runner.version, nil
+	}
+	return runner.result, runner.err
+}
+
+func supported() platformProcess.Result {
+	return platformProcess.Result{Stdout: platformProcess.Output{Text: "ripgrep 15.2.0 (rev e89fff89ac)\n\nfeatures:+pcre2\n"}}
+}
+
 func restoreHooks(t *testing.T) {
 	t.Helper()
-	read, lstat, file, open, info := readDirectory, lstatPath, readFile, openFile, fileInfo
-	t.Cleanup(func() { readDirectory, lstatPath, readFile, openFile, fileInfo = read, lstat, file, open, info })
+	look, lstat := lookPath, lstatPath
+	t.Cleanup(func() { lookPath, lstatPath = look, lstat })
 }
 
 type harness struct {
@@ -44,14 +65,15 @@ type harness struct {
 	provider *Provider
 }
 
-func newHarness(t *testing.T) *harness {
+// newHarness starts the provider over the given runner. The workspace sits
+// below a private parent so ripgrep's repository detection sees only
+// directories this test controls.
+func newHarness(t *testing.T, runner Runner) *harness {
 	t.Helper()
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The workspace sits below a private parent so the Git probe above the
-	// root sees only directories this test controls.
 	directory := filepath.Join(base, "workspace")
 	if err := os.Mkdir(directory, 0o700); err != nil {
 		t.Fatal(err)
@@ -65,9 +87,9 @@ func newHarness(t *testing.T) *harness {
 	if err := runtime.Start(context.Background(), runtimeScope); err != nil {
 		t.Fatal(err)
 	}
-	provider, err := New(runtime, root)
+	provider, err := New(runtime, runner, root)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("ripgrep is a required test dependency: %v", err)
 	}
 	if err := provider.Start(context.Background(), providerScope); err != nil {
 		t.Fatal(err)
@@ -90,6 +112,14 @@ func (h *harness) write(t *testing.T, name, content string) {
 	}
 }
 
+func (h *harness) touch(t *testing.T, name string, offset time.Duration) {
+	t.Helper()
+	moment := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Add(offset)
+	if err := os.Chtimes(filepath.Join(h.root, filepath.FromSlash(name)), moment, moment); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (h *harness) call(t *testing.T, name string, arguments map[string]any) session.ToolResult {
 	t.Helper()
 	encoded, err := json.Marshal(arguments)
@@ -102,29 +132,47 @@ func (h *harness) call(t *testing.T, name string, arguments map[string]any) sess
 	})[0]
 }
 
-func (h *harness) touch(t *testing.T, name string, offset time.Duration) {
-	t.Helper()
-	moment := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Add(offset)
-	if err := os.Chtimes(filepath.Join(h.root, filepath.FromSlash(name)), moment, moment); err != nil {
-		t.Fatal(err)
+// grouped sorts grep file groups, because ripgrep's parallel traversal does
+// not order files and upstream keeps that output order.
+func grouped(output string) string {
+	header, body, found := strings.Cut(output, "\n\n")
+	if !found {
+		return output
 	}
+	groups := strings.Split(body, "\n\n")
+	slices.Sort(groups)
+	return header + "\n\n" + strings.Join(groups, "\n\n")
 }
 
-func TestProvider_ValidatesRegistersAndCleansTools(t *testing.T) {
+func TestProvider_ResolvesVerifiesAndRegisters(t *testing.T) {
+	restoreHooks(t)
 	runtime, _ := appTool.New(denyApprover{})
 	root, _ := workspace.Resolve(t.TempDir())
-	if _, err := New(nil, root); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("nil runtime = %v", err)
+	runner := &scriptedRunner{version: supported()}
+	for _, test := range []struct {
+		runtime *appTool.Runtime
+		runner  Runner
+		root    workspace.Root
+	}{{runner: runner, root: root}, {runtime: runtime, root: root}, {runtime: runtime, runner: runner}} {
+		if _, err := New(test.runtime, test.runner, test.root); !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("New(%+v) = %v", test, err)
+		}
 	}
-	if _, err := New(runtime, workspace.Root{}); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("zero root = %v", err)
+	lookPath = func(string) (string, error) { return "", errors.New("not on PATH") }
+	if _, err := New(runtime, runner, root); !errors.Is(err, ErrRipgrepUnavailable) || !strings.Contains(err.Error(), "install ripgrep 15.0.0 or newer") {
+		t.Fatalf("missing rg = %v", err)
 	}
-	provider, err := New(runtime, root)
-	if err != nil || provider.ID() != "search-tools" || provider.timeout != searchTimeout || provider.rawLimit != rawOutputMaxBytes {
+	lookPath = func(string) (string, error) { return "/tools/rg", nil }
+	provider, err := New(runtime, runner, root)
+	if err != nil || provider.ID() != "search-tools" || provider.ripgrep != "/tools/rg" || provider.timeout != searchTimeout || provider.rawLimit != rawOutputMaxBytes {
 		t.Fatalf("provider = %+v, %v", provider, err)
 	}
 	if err := provider.Start(context.Background(), &plugin.Scope{}); !errors.Is(err, appTool.ErrNotRunning) {
 		t.Fatalf("inactive runtime = %v", err)
+	}
+	probe := runner.requests[0]
+	if probe.Path != "/tools/rg" || probe.Mode != platformProcess.ModeHost || probe.Cwd != root.Path() || probe.Timeout != versionTimeout || probe.TempDir != "" {
+		t.Fatalf("version probe = %+v", probe)
 	}
 	runtimeScope, scope := &plugin.Scope{}, &plugin.Scope{}
 	if err := runtime.Start(context.Background(), runtimeScope); err != nil {
@@ -176,34 +224,85 @@ func TestProvider_ValidatesRegistersAndCleansTools(t *testing.T) {
 	_ = blockerScope.Close(context.Background())
 }
 
-func TestGlob_ListsMatchingFilesOldestFirst(t *testing.T) {
-	h := newHarness(t)
-	for index, name := range []string{"new.ts", "src/old.ts", "src/deep/mid.ts", ".hidden/h.ts", "node_modules/x/n.ts", "src/readme.md", "same-b.ts", "same-a.ts", ".git/HEAD.ts", "sub/.svn/x.ts"} {
+func TestProvider_StartRejectsUnsupportedRipgrep(t *testing.T) {
+	restoreHooks(t)
+	lookPath = func(string) (string, error) { return "/tools/rg", nil }
+	runtime, _ := appTool.New(denyApprover{})
+	runtimeScope := &plugin.Scope{}
+	if err := runtime.Start(context.Background(), runtimeScope); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtimeScope.Close(context.Background()) })
+	root, _ := workspace.Resolve(t.TempDir())
+	output := func(text string) platformProcess.Result {
+		return platformProcess.Result{Stdout: platformProcess.Output{Text: text}}
+	}
+	for _, test := range []struct {
+		name    string
+		version platformProcess.Result
+		want    string
+	}{
+		{"old major", output("ripgrep 14.1.1\n"), "/tools/rg is ripgrep 14.1.1; 15.0.0 or newer is required"},
+		{"not ripgrep", output("grep (GNU grep) 3.11\n"), "did not report a ripgrep version"},
+		{"short version", output("ripgrep 15.2\n"), "did not report a ripgrep version"},
+		{"bad number", output("ripgrep 15.x.0\n"), "did not report a ripgrep version"},
+		{"failed", platformProcess.Result{Stdout: platformProcess.Output{Text: "ripgrep 15.2.0"}, ExitCode: 2}, "did not report"},
+		{"signaled", platformProcess.Result{Signal: "SIGKILL", ExitCode: -1}, "did not report"},
+		{"timed out", platformProcess.Result{TimedOut: true}, "did not report"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			provider, _ := New(runtime, &scriptedRunner{version: test.version}, root)
+			scope := &plugin.Scope{}
+			if err := provider.Start(context.Background(), scope); !errors.Is(err, ErrRipgrepUnavailable) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Start = %v", err)
+			}
+			if catalog, _ := runtime.Catalog(nil); len(catalog.Definitions) != 0 {
+				t.Fatal("unsupported ripgrep registered tools")
+			}
+			_ = scope.Close(context.Background())
+		})
+	}
+	failing, _ := New(runtime, failingRunner{}, root)
+	if err := failing.Start(context.Background(), &plugin.Scope{}); !errors.Is(err, ErrRipgrepUnavailable) || !strings.Contains(err.Error(), "run /tools/rg --version") {
+		t.Fatalf("probe failure = %v", err)
+	}
+	for _, version := range []string{"ripgrep 15.0.0", "ripgrep 15.0.0-beta.1", "ripgrep 15.0.1+local", "ripgrep 16.0.0", "ripgrep 15.1.3 (rev x)"} {
+		accepted, _ := New(runtime, &scriptedRunner{version: output(version)}, root)
+		scope := &plugin.Scope{}
+		if err := accepted.Start(context.Background(), scope); err != nil {
+			t.Fatalf("%s rejected: %v", version, err)
+		}
+		_ = scope.Close(context.Background())
+	}
+}
+
+type failingRunner struct{}
+
+func (failingRunner) Run(context.Context, platformProcess.Request) (platformProcess.Result, error) {
+	return platformProcess.Result{}, errors.New("exec format error")
+}
+
+func TestGlob_RunsRipgrepLikeUpstream(t *testing.T) {
+	h := newHarness(t, platformProcess.New())
+	for index, name := range []string{"new.ts", "src/old.ts", "src/deep/mid.ts", ".hidden/h.ts", "node_modules/x/n.ts", "src/readme.md", "same-b.ts", ".git/HEAD.ts", "sub/.svn/x.ts", "-dash/file.ts"} {
 		h.write(t, name, "x")
 		h.touch(t, name, time.Duration(10-index)*time.Hour)
 	}
-	h.touch(t, "same-a.ts", 0)
-	h.touch(t, "same-b.ts", 0)
 	h.write(t, ".gitignore", "node_modules/\n")
+	h.touch(t, ".gitignore", 0)
 	if err := os.Symlink(filepath.Join(h.root, "new.ts"), filepath.Join(h.root, "link.ts")); err != nil {
-		t.Fatal(err)
-	}
-	if err := syscall.Mkfifo(filepath.Join(h.root, "pipe.ts"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct {
 		arguments map[string]any
 		want      string
 	}{
-		{map[string]any{"pattern": "*.ts"}, "same-a.ts\nsame-b.ts\nnode_modules/x/n.ts\n.hidden/h.ts\nsrc/deep/mid.ts\nsrc/old.ts\nnew.ts"},
+		{map[string]any{"pattern": "*.ts"}, "-dash/file.ts\nsame-b.ts\nnode_modules/x/n.ts\n.hidden/h.ts\nsrc/deep/mid.ts\nsrc/old.ts\nnew.ts"},
 		{map[string]any{"pattern": "src/*.ts"}, "src/old.ts"},
 		{map[string]any{"pattern": "**/*.md"}, "src/readme.md"},
 		{map[string]any{"pattern": "*.ts", "path": "src"}, "src/deep/mid.ts\nsrc/old.ts"},
 		{map[string]any{"pattern": "*", "path": filepath.Join(h.root, "src", "deep")}, "src/deep/mid.ts"},
-		{map[string]any{"pattern": "*.ts", "path": "new.ts"}, "new.ts"},
-		{map[string]any{"pattern": "*.md", "path": "new.ts"}, "No files found"},
-		{map[string]any{"pattern": "!*.ts", "path": "src"}, "src/readme.md"},
-		{map[string]any{"pattern": "!deep"}, "same-a.ts\nsame-b.ts\nsrc/readme.md\nnode_modules/x/n.ts\n.hidden/h.ts\nsrc/old.ts\nnew.ts\n.gitignore"},
+		{map[string]any{"pattern": "*.ts", "path": "-dash"}, "-dash/file.ts"},
 		{map[string]any{"pattern": "*", "path": ".git"}, "No files found"},
 		{map[string]any{"pattern": "*.none"}, "No files found"},
 	} {
@@ -212,21 +311,24 @@ func TestGlob_ListsMatchingFilesOldestFirst(t *testing.T) {
 			t.Errorf("glob(%v)\n got: %q\nwant: %q", test.arguments, result.Output, test.want)
 		}
 	}
-}
-
-func TestGlob_CapsResultsAndRejectsInvalidInput(t *testing.T) {
-	h := newHarness(t)
 	for index := range globMaxResults + 5 {
-		name := fmt.Sprintf("f%03d.txt", index)
+		name := fmt.Sprintf("many/f%03d.txt", index)
 		h.write(t, name, "x")
 		h.touch(t, name, time.Duration(index)*time.Minute)
 	}
-	result := h.call(t, "glob", map[string]any{"pattern": "*.txt"})
+	result := h.call(t, "glob", map[string]any{"pattern": "*.txt", "path": "many"})
 	lines := strings.Split(result.Output, "\n")
-	if result.IsError || lines[0] != "f000.txt" || lines[99] != "f099.txt" || !strings.HasSuffix(result.Output, "\n\n(Showing 100 of 105 paths. The complete result could not be saved; narrow pattern or path to see more.)") {
-		t.Fatalf("capped = %q", result.Output[len(result.Output)-200:])
+	if result.IsError || lines[0] != "many/f000.txt" || lines[99] != "many/f099.txt" || !strings.HasSuffix(result.Output, "\n\n(Showing 100 of 105 paths. The complete result could not be saved; narrow pattern or path to see more.)") {
+		t.Fatalf("capped = %q", result.Output[len(result.Output)-160:])
 	}
+}
+
+func TestGlob_RejectsInvalidInputAndUnsafePaths(t *testing.T) {
+	h := newHarness(t, platformProcess.New())
 	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(h.root, "escape")); err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		arguments map[string]any
 		want      string
@@ -235,9 +337,10 @@ func TestGlob_CapsResultsAndRejectsInvalidInput(t *testing.T) {
 		{map[string]any{"pattern": " "}, "pattern must be a non-empty string"},
 		{map[string]any{"pattern": "*", "path": ""}, "path must be a non-empty string when given"},
 		{map[string]any{"pattern": "*", "path": 3}, `"path" must be a string`},
-		{map[string]any{"pattern": "[x"}, "glob pattern rejected: unclosed character class"},
+		{map[string]any{"pattern": "[x"}, "Error: glob pattern rejected by ripgrep: rg: error parsing glob '[x'"},
 		{map[string]any{"pattern": "*", "path": "missing"}, `glob search failed: "missing" not found`},
 		{map[string]any{"pattern": "*", "path": outside}, "path is outside the workspace"},
+		{map[string]any{"pattern": "*", "path": "escape"}, "path is outside the workspace"},
 		{map[string]any{"pattern": "*", "path": ".."}, "path is outside the workspace"},
 	} {
 		result := h.call(t, "glob", test.arguments)
@@ -245,41 +348,10 @@ func TestGlob_CapsResultsAndRejectsInvalidInput(t *testing.T) {
 			t.Errorf("glob(%v) = %#v, want %q", test.arguments, result, test.want)
 		}
 	}
-	h.provider.rawLimit = 20
-	if result := h.call(t, "glob", map[string]any{"pattern": "*.txt"}); !result.IsError || !strings.Contains(result.Output, "more than 20 bytes of raw output") {
-		t.Fatalf("raw limit = %#v", result)
-	}
-	// A zero budget expires when the context is created, so cancellation is
-	// observed deterministically instead of racing the deadline timer.
-	h.provider.rawLimit, h.provider.timeout = rawOutputMaxBytes, 0
-	if result := h.call(t, "glob", map[string]any{"pattern": "*.txt"}); !result.IsError || result.Output != "Error: glob was aborted before completion (tool timeout or caller cancellation)" {
-		t.Fatalf("timeout = %#v", result)
-	}
 }
 
-func TestGlob_SurfacesTraversalFailures(t *testing.T) {
-	restoreHooks(t)
-	h := newHarness(t)
-	h.write(t, "a.txt", "x")
-	failure := errors.New("io failure")
-	fileInfo = func(fs.DirEntry) (fs.FileInfo, error) { return nil, failure }
-	if result := h.call(t, "glob", map[string]any{"pattern": "*"}); !result.IsError || !strings.Contains(result.Output, "glob search failed: io failure") {
-		t.Fatalf("info failure = %#v", result)
-	}
-	fileInfo = func(entry fs.DirEntry) (fs.FileInfo, error) { return entry.Info() }
-	readDirectory = func(string) ([]os.DirEntry, error) { return nil, failure }
-	if result := h.call(t, "glob", map[string]any{"pattern": "*"}); !result.IsError || !strings.Contains(result.Output, "io failure") {
-		t.Fatalf("readdir failure = %#v", result)
-	}
-	readDirectory = os.ReadDir
-	lstatPath = func(string) (os.FileInfo, error) { return nil, failure }
-	if result := h.call(t, "glob", map[string]any{"pattern": "*"}); !result.IsError || !strings.Contains(result.Output, "glob search failed: io failure") {
-		t.Fatalf("lstat failure = %#v", result)
-	}
-}
-
-func TestGrep_SearchesLikeRipgrepDefaults(t *testing.T) {
-	h := newHarness(t)
+func TestGrep_RunsRipgrepLikeUpstream(t *testing.T) {
+	h := newHarness(t, platformProcess.New())
 	h.write(t, "b.txt", "hello world\r\nnope\nhello again\n")
 	h.write(t, "a.txt", "say hello")
 	h.write(t, ".hidden/h.txt", "hello hidden")
@@ -292,75 +364,46 @@ func TestGrep_SearchesLikeRipgrepDefaults(t *testing.T) {
 	h.write(t, "logs/.gitignore", "!keep.log\n")
 	h.write(t, ".ignore", "*.ignored\n")
 	h.write(t, "bin.dat", "hello\x00binary")
-	h.write(t, "late.txt", strings.Repeat("x\n", binaryPeekBytes/2)+"hello late\x00\nhello after")
 	h.write(t, "latin.txt", "hello caf\xe9")
-	// Without a repository .gitignore is inert but .ignore still applies.
-	result := h.call(t, "grep", map[string]any{"pattern": "hello"})
-	want := "Found 7 matches\n\na.txt\nLine 1: say hello\n\nb.txt\nLine 1: hello world\nLine 3: hello again\n\nbuild/out.txt\nLine 1: hello build\n\nlatin.txt\nLine 1: (line is not valid UTF-8)\n\nlogs/app.log\nLine 1: hello log"
-	if result.IsError || result.Output != want+"\n\nlogs/keep.log\nLine 1: hello keep" {
-		t.Fatalf("no repository:\n got: %q\nwant: %q", result.Output, want)
+	// Outside a repository .gitignore is inert while .ignore still applies.
+	want := "Found 7 matches\n\na.txt\nLine 1: say hello\n\nb.txt\nLine 1: hello world\nLine 3: hello again\n\nbuild/out.txt\nLine 1: hello build\n\nlatin.txt\nLine 1: (line is not valid UTF-8)\n\nlogs/app.log\nLine 1: hello log\n\nlogs/keep.log\nLine 1: hello keep"
+	if result := h.call(t, "grep", map[string]any{"pattern": "hello"}); result.IsError || grouped(result.Output) != want {
+		t.Fatalf("no repository:\n got: %q\nwant: %q", grouped(result.Output), want)
 	}
-	// A nested repository applies its own .gitignore below its marker.
-	h.write(t, "nested/.git/HEAD", "ref")
-	h.write(t, "nested/.gitignore", "skip.txt\n")
-	h.write(t, "nested/skip.txt", "hello skip")
-	h.write(t, "nested/seen.txt", "hello seen")
-	if result := h.call(t, "grep", map[string]any{"pattern": "hello", "path": "nested"}); result.IsError || result.Output != "Found 1 match\n\nnested/seen.txt\nLine 1: hello seen" {
-		t.Fatalf("nested repository = %q", result.Output)
-	}
-	if err := os.RemoveAll(filepath.Join(h.root, "nested")); err != nil {
+	if err := os.Mkdir(filepath.Join(h.root, ".git"), 0o700); err != nil {
 		t.Fatal(err)
-	}
-	if err := os.Mkdir(filepath.Join(filepath.Dir(h.root), ".git"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	result = h.call(t, "grep", map[string]any{"pattern": "hello"})
-	want = "Found 5 matches\n\na.txt\nLine 1: say hello\n\nb.txt\nLine 1: hello world\nLine 3: hello again\n\nlatin.txt\nLine 1: (line is not valid UTF-8)\n\nlogs/keep.log\nLine 1: hello keep"
-	if result.IsError || result.Output != want {
-		t.Fatalf("repository:\n got: %q\nwant: %q", result.Output, want)
 	}
 	for _, test := range []struct {
 		arguments map[string]any
 		want      string
 	}{
+		{map[string]any{"pattern": "hello"}, "Found 5 matches\n\na.txt\nLine 1: say hello\n\nb.txt\nLine 1: hello world\nLine 3: hello again\n\nlatin.txt\nLine 1: (line is not valid UTF-8)\n\nlogs/keep.log\nLine 1: hello keep"},
 		{map[string]any{"pattern": "hello", "path": "logs"}, "Found 1 match\n\nlogs/keep.log\nLine 1: hello keep"},
 		{map[string]any{"pattern": "hello", "include": "*.log"}, "Found 2 matches\n\nlogs/app.log\nLine 1: hello log\n\nlogs/keep.log\nLine 1: hello keep"},
 		{map[string]any{"pattern": "hello", "include": "*.{txt,ignored}", "path": "."}, "Found 6 matches\n\n.dot.txt\nLine 1: hello dot\n\na.txt\nLine 1: say hello\n\nb.txt\nLine 1: hello world\nLine 3: hello again\n\nlatin.txt\nLine 1: (line is not valid UTF-8)\n\nnotes.ignored\nLine 1: hello ignored"},
 		{map[string]any{"pattern": "hello", "path": ".hidden"}, "Found 1 match\n\n.hidden/h.txt\nLine 1: hello hidden"},
-		{map[string]any{"pattern": "hello", "path": "build/out.txt"}, "Found 1 match\n\nbuild/out.txt\nLine 1: hello build"},
-		{map[string]any{"pattern": "binary", "path": "bin.dat"}, "Found 1 match\n\nbin.dat\nLine 2: binary"},
-		{map[string]any{"pattern": "late|after", "path": "late.txt"}, "Found 2 matches\n\nlate.txt\nLine 32769: hello late\nLine 32771: hello after"},
+		{map[string]any{"pattern": "hello", "path": filepath.Join(h.root, "build", "out.txt")}, "Found 1 match\n\nbuild/out.txt\nLine 1: hello build"},
 		{map[string]any{"pattern": "^hello (world|again)$"}, "Found 1 match\n\nb.txt\nLine 3: hello again"},
 		{map[string]any{"pattern": "absent"}, "No matches found"},
 	} {
 		result := h.call(t, "grep", test.arguments)
-		if result.IsError || result.Output != test.want {
-			t.Errorf("grep(%v)\n got: %q\nwant: %q", test.arguments, result.Output, test.want)
+		if result.IsError || grouped(result.Output) != test.want {
+			t.Errorf("grep(%v)\n got: %q\nwant: %q", test.arguments, grouped(result.Output), test.want)
 		}
 	}
-}
-
-func TestGrep_CapsPreviewsAndMatches(t *testing.T) {
-	h := newHarness(t)
 	h.write(t, "long.txt", strings.Repeat("界", grepMaxLineBytes/3+10)+"needle")
+	if result := h.call(t, "grep", map[string]any{"pattern": "needle", "path": "long.txt"}); result.IsError || result.Output != "Found 1 match\n\nlong.txt\nLine 1: "+strings.Repeat("界", grepMaxLineBytes/3)+" (line truncated)" {
+		t.Fatalf("long line = %q", result.Output[:60])
+	}
 	h.write(t, "many.txt", strings.Repeat("needle\n", grepMaxMatches+3))
-	result := h.call(t, "grep", map[string]any{"pattern": "needle", "path": "long.txt"})
-	if result.IsError || result.Output != "Found 1 match\n\nlong.txt\nLine 1: "+strings.Repeat("界", grepMaxLineBytes/3)+" (line truncated)" {
-		t.Fatalf("long line = %q", result.Output[:80])
-	}
-	result = h.call(t, "grep", map[string]any{"pattern": "needle", "path": "many.txt"})
+	result := h.call(t, "grep", map[string]any{"pattern": "needle", "path": "many.txt"})
 	if result.IsError || !strings.HasPrefix(result.Output, "Found 250 of 253 matches\n\nmany.txt\nLine 1: needle\n") || !strings.HasSuffix(result.Output, "Line 250: needle\n\n(The complete result could not be saved; narrow pattern, path, or include to see more.)") {
-		t.Fatalf("capped = %q", result.Output[len(result.Output)-200:])
-	}
-	h.write(t, "huge.txt", "needle\n"+strings.Repeat("y", maxScanLineBytes+1)+"\nneedle\n")
-	if result := h.call(t, "grep", map[string]any{"pattern": "needle", "path": "huge.txt"}); result.IsError || result.Output != "Found 1 match\n\nhuge.txt\nLine 1: needle" {
-		t.Fatalf("oversized line = %q", result.Output)
+		t.Fatalf("capped = %q", result.Output[len(result.Output)-160:])
 	}
 }
 
-func TestGrep_RejectsInvalidInputAndSurfacesFailures(t *testing.T) {
-	restoreHooks(t)
-	h := newHarness(t)
+func TestGrep_RejectsInvalidInputAndSpecialFiles(t *testing.T) {
+	h := newHarness(t, platformProcess.New())
 	h.write(t, "a.txt", "text\n")
 	if err := syscall.Mkfifo(filepath.Join(h.root, "pipe"), 0o600); err != nil {
 		t.Fatal(err)
@@ -374,99 +417,88 @@ func TestGrep_RejectsInvalidInputAndSurfacesFailures(t *testing.T) {
 		{map[string]any{"pattern": "x", "include": " "}, "include must be a non-empty glob when given"},
 		{map[string]any{"pattern": "x", "include": "!*.go"}, "negated patterns"},
 		{map[string]any{"pattern": "x", "include": "*.go,*.ts"}, "not a comma-separated list"},
-		{map[string]any{"pattern": "x", "include": "*.{go,ts}}"}, ""},
-		{map[string]any{"pattern": "("}, "grep pattern rejected"},
-		{map[string]any{"pattern": "x", "include": "[x"}, "grep include rejected"},
+		{map[string]any{"pattern": "("}, "Error: grep pattern rejected by ripgrep: rg: regex parse error:"},
+		{map[string]any{"pattern": "x", "include": "[x"}, "grep pattern rejected by ripgrep: rg: error parsing glob"},
 		{map[string]any{"pattern": "x", "path": "missing"}, `grep search failed: "missing" not found`},
-		{map[string]any{"pattern": "x", "path": "pipe"}, "is not a regular file or directory"},
+		{map[string]any{"pattern": "x", "path": "pipe"}, `grep search failed: "pipe" is not a regular file or directory`},
 		{map[string]any{"pattern": "x", "path": "../"}, "path is outside the workspace"},
 	} {
 		result := h.call(t, "grep", test.arguments)
-		if test.want == "" {
-			if result.IsError {
-				t.Errorf("grep(%v) rejected: %s", test.arguments, result.Output)
-			}
-			continue
-		}
 		if !result.IsError || !strings.Contains(result.Output, test.want) {
 			t.Errorf("grep(%v) = %#v, want %q", test.arguments, result, test.want)
 		}
 	}
-	failure := errors.New("io failure")
-	openFile = func(string) (io.ReadCloser, error) { return nil, failure }
-	if result := h.call(t, "grep", map[string]any{"pattern": "x"}); !result.IsError || !strings.Contains(result.Output, "io failure") {
-		t.Fatalf("open failure = %#v", result)
+	// Check only rejects lists; ripgrep owns the rest of the glob grammar.
+	if result := h.call(t, "grep", map[string]any{"pattern": "text", "include": "*.{txt,md}}"}); !result.IsError || !strings.Contains(result.Output, "unopened alternate group") {
+		t.Fatalf("unbalanced brace = %#v", result)
 	}
-	openFile = func(string) (io.ReadCloser, error) { return &failingReader{err: failure}, nil }
-	if result := h.call(t, "grep", map[string]any{"pattern": "x"}); !result.IsError || !strings.Contains(result.Output, "io failure") {
-		t.Fatalf("peek failure = %#v", result)
+}
+
+func TestRun_ClassifiesRipgrepOutcomes(t *testing.T) {
+	runner := &scriptedRunner{version: supported()}
+	h := newHarness(t, runner)
+	request := func() platformProcess.Request { return runner.requests[len(runner.requests)-1] }
+	stderr := func(text string, truncated bool) platformProcess.Output {
+		return platformProcess.Output{Text: text, Truncated: truncated}
 	}
-	if result := h.call(t, "grep", map[string]any{"pattern": "x", "path": "a.txt"}); !result.IsError || !strings.Contains(result.Output, "io failure") {
-		t.Fatalf("read failure = %#v", result)
+	for _, test := range []struct {
+		name   string
+		result platformProcess.Result
+		err    error
+		want   string
+	}{
+		{"timeout", platformProcess.Result{TimedOut: true, Signal: "SIGKILL", ExitCode: -1}, nil, "Error: grep was aborted before completion (tool timeout or caller cancellation)"},
+		{"launch", platformProcess.Result{}, errors.New("permission denied"), "Error: grep could not start its search command (ripgrep launch failed): permission denied"},
+		{"signal", platformProcess.Result{Signal: "SIGSEGV", ExitCode: -1}, nil, "Error: grep search command was killed by signal SIGSEGV"},
+		{"failed", platformProcess.Result{ExitCode: 2, Stderr: stderr("rg: x: Permission denied (os error 13)\n", false)}, nil, "Error: grep search failed (exit 2): rg: x: Permission denied (os error 13)"},
+		{"silent", platformProcess.Result{ExitCode: 2}, nil, "Error: grep search failed (exit 2)"},
+		{"truncated stderr", platformProcess.Result{ExitCode: 2, Stderr: stderr("tail", true)}, nil, "Error: grep search failed (exit 2): tail [stderr truncated]"},
+		{"overflow", platformProcess.Result{Stdout: platformProcess.Output{Text: "x", Truncated: true}}, nil, "Error: grep produced more raw output than the 20000000-byte cap; narrow pattern, path, or include and retry"},
+		{"not json", platformProcess.Result{Stdout: platformProcess.Output{Text: "plain\n"}}, nil, "Error: grep received malformed ripgrep --json output (a line is not JSON)"},
+		{"not object", platformProcess.Result{Stdout: platformProcess.Output{Text: "[1]\n"}}, nil, "(a record is not an object)"},
+		{"no data", platformProcess.Result{Stdout: platformProcess.Output{Text: `{"type":"match"}`}}, nil, "(a match record has no data)"},
+		{"no path", platformProcess.Result{Stdout: platformProcess.Output{Text: `{"type":"match","data":{"path":{"bytes":"eA=="}}}`}}, nil, "(a match record has no path text)"},
+		{"no line", platformProcess.Result{Stdout: platformProcess.Output{Text: `{"type":"match","data":{"path":{"text":"a"}}}`}}, nil, "(a match record has no line number)"},
+		{"no lines", platformProcess.Result{Stdout: platformProcess.Output{Text: `{"type":"match","data":{"path":{"text":"a"},"line_number":1}}`}}, nil, "(a match record has no line content)"},
+		{"empty lines", platformProcess.Result{Stdout: platformProcess.Output{Text: `{"type":"match","data":{"path":{"text":"a"},"line_number":1,"lines":{}}}`}}, nil, "(a match record has neither line text nor bytes)"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner.result, runner.err = test.result, test.err
+			result := h.call(t, "grep", map[string]any{"pattern": "x"})
+			if !result.IsError || !strings.HasPrefix(result.Output, test.want) && !strings.HasSuffix(result.Output, test.want) {
+				t.Fatalf("result = %#v, want %q", result, test.want)
+			}
+		})
 	}
-	openFile = func(path string) (io.ReadCloser, error) { return os.Open(path) } //nolint:gosec // test-owned workspace
-	h.write(t, ".ignore", "x")
-	readFile = func(string) ([]byte, error) { return nil, failure }
-	if result := h.call(t, "grep", map[string]any{"pattern": "x"}); !result.IsError || !strings.Contains(result.Output, "io failure") {
-		t.Fatalf("ignore read failure = %#v", result)
+	runner.result, runner.err = platformProcess.Result{Stdout: platformProcess.Output{Text: `{"type":"begin","data":{}}` + "\n" + `{"type":"match","data":{"path":{"text":"a"},"line_number":2,"lines":{"text":"x\r"}}}` + "\n"}}, nil
+	if result := h.call(t, "grep", map[string]any{"pattern": "x", "path": "."}); result.IsError || result.Output != "Found 1 match\n\na\nLine 2: x\r" {
+		t.Fatalf("framing and bare CR = %#v", result)
 	}
-	readFile = os.ReadFile
-	h.write(t, "sub/.rgignore", strings.Repeat("x", maxIgnoreFileBytes+1))
-	if result := h.call(t, "grep", map[string]any{"pattern": "x", "path": "sub/.."}); !result.IsError || !strings.Contains(result.Output, "exceeds 1048576 bytes") {
-		t.Fatalf("large ignore file = %#v", result)
+	sent := request()
+	if sent.Mode != platformProcess.ModeHost || sent.Cwd != h.root || sent.Root != h.root || sent.TempDir != "" || sent.Timeout != searchTimeout || sent.StdoutLimit != rawOutputMaxBytes ||
+		strings.Join(sent.Args, " ") != "--no-config --json --regexp=x" {
+		t.Fatalf("grep request = %+v", sent)
 	}
-	if result := h.call(t, "grep", map[string]any{"pattern": "x", "path": "sub/.rgignore"}); result.IsError {
-		t.Fatalf("explicit file below a large ignore file = %#v", result)
+	runner.result = platformProcess.Result{ExitCode: 1}
+	if result := h.call(t, "glob", map[string]any{"pattern": "*.go", "path": "."}); result.Output != "No files found" {
+		t.Fatalf("glob no match = %#v", result)
 	}
-	h.write(t, "deep/inner/file.txt", "x")
-	h.write(t, "deep/.rgignore", strings.Repeat("x", maxIgnoreFileBytes+1))
-	if result := h.call(t, "grep", map[string]any{"pattern": "x", "path": "deep/inner"}); !result.IsError || !strings.Contains(result.Output, "exceeds") {
-		t.Fatalf("ancestor ignore file = %#v", result)
+	if args := strings.Join(request().Args, " "); !strings.HasPrefix(args, "--no-config --files --glob=*.go --sort=modified --no-ignore --hidden --glob=!**/.git --glob=!**/.git/** ") || strings.Contains(args, " -- ") {
+		t.Fatalf("glob argv = %q", args)
 	}
-	if err := os.Remove(filepath.Join(h.root, "deep", ".rgignore")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join(h.root, "a.txt"), filepath.Join(h.root, "deep", ".rgignore")); err != nil {
-		t.Fatal(err)
-	}
-	if result := h.call(t, "grep", map[string]any{"pattern": "x", "path": "deep"}); result.IsError || !strings.Contains(result.Output, "deep/inner/file.txt") {
-		t.Fatalf("symlinked ignore file must be skipped: %#v", result)
-	}
-	lstatPath = func(name string) (os.FileInfo, error) {
-		if strings.HasSuffix(name, ".ignore") {
-			return nil, failure
-		}
-		return os.Lstat(name)
-	}
-	if result := h.call(t, "grep", map[string]any{"pattern": "x"}); !result.IsError || !strings.Contains(result.Output, "io failure") {
-		t.Fatalf("ignore lstat failure = %#v", result)
-	}
-	lstatPath = os.Lstat
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := h.provider.grep(ctx, appTool.Invocation{}, grepArgs{Pattern: "x", Path: new("a.txt")}); err == nil || !strings.Contains(err.Error(), "aborted before completion") {
+	runner.result, runner.err = platformProcess.Result{}, context.Canceled
+	if _, err := h.provider.glob(ctx, appTool.Invocation{}, globArgs{Pattern: "*"}); err == nil || err.Error() != "glob was aborted before completion (tool timeout or caller cancellation)" {
 		t.Fatalf("canceled = %v", err)
 	}
 }
 
-type failingReader struct{ err error }
-
-func (reader *failingReader) Read([]byte) (int, error) { return 0, reader.err }
-func (*failingReader) Close() error                    { return nil }
-
-func TestGitAbove_FindsRepositoryMarkers(t *testing.T) {
-	base := t.TempDir()
-	nested := filepath.Join(base, "a", "b")
-	if err := os.MkdirAll(nested, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if gitAbove(nested) {
-		t.Skip("the temporary directory is already inside a Git repository")
-	}
-	if err := os.WriteFile(filepath.Join(base, "a", ".git"), []byte("gitdir: elsewhere"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if !gitAbove(nested) {
-		t.Fatal("worktree marker file not found")
+func TestLocate_SurfacesMetadataFailures(t *testing.T) {
+	restoreHooks(t)
+	h := newHarness(t, &scriptedRunner{version: supported()})
+	lstatPath = func(string) (os.FileInfo, error) { return nil, errors.New("io failure") }
+	if result := h.call(t, "grep", map[string]any{"pattern": "x"}); !result.IsError || result.Output != "Error: grep search failed: io failure" {
+		t.Fatalf("lstat failure = %#v", result)
 	}
 }

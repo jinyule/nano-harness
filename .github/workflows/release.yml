@@ -53,6 +53,10 @@ jobs:
             exit 1
           }
           [[ -f LICENSE ]] || { echo "LICENSE is required before publication" >&2; exit 1; }
+      - name: Install pinned ripgrep
+        run: |
+          scripts/install-ripgrep.sh "$RUNNER_TEMP/ripgrep"
+          echo "$RUNNER_TEMP/ripgrep" >> "$GITHUB_PATH"
       - name: Run source gates
         run: make quick coverage mutation build
       - name: Build release candidate

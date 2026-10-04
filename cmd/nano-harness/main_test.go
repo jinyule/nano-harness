@@ -516,7 +516,9 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 			newFileTools = func(*appTool.Runtime, workspace.Root) (*filetool.Provider, error) { return nil, failure }
 		}},
 		{name: "search tools", set: func() {
-			newSearchTools = func(*appTool.Runtime, workspace.Root) (*searchtool.Provider, error) { return nil, failure }
+			newSearchTools = func(*appTool.Runtime, searchtool.Runner, workspace.Root) (*searchtool.Provider, error) {
+				return nil, failure
+			}
 		}},
 		{name: "shell tools", set: func() {
 			newShellTools = func(*appTool.Runtime, shelltool.Runner, workspace.Root) (*shelltool.Provider, error) {
@@ -541,5 +543,20 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 	missing.workspaceRoot = filepath.Join(root, "missing")
 	if _, err := composeTUI(missing, dependencies{}); err == nil {
 		t.Fatal("missing workspace was accepted")
+	}
+}
+
+// TestRunTUI_FailsEarlyWithoutRipgrep proves the real entry point refuses to
+// start, with an actionable message, when rg is not on PATH.
+func TestRunTUI_FailsEarlyWithoutRipgrep(t *testing.T) {
+	restoreMainHooks(t)
+	t.Setenv("PATH", t.TempDir())
+	root, configRoot := t.TempDir(), t.TempDir()
+	currentWorkingDirectory = func() (string, error) { return root, nil }
+	userConfigDirectory = func() (string, error) { return configRoot, nil }
+	var stderr bytes.Buffer
+	code := runTUI(context.Background(), nil, strings.NewReader(""), io.Discard, &stderr, dependencies{})
+	if code != 1 || !strings.Contains(stderr.String(), "configure TUI: ripgrep is unavailable: rg was not found on PATH; install ripgrep 15.0.0 or newer") {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
 	}
 }

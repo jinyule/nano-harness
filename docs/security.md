@@ -42,15 +42,15 @@
 - 相对路径按 workspace 解析。绝对路径只有在词法上位于已解析 root 内时才接受，必须使用提示词显示的 root 拼写。`..` 逃逸和 root 外的绝对路径一律拒绝；上游描述中的 “resolved by the filesystem backend” 在本仓即指这一约束。
 - `read`、`glob`/`grep` 的显式 `path` 和 `bash` 的 `workdir` 可以经过 symlink，但解析后必须仍在 root 内。
 - `write` 和 `edit` 拒绝 root 与目标之间任何已存在的 symlink 组件，包括目标本身；审批前检查一次，执行点再检查一次。
-- `glob`/`grep` 遍历不跟随 symlink，并跳过 FIFO、socket 和设备等非普通文件。`grep` 只读取 workspace 内的 ignore 文件；判断是否位于 Git 仓库时，只探测 root 上级目录是否存在 `.git`。
+- `glob`/`grep` 把已确认在 workspace 内的搜索根以 workspace 相对路径放在 `--` 之后交给 ripgrep，不传 `-L`，遍历时不跟随 symlink。`grep` 拒绝把 FIFO、socket 或设备作为显式路径，避免 ripgrep 阻塞读取。ripgrep 按自身规则读取搜索路径上级目录中的 `.gitignore`/`.ignore` 与仓库的 `.git/info/exclude`；这些只决定跳过哪些文件，结果路径仍限于搜索根之下。
 
 | 工具 | 边界 |
 |---|---|
 | `read` | 只读 UTF-8 普通文件；前 8 KiB 含 NUL 视为二进制，任何非法 UTF-8 都拒绝。流式读取不设文件大小上限，单次最多 2000 行、每行 2000 字符、所选行合计 50 KiB |
 | `write` | 内容受参数上限 128 KiB 约束。写入同目录随机命名的 `0600` 临时文件，`fsync` 后 rename；新文件为 `0600`，新目录为 `0700`，替换文件保留原权限位 |
 | `edit` | 文件最多 10 MiB；拒绝 NUL 与非法 UTF-8；以同样方式原子写回 |
-| `glob` | 匹配路径文本合计最多 20,000,000 字节；每次调用 30 s |
-| `grep` | Go RE2 正则；单行超过 8 MiB 时停止扫描该文件；每次调用 30 s；内联最多 250 个匹配，每行预览 2000 字节 |
+| `glob` | ripgrep 的完整 stdout 最多 20,000,000 字节，超出即失败；每次调用 30 s；内联最多 100 个路径 |
+| `grep` | ripgrep 正则；`--json` 完整输出最多 20,000,000 字节，超出即失败；每次调用 30 s；内联最多 250 个匹配，每行预览 2000 字节 |
 
 这些检查约束 harness 自身，不宣称抵御同一用户下主动制造 TOCTOU 的恶意进程。需要更强对手模型时应使用独立容器/VM 或基于 descriptor 的安全打开，并新增 ADR。
 
@@ -62,6 +62,7 @@
 - 模型参数沿用上游 `sandbox_permissions` 与 `justification`，按上游规则校验：`write`/`edit` 要求两者成对出现；`bash` 重复 `workspace-write` 时可省略 justification，未给模式时空白 justification 被忽略。`workspace-write` 等同默认模式。`danger-full-access` 只对 `bash` 有效：需要非空 justification，approval 原因为 `escalate sandbox to danger-full-access: <justification>`，批准后仅这一条命令在 host 上运行；delegated request 在执行点无条件拒绝。`write` 和 `edit` 在审批前拒绝 `danger-full-access`，文件工具从不离开 workspace。
 - `bash` 运行 `bash -c`，只支持前台执行。`timeoutMs` 默认 60 s、上限 10 min，超过上限按上限执行，非正值拒绝；stdout 与 stderr 各保留最后 64,000 字节。超时或取消时终止整个进程组并等待退出；命令结束后，同一进程组中残留的后台进程也会被终止。非零退出码、信号和超时以 `[exit code: N]`、`[killed by signal: S]`、`[timed out after Nms]` 标记返回，不是 tool error；取消返回 `tool call aborted`。
 - 子进程环境在固定 allowlist 之外只增加 `NO_COLOR=1`、`TERM=dumb`、`PAGER=cat`、`GIT_PAGER=cat`、`DSH_SHELL=1` 和当前 `DSH_SESSION_ID`。
+- `glob`/`grep` 以 argv 直接运行构造时从 PATH 解析的 `rg`，不经过 shell。它们不需要 approval，也不进入 workspace sandbox：ripgrep 只读取文件，OS sandbox 只限制写入，不限制读取，进入 sandbox 不会缩小可见范围，反而会让没有 sandbox 可执行文件的主机失去搜索能力。每次调用前置 `--no-config`，`RIPGREP_CONFIG_PATH` 和配置文件无法注入 `--pre` 等预处理命令；模型提供的 pattern、include 和路径只以 `--regexp=`、`--glob=` 或 `--` 之后的单个参数传入。环境使用同一 allowlist，不传 `HOME`，因此不会读取用户的全局 git excludes；stdin 是空设备，cwd 是 workspace root。stdout 保留上限为 20,000,000 字节，超出时失败而不解析部分结果；stderr 只保留最后 64,000 字节作为错误摘要；超时或取消时终止进程组并等待退出。这与上游通过 subprocess 直接运行打包的 ripgrep 一致。
 - 进程使用 argv 启动；只有 `bash` 工具才由 `bash -c` 解释文本。启动错误、sandbox 不可用、exit status、signal、timeout 和 output truncation 保持独立可诊断语义。
 
 工具 schema omission、prompt 声明或 UI 隐藏都不构成授权。新写工具必须把 approval/sandbox 决策放在不可绕过的 execution path，并测试允许/拒绝矩阵。

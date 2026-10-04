@@ -20,7 +20,8 @@
 - subagent 工具迁移到同一抽象；名称和描述不变，schema 去掉根 `additionalProperties:false` 和 `maxItems`。
 - `platform/process` 的请求区分可写 `Root` 与工作目录 `Cwd`，删除无人使用的 stdin。stdout/stderr 改为各自保留 64,000 字节尾部；退出码、信号、超时和 sandbox 拒绝成为结果字段，只有无法启动、sandbox 不可用和调用方取消才返回错误。超时通过 `Cmd.Cancel` 终止进程组，`WaitDelay` 限制后台进程占住管道的时间，运行结束后再次清理进程组。
 - `host` 映射为上游升级字段：只有 `bash` 接受 `danger-full-access`；`write`/`edit` 在审批前拒绝它。每次 write/edit/bash 仍需一次性 approval，参数无效或路径不安全时不会提问。
-- composition ID 改为 `fs-tools-v1`、`search-tools-v1`、`shell-tools-v1`、`subagent-tools-v2`。
+- `glob`/`grep` 按维护者决定依赖 ripgrep，参数、退出码语义、`--json` 解析、上限和错误文案与 `packages/fs/tool-fs-search` 一致。provider 构造时从 PATH 解析 `rg`，`Start` 用 `rg --version` 拒绝低于 15.0.0（上游打包版本）的 ripgrep。ripgrep 以 argv、`--no-config`、allowlist 环境、空 stdin 在 host 模式运行，stdout 上限 20,000,000 字节。为此 `platform/process` 增加 `StdoutLimit`，host 模式可以省略 `TempDir`。纯 Go 的 walker 与 glob 编译代码已删除。CI 的 test、coverage、mutation 和 release build 用 `scripts/install-ripgrep.sh` 安装校验过 SHA-256 的 15.2.0；`make tui-e2e` 把当前 `rg` 所在目录加入被测进程的 PATH。
+- composition ID 改为 `fs-tools-v1`、`search-tools-v2`、`shell-tools-v1`、`subagent-tools-v2`。
 - prompt 的安全段落改为说明路径按 workspace 解析并拒绝 workspace 外路径；delegation 段落改为不能请求 sandbox 升级。`bash`、`read`、`glob`、`grep` 贡献上游 guidance；`write`/`edit` 的 guidance 依赖观察策略，留给 WP2。
 - mutation 用例 `workspace-size` 改为 `read-byte-cap`，`workspace-escape` 指向新的 containment，新增 `workspace-symlink` 保护写入不跨 symlink。`Writable` 的祖先遍历也在文件系统根停止；缺少这个条件时，`workspace-escape` 变异会让遍历在 `/` 无限循环并超时。
 
@@ -31,12 +32,12 @@
 代价和风险：
 
 - 严格的根成员校验、workspace 路径约束和每次执行的 approval 比上游严格。
-- 纯 Go 搜索与 ripgrep 在正则和 ignore 细节上存在 ADR 列出的差异。
+- ripgrep 15.0.0+ 成为运行与测试前提，发布制品不包含它；用户、开发者和 CI 都要安装，固定版本与校验值需按[开发规范](../../../docs/development.md#ripgrep)手动升级，Dependabot 不覆盖。
 - 新建文件改为 `0600`，新建目录改为 `0700`。
 - 旧会话按 composition mismatch 拒绝恢复。本仓尚无发布 tag，没有用户会话需要迁移。
 - 两份目录 fixture 需要人工维护；参考指针更新时必须重新推导 `upstream-base-tools.json`。
 
-复杂度观察（`make quality BASE_REF=main`，阈值 10，仅观察）：新增函数中最高的是 `translate`（21，glob 语法的单一状态机）、`(*grepResult).scan` 与 `(*Runner).Run`（19，二进制/行长/EOF 分支和进程结局分类）、`readWindow`（18，流式 UTF-8 校验与行缓冲）。本次已把 `readWindow` 的窗口记账拆为 `windowBuilder`，把遍历的条目选择拆为 `walker.selected`，分别从 23 和 22 降到 18 和 12。剩余函数的分支对应独立失败语义，继续拆分只会把状态散到多个函数。新增代码没有跨包重复候选。
+复杂度观察（`make quality BASE_REF=main`，阈值 10，仅观察）：最高的是 `(*Runner).Run`（23，路径与 host 模式校验加进程结局分类）和 `readWindow`（18，流式 UTF-8 校验与行缓冲，窗口记账已拆为 `windowBuilder`）。ripgrep 部分最高的是 `parseMatches`（14，每个 malformed 细节一个分支）和 `(*Provider).run`（13，每种 ripgrep 结局对应一种上游文案）。这些分支对应独立的失败语义，继续拆分只会把状态散到多个函数。新增代码没有跨包重复候选。
 
 ## Verification
 
@@ -49,4 +50,6 @@
 - 门禁反例：把 `read` 的 `offset`/`limit` 声明顺序对调后，`TestComposition_ToolCatalogGolden` 与 `TestComposition_MatchesUpstreamBaseTools` 都失败（键集合相同、顺序不同）；把 upstream fixture 中 bash `timeoutMs` 描述改一个词后，parity 测试失败；恢复后两者通过。
 - upstream fixture 由一次性脚本从 submodule 的 `docs/tool-catalog.md`、`glob.ts`、`tool-bash/src/index.ts`、`tool-fs/src/sandbox.ts` 和 `sandbox/src/escalation.ts` 抽取原文生成，未参考 Go 实现；随后与真实 composition 的输出比对，六个工具一致。
 - `bash` 在本机通过真实 `sandbox-exec` 验证：workspace 内写入成功，workspace 外写入被拒绝并返回 `[sandbox: file access denied under workspace-write mode]` 和升级提示，目标文件不存在。
+- ripgrep：搜索测试运行本机 ripgrep 15.2.0，覆盖修改时间排序、VCS 排除、hidden/ignore/include、`.git` 目录开启 `.gitignore`、上限与预览；`-count=10` 稳定，grep 跨文件顺序按分组排序后比较。脚本化 runner 覆盖退出码 2、信号、超时、启动失败、输出超限和每种畸形 `--json`；版本过低、无法解析、探测失败时 `Start` 失败且不注册工具；`TestRunTUI_FailsEarlyWithoutRipgrep` 在 PATH 不含 `rg` 时得到退出码 1 和安装提示。
+- `scripts/install-ripgrep_test.sh` 证明伪造归档（可解包可运行）因校验和不符被拒绝、下载失败和缺少目标目录都失败且不留下 `rg`；本机实际运行安装脚本，得到通过校验的 `ripgrep 15.2.0 (rev e89fff89ac)`。Linux x86_64 与 macOS arm64 归档已下载并本地计算 SHA-256，与官方 `.sha256` 文件和脚本中的值一致；Linux 安装步骤的实际运行要等 CI 验证。
 - 未验证：Linux `bwrap` 下的拒绝签名 `read-only file system` 只有单元测试，没有真实运行；Windows 不提供 workspace sandbox，`bash` 在那里会以 sandbox 不可用失败（与原 `run_shell` 一致）；没有进行 live provider 调用。

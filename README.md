@@ -7,6 +7,8 @@
 
 ## 快速开始
 
+运行和测试需要 Go 与 ripgrep 15.0.0 或更新版本（推荐 15.2.0）。`glob` 和 `grep` 调用 PATH 中的 `rg`；找不到或版本过低时程序在启动阶段报错退出。发布制品不包含 ripgrep，安装与升级说明见[开发规范](docs/development.md#ripgrep)。
+
 ```bash
 git clone --recurse-submodules https://github.com/jinyule/nano-harness.git
 cd nano-harness
@@ -68,7 +70,7 @@ TUI 使用 Bubble Tea v2、Lip Gloss v2 和 Bubbles v2，并作为可回收插�
 
 ## 终端验证与 GoLand 调试
 
-`make tui-e2e` 使用真实二进制和 PTY，配合本地模型协议 fixture，验证文件工具、Subagent、审批、打断和恢复，无需模型账户。需要 Python 3、Unix PTY 和本机 workspace sandbox。
+`make tui-e2e` 使用真实二进制和 PTY，配合本地模型协议 fixture，验证文件工具、Subagent、审批、打断和恢复，无需模型账户。需要 Python 3、Unix PTY、ripgrep 和本机 workspace sandbox。
 
 GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点。需要把 TUI 输入保留在 Codex 或其他终端中时，使用 `Nano TUI Remote`；完整步骤见[终端与断点调试](docs/debugging.md)。
 

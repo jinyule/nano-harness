@@ -1,14 +1,10 @@
 package search
 
 import (
-	"bufio"
-	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -20,11 +16,6 @@ const (
 	grepMaxMatches = 250
 	// grepMaxLineBytes bounds one matched-line preview.
 	grepMaxLineBytes = 2000
-	// maxScanLineBytes is the longest line grep holds in memory; scanning
-	// stops at a longer line in that file.
-	maxScanLineBytes = 8 << 20
-	// binaryPeekBytes is the prefix that marks a traversed file as binary.
-	binaryPeekBytes = 64 << 10
 )
 
 type grepArgs struct {
@@ -34,16 +25,24 @@ type grepArgs struct {
 }
 
 type grepMatch struct {
-	display string
-	line    int
-	text    string
+	path string
+	line int
+	text string
 }
 
-// grepResult retains the first matches and counts the rest.
-type grepResult struct {
-	expression *regexp.Regexp
-	matches    []grepMatch
-	total      int
+// grepRecord is the subset of one `rg --json` line grep consumes.
+type grepRecord struct {
+	Type string `json:"type"`
+	Data *struct {
+		Path *struct {
+			Text *string `json:"text"`
+		} `json:"path"`
+		LineNumber *int `json:"line_number"`
+		Lines      *struct {
+			Text  *string `json:"text"`
+			Bytes *string `json:"bytes"`
+		} `json:"lines"`
+	} `json:"data"`
 }
 
 func (provider *Provider) grepTool() *appTool.Tool {
@@ -100,147 +99,123 @@ func checkGrep(arguments grepArgs) error {
 	return nil
 }
 
-// grep searches like `rg --json --regexp=<pattern> [--glob=<include>]`:
-// traversal skips hidden entries and ignore-file matches unless the include
-// glob whitelists a file, explicit file paths are always searched, and
-// matches keep traversal order grouped by file.
+// grep runs `rg --json --regexp=<pattern> [--glob=<include>]` and groups the
+// first matches by file in ripgrep's output order.
 func (provider *Provider) grep(ctx context.Context, _ appTool.Invocation, arguments grepArgs) (appTool.Result, error) {
-	expression, err := regexp.Compile(arguments.Pattern)
-	if err != nil {
-		return appTool.Result{}, fmt.Errorf("grep pattern rejected: %w", err)
-	}
-	var include *pattern
-	if arguments.Include != nil {
-		compiled, err := compilePattern(*arguments.Include)
-		if err != nil {
-			return appTool.Result{}, fmt.Errorf("grep include rejected: %w", err)
-		}
-		include = &compiled
-	}
 	start, err := provider.locate("grep", arguments.Path)
 	if err != nil {
 		return appTool.Result{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, provider.timeout)
-	defer cancel()
-	result := &grepResult{expression: expression}
-	switch {
-	case start.info.IsDir():
-		walk := walker{ctx: ctx, filtered: true, include: include, visit: func(resolved, display string, _ fs.DirEntry) error {
-			return result.scan(ctx, resolved, display, false)
-		}}
-		err = walk.start(provider.root.Path(), start.resolved, start.display)
-	case start.info.Mode().IsRegular():
-		err = result.scan(ctx, start.resolved, start.display, true)
-	default:
-		err = fmt.Errorf("%q is not a regular file or directory", start.display)
+	// ripgrep would block reading a FIFO or device named explicitly.
+	if !start.info.IsDir() && !start.info.Mode().IsRegular() {
+		return appTool.Result{}, fmt.Errorf("grep search failed: %q is not a regular file or directory", start.relative)
 	}
+	command := []string{"--json", "--regexp=" + arguments.Pattern}
+	if arguments.Include != nil {
+		command = append(command, "--glob="+*arguments.Include)
+	}
+	stdout, empty, err := provider.run(ctx, "grep", append(command, start.arguments()...))
 	if err != nil {
-		return appTool.Result{}, aborted("grep", err)
+		return appTool.Result{}, err
 	}
-	return appTool.Text(result.render()), nil
+	var matches []grepMatch
+	if !empty {
+		if matches, err = parseMatches(stdout); err != nil {
+			return appTool.Result{}, err
+		}
+	}
+	return appTool.Text(renderGrep(matches)), nil
 }
 
-// scan matches each line of one file. A traversed file with a NUL byte in
-// its leading block is binary and skipped; a later NUL stops the scan. An
-// explicit file is searched with NUL bytes treated as line breaks.
-func (result *grepResult) scan(ctx context.Context, resolved, display string, explicit bool) error {
-	file, err := openFile(resolved)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = file.Close() }() // read-only; close cannot lose data
-	reader := bufio.NewReaderSize(file, binaryPeekBytes)
-	if !explicit {
-		peek, err := reader.Peek(binaryPeekBytes)
-		if err != nil && !errors.Is(err, io.EOF) {
-			return err
+// parseMatches reads every match record from complete `rg --json` output.
+// Other record types are framing; a malformed match fails the search rather
+// than returning a partial result.
+func parseMatches(stdout string) ([]grepMatch, error) {
+	var matches []grepMatch
+	for line := range strings.SplitSeq(stdout, "\n") {
+		if line == "" {
+			continue
 		}
-		if bytes.IndexByte(peek, 0) >= 0 {
-			return nil
+		if !json.Valid([]byte(line)) {
+			return nil, malformed("a line is not JSON")
 		}
-	}
-	number := 0
-	var line []byte
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
+		var record grepRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			return nil, malformed("a record is not an object")
 		}
-		piece, readErr := reader.ReadSlice('\n')
-		if readErr != nil && !errors.Is(readErr, bufio.ErrBufferFull) && !errors.Is(readErr, io.EOF) {
-			return readErr
+		if record.Type != "match" {
+			continue
 		}
-		line = append(line, piece...)
-		if len(line) > maxScanLineBytes {
-			return nil
-		}
-		if bytes.HasSuffix(line, []byte("\n")) || errors.Is(readErr, io.EOF) && len(line) > 0 {
-			content := bytes.TrimSuffix(line, []byte("\n"))
-			if !explicit && bytes.IndexByte(content, 0) >= 0 {
-				return nil
+		data := record.Data
+		switch {
+		case data == nil:
+			return nil, malformed("a match record has no data")
+		case data.Path == nil || data.Path.Text == nil:
+			return nil, malformed("a match record has no path text")
+		case data.LineNumber == nil:
+			return nil, malformed("a match record has no line number")
+		case data.Lines == nil:
+			return nil, malformed("a match record has no line content")
+		case data.Lines.Text != nil:
+			text := *data.Lines.Text
+			if trimmed, ok := strings.CutSuffix(text, "\n"); ok {
+				text = strings.TrimSuffix(trimmed, "\r")
 			}
-			for segment := range bytes.SplitSeq(content, []byte{0}) {
-				number++
-				result.record(display, number, segment)
-			}
-			line = line[:0]
-		}
-		if errors.Is(readErr, io.EOF) {
-			return nil
+			matches = append(matches, grepMatch{path: *data.Path.Text, line: *data.LineNumber, text: text})
+		case data.Lines.Bytes != nil:
+			matches = append(matches, grepMatch{path: *data.Path.Text, line: *data.LineNumber, text: "(line is not valid UTF-8)"})
+		default:
+			return nil, malformed("a match record has neither line text nor bytes")
 		}
 	}
+	return matches, nil
 }
 
-func (result *grepResult) record(display string, number int, line []byte) {
-	if !result.expression.Match(line) {
-		return
-	}
-	result.total++
-	if len(result.matches) < grepMaxMatches {
-		result.matches = append(result.matches, grepMatch{display: display, line: number, text: previewLine(line)})
-	}
+func malformed(detail string) error {
+	return fmt.Errorf("grep received malformed ripgrep --json output (%s)", detail)
 }
 
-// previewLine drops a trailing CR and bounds the line to grepMaxLineBytes
-// at a rune boundary, as ripgrep's JSON text is rendered upstream.
-func previewLine(line []byte) string {
-	line = bytes.TrimSuffix(line, []byte("\r"))
-	if !utf8.Valid(line) {
-		return "(line is not valid UTF-8)"
-	}
+// previewLine bounds one matched line to grepMaxLineBytes at a rune boundary.
+func previewLine(line string) string {
 	if len(line) <= grepMaxLineBytes {
-		return string(line)
+		return line
 	}
 	cut := grepMaxLineBytes
 	for !utf8.RuneStart(line[cut]) {
 		cut--
 	}
-	return string(line[:cut]) + " (line truncated)"
+	return line[:cut] + " (line truncated)"
 }
 
-func (result *grepResult) render() string {
-	if result.total == 0 {
+// renderGrep keeps the first grepMaxMatches matches and groups them by file
+// in first-seen order, like upstream.
+func renderGrep(matches []grepMatch) string {
+	if len(matches) == 0 {
 		return "No matches found"
 	}
-	header := fmt.Sprintf("Found %d matches", result.total)
-	switch {
-	case result.total == 1:
+	header := fmt.Sprintf("Found %d matches", len(matches))
+	if len(matches) == 1 {
 		header = "Found 1 match"
-	case result.total > len(result.matches):
-		header = fmt.Sprintf("Found %d of %d matches", len(result.matches), result.total)
 	}
-	var body strings.Builder
-	for index, match := range result.matches {
-		if index == 0 || match.display != result.matches[index-1].display {
-			if index > 0 {
-				body.WriteString("\n\n")
-			}
-			body.WriteString(match.display)
+	retained := matches
+	if len(matches) > grepMaxMatches {
+		retained = matches[:grepMaxMatches]
+		header = fmt.Sprintf("Found %d of %d matches", grepMaxMatches, len(matches))
+	}
+	var order []string
+	groups := map[string][]string{}
+	for _, match := range retained {
+		if _, seen := groups[match.path]; !seen {
+			order = append(order, match.path)
 		}
-		fmt.Fprintf(&body, "\nLine %d: %s", match.line, match.text)
+		groups[match.path] = append(groups[match.path], fmt.Sprintf("Line %d: %s", match.line, previewLine(match.text)))
 	}
-	text := header + "\n\n" + body.String()
-	if result.total > len(result.matches) {
+	sections := make([]string, len(order))
+	for index, path := range order {
+		sections[index] = path + "\n" + strings.Join(groups[path], "\n")
+	}
+	text := header + "\n\n" + strings.Join(sections, "\n\n")
+	if len(matches) > grepMaxMatches {
 		text += "\n\n(The complete result could not be saved; narrow pattern, path, or include to see more.)"
 	}
 	return text

@@ -4,30 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
-	"path"
-	"slices"
 	"strings"
-	"time"
 
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 )
 
-const (
-	// globMaxResults is the inline path cap of one glob call.
-	globMaxResults = 100
-	// rawOutputMaxBytes bounds the complete matched path list.
-	rawOutputMaxBytes = 20_000_000
-)
+// globMaxResults is the inline path cap of one glob call.
+const globMaxResults = 100
+
+// vcsDirectories are excluded from glob listings, matching upstream.
+var vcsDirectories = []string{".git", ".svn", ".hg", ".bzr", ".jj", ".sl"}
 
 type globArgs struct {
 	Pattern string  `json:"pattern"`
 	Path    *string `json:"path"`
-}
-
-type globMatch struct {
-	display  string
-	modified time.Time
 }
 
 func (provider *Provider) globTool() *appTool.Tool {
@@ -56,74 +46,37 @@ func (provider *Provider) globTool() *appTool.Tool {
 	})
 }
 
-// glob lists regular files whose workspace-relative path matches the
-// pattern, oldest modification first, like `rg --files --sort=modified
-// --no-ignore --hidden` with VCS metadata excluded.
+// glob runs `rg --files --sort=modified --no-ignore --hidden` with upstream's
+// VCS exclusions, so paths arrive oldest modification first.
 func (provider *Provider) glob(ctx context.Context, _ appTool.Invocation, arguments globArgs) (appTool.Result, error) {
-	compiled, err := compilePattern(arguments.Pattern)
-	if err != nil {
-		return appTool.Result{}, fmt.Errorf("glob pattern rejected: %w", err)
-	}
 	start, err := provider.locate("glob", arguments.Path)
 	if err != nil {
 		return appTool.Result{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, provider.timeout)
-	defer cancel()
-	var matches []globMatch
-	total := 0
-	accept := func(display string, entry fs.DirEntry) error {
-		if slices.ContainsFunc(strings.Split(display, "/"), func(part string) bool { return slices.Contains(vcsDirectories, part) }) {
-			return nil
-		}
-		if compiled.match(display, false) == compiled.negated {
-			return nil
-		}
-		info, err := fileInfo(entry)
-		if err != nil {
-			return err
-		}
-		if total += len(display) + 1; total > provider.rawLimit {
-			return fmt.Errorf("glob produced more than %d bytes of raw output; narrow pattern, path, or include and retry", provider.rawLimit)
-		}
-		matches = append(matches, globMatch{display: display, modified: info.ModTime()})
-		return nil
+	command := []string{"--files", "--glob=" + arguments.Pattern, "--sort=modified", "--no-ignore", "--hidden"}
+	for _, name := range vcsDirectories {
+		// The bare form prunes the directory; the contents form still applies
+		// when the search root is at or inside it.
+		command = append(command, "--glob=!**/"+name, "--glob=!**/"+name+"/**")
 	}
-	if start.info.IsDir() {
-		walk := walker{
-			ctx: ctx,
-			prune: func(display string) bool {
-				return slices.Contains(vcsDirectories, path.Base(display)) || compiled.negated && compiled.match(display, true)
-			},
-			visit: func(_, display string, entry fs.DirEntry) error { return accept(display, entry) },
-		}
-		err = walk.directory(start.resolved, start.display, nil, false)
-	} else {
-		err = accept(start.display, fs.FileInfoToDirEntry(start.info))
-	}
+	stdout, empty, err := provider.run(ctx, "glob", append(command, start.arguments()...))
 	if err != nil {
-		return appTool.Result{}, aborted("glob", err)
+		return appTool.Result{}, err
 	}
-	slices.SortFunc(matches, func(left, right globMatch) int {
-		if order := left.modified.Compare(right.modified); order != 0 {
-			return order
-		}
-		return strings.Compare(left.display, right.display)
-	})
-	return appTool.Text(renderGlob(matches)), nil
+	var paths []string
+	if !empty {
+		paths = strings.FieldsFunc(stdout, func(char rune) bool { return char == '\n' })
+	}
+	return appTool.Text(renderGlob(paths)), nil
 }
 
-func renderGlob(matches []globMatch) string {
-	if len(matches) == 0 {
+func renderGlob(paths []string) string {
+	if len(paths) == 0 {
 		return "No files found"
 	}
-	paths := make([]string, min(len(matches), globMaxResults))
-	for index := range paths {
-		paths[index] = matches[index].display
+	if len(paths) <= globMaxResults {
+		return strings.Join(paths, "\n")
 	}
-	body := strings.Join(paths, "\n")
-	if len(matches) <= globMaxResults {
-		return body
-	}
-	return fmt.Sprintf("%s\n\n(Showing %d of %d paths. The complete result could not be saved; narrow pattern or path to see more.)", body, len(paths), len(matches))
+	return fmt.Sprintf("%s\n\n(Showing %d of %d paths. The complete result could not be saved; narrow pattern or path to see more.)",
+		strings.Join(paths[:globMaxResults], "\n"), globMaxResults, len(paths))
 }

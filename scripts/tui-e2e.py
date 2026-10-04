@@ -12,6 +12,7 @@ from pathlib import Path
 import pty
 import re
 import select
+import shutil
 import signal
 import socketserver
 import struct
@@ -121,6 +122,14 @@ def fixture(directory):
         worker.join()
 
 
+def tool_path():
+    """Return a minimal PATH that still contains the ripgrep the harness requires."""
+    ripgrep = shutil.which("rg")
+    if ripgrep is None:
+        raise SystemExit("tui-e2e: ripgrep (rg) must be on PATH; see docs/development.md")
+    return os.pathsep.join([os.path.dirname(os.path.realpath(ripgrep)), os.defpath])
+
+
 class Terminal:
     def __init__(self, binary, directory, workspace, settings):
         self.master, slave = pty.openpty()
@@ -130,7 +139,7 @@ class Terminal:
              "--credentials", str(directory / "credentials.yaml"), "--session-root", str(directory / "sessions"),
              "--session", "session-pty"],
             stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
-            env={"PATH": os.defpath, "HOME": os.environ["HOME"], "TERM": "xterm-256color", "NANO_FIXTURE_KEY": "fixture-key"},
+            env={"PATH": tool_path(), "HOME": os.environ["HOME"], "TERM": "xterm-256color", "NANO_FIXTURE_KEY": "fixture-key"},
         )
         os.close(slave)
         self.output = b""

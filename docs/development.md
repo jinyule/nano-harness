@@ -5,9 +5,25 @@
 - `go.mod` 声明最低兼容版本 Go 1.26。
 - `.go-version` / `.tool-versions` 固定主开发和 CI 工具链 Go 1.27.0。
 - golangci-lint 固定为 v2.12.2，GoReleaser 固定为 v2.17.1；工具升级使用独立依赖 PR。
+- 运行与测试需要 ripgrep 15.0.0 或更新版本，CI 固定 15.2.0，见 [ripgrep](#ripgrep)。
 - 文本统一 UTF-8、LF、末尾一个换行；`.editorconfig` 和 `.gitattributes` 同时约束编辑器与 Git checkout。
 
 提高 Go 最低版本必须说明所需语言/标准库能力、兼容影响和回滚路径，并更新 CI matrix、文档和 release 配置。
+
+### ripgrep
+
+`glob` 和 `grep` 调用 PATH 中的 `rg`，契约见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)。运行、测试和 `make tui-e2e` 都需要 ripgrep 15.0.0 或更新版本，推荐使用 CI 固定的 15.2.0。15.0.0 是上游参考随 `@vscode/ripgrep` 1.18.0 打包的版本，搜索行为以它为基准。发布制品不包含 ripgrep。
+
+- 启动时找不到 `rg` 会在组装阶段失败：`ripgrep is unavailable: rg was not found on PATH; install ripgrep 15.0.0 or newer`。
+- `rg --version` 低于 15.0.0 或无法解析时，search 插件启动失败，不注册降级工具。
+- CI 通过 [`scripts/install-ripgrep.sh`](../scripts/install-ripgrep.sh) 从官方 GitHub release 下载固定版本，校验 SHA-256 后再加入 PATH。
+
+Dependabot 不追踪 ripgrep。升级时提交专门的变更：
+
+1. 从 <https://github.com/BurntSushi/ripgrep/releases> 选择正式版本，读取各目标归档对应的 `.sha256` 文件。
+2. 下载归档并在本机计算 SHA-256，确认与发布文件一致后，更新脚本中的 `version` 和 Linux x86_64、macOS arm64/x86_64 三个校验值。
+3. 用新版本运行 `make check` 和 `make tui-e2e`，并让完整 CI 通过。
+4. 提高最低版本时，同时修改 `internal/adapter/tool/search` 的 `minimumVersion`、本节、ADR-0007 与 README。
 
 ## 本地工作流
 

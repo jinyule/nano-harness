@@ -19,11 +19,13 @@
 | `lint` | Go 1.26.x 下运行固定版本 golangci-lint 与配置 schema |
 | `test` | Go 1.26/1.27 兼容、race 和单元测试 |
 | `coverage` | 主版本 Linux 下执行逐产品源文件 100% 门槛 |
-| `mutation` | 无缓存、私有副本执行七个已审查高风险回归；仅具名测试失败算 killed |
+| `mutation` | 无缓存、私有副本执行八个已审查高风险回归；仅具名测试失败算 killed |
 | `build` | Linux/macOS/Windows 从真实 `cmd` 构建并运行 `version` |
 | `security` | `govulncheck` 的可达漏洞分析 |
 | `release-dry-run` | GoReleaser 构建跨平台制品，验证精确 payload 并执行 Linux 宿主 archive，不发布 |
 | `all-checks-passed` | fail-closed 汇总阻断结果 |
+
+`test`、`coverage`、`mutation` 和 release build 在运行测试前执行 [`scripts/install-ripgrep.sh`](../scripts/install-ripgrep.sh)，安装校验过 SHA-256 的 ripgrep 15.2.0 并加入 PATH。`build` 只运行 `version`，不组装工具，所以 Linux/macOS/Windows 构建都不需要 ripgrep。固定版本与升级流程见[开发规范](development.md#ripgrep)。
 
 新增阻断 lane 必须加入汇总 job。观察性/昂贵信号若暂不阻断，应位于单独 workflow，不能用 `continue-on-error` 伪装成绿色阻断项。
 
@@ -71,7 +73,7 @@ golangci-lint v2.12.2 的 typechecker 不兼容 Go 1.27 标准库 `internal/poll
 
 ## 制品与供应链
 
-当前 `.goreleaser.yml` 生成 Linux/macOS/Windows 的 amd64/arm64 二进制、tar/zip 和 `checksums.txt`。每个 archive 包含 README 和 MIT `LICENSE`。
+当前 `.goreleaser.yml` 生成 Linux/macOS/Windows 的 amd64/arm64 二进制、tar/zip 和 `checksums.txt`。每个 archive 包含 README 和 MIT `LICENSE`，不包含 ripgrep；它是运行前提，由用户安装。
 
 [`prepare-release.sh`](../scripts/prepare-release.sh) 从 GoReleaser 输出中复制 archive 与 checksum，目标目录必须尚不存在；build metadata 留在 `dist`。[`verify-release.sh`](../scripts/verify-release.sh) 要求 payload 恰含同一版本的六个目标 archive 与一个 `checksums.txt`，每个目标只出现一次，Linux/macOS 为 tar.gz、Windows 为 zip。它拒绝额外或隐藏项、目录、symlink、空 archive、非法清单路径、重复/遗漏目标、版本或哈希不符。清单结构与文件集合通过后才计算 SHA-256，全部通过后 [`smoke-release.sh`](../scripts/smoke-release.sh) 才解包并执行宿主 binary。
 

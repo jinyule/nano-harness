@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	// maxStreamBytes is the retained tail of each output stream.
+	// maxStreamBytes is the default retained tail of each output stream.
 	maxStreamBytes = 64_000
 	// pipeDrainDelay bounds waiting for descendants that keep pipes open
 	// after the process exits or is killed.
@@ -46,7 +46,8 @@ type Mode string
 const (
 	// ModeWorkspace requires the configured OS filesystem sandbox.
 	ModeWorkspace Mode = "workspace"
-	// ModeHost runs directly on the host after an external approval decision.
+	// ModeHost runs directly on the host. Callers choose it only for an
+	// approved command or a fixed, read-only helper invocation.
 	ModeHost Mode = "host"
 )
 
@@ -58,11 +59,15 @@ type Request struct {
 	Root string
 	// Cwd is the working directory and must lie inside Root.
 	Cwd string
-	// TempDir is the private TMPDIR and must lie inside Root.
+	// TempDir is the private TMPDIR and must lie inside Root. Workspace mode
+	// requires it; an empty value in host mode leaves TMPDIR unset.
 	TempDir    string
 	Mode       Mode
 	Timeout    time.Duration
 	Additional map[string]string
+	// StdoutLimit is the retained stdout tail in bytes; zero selects the
+	// default. Output.Truncated reports that more was written.
+	StdoutLimit int
 }
 
 // Output is the retained tail of one stream.
@@ -107,11 +112,14 @@ func New() *Runner {
 // group is killed and reaped. Exit status, signals, and timeouts are facts
 // in Result; errors mean the process could not run or the caller canceled.
 func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) {
-	if request.Path == "" || request.Root == "" || request.Cwd == "" || request.TempDir == "" || request.Mode != ModeWorkspace && request.Mode != ModeHost || request.Timeout <= 0 || request.Timeout > 10*time.Minute {
+	if request.Path == "" || request.Root == "" || request.Cwd == "" || request.TempDir == "" && request.Mode != ModeHost || request.Mode != ModeWorkspace && request.Mode != ModeHost || request.Timeout <= 0 || request.Timeout > 10*time.Minute || request.StdoutLimit < 0 {
 		return Result{}, ErrInvalidConfig
 	}
 	paths := make([]string, 3)
 	for index, value := range []string{request.Root, request.Cwd, request.TempDir} {
+		if value == "" {
+			continue
+		}
 		absolute, err := processAbs(value)
 		if err != nil {
 			return Result{}, ErrInvalidConfig
@@ -119,7 +127,7 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 		paths[index] = absolute
 	}
 	root, cwd, temporary := paths[0], paths[1], paths[2]
-	if !within(root, cwd) || !within(root, temporary) {
+	if !within(root, cwd) || temporary != "" && !within(root, temporary) {
 		return Result{}, ErrInvalidConfig
 	}
 	path, args, err := runner.command(root, cwd, temporary, request)
@@ -139,7 +147,7 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 		return nil
 	}
 	command.WaitDelay = pipeDrainDelay
-	var stdout, stderr tailBuffer
+	stdout, stderr := tailBuffer{limit: request.StdoutLimit}, tailBuffer{}
 	command.Stdout, command.Stderr = &stdout, &stderr
 	err = command.Run()
 	// Descendants left in the group are stopped so the call reaches quiescence.
@@ -190,7 +198,10 @@ func escapeSandbox(value string) string {
 func cleanEnvironment(root, temporary string, additional map[string]string) []string {
 	values := map[string]string{
 		"PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-		"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TMPDIR": temporary, "NANO_WORKSPACE": root,
+		"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "NANO_WORKSPACE": root,
+	}
+	if temporary != "" {
+		values["TMPDIR"] = temporary
 	}
 	for name, value := range additional {
 		if validEnvironmentName(name) && !strings.ContainsRune(value, '\x00') {
@@ -221,16 +232,25 @@ func within(root, target string) bool {
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
-// tailBuffer keeps the last maxStreamBytes written to it.
+// tailBuffer keeps the last limit bytes written to it; zero selects
+// maxStreamBytes.
 type tailBuffer struct {
+	limit     int
 	data      []byte
 	truncated bool
 }
 
+func (buffer *tailBuffer) size() int {
+	if buffer.limit == 0 {
+		return maxStreamBytes
+	}
+	return buffer.limit
+}
+
 func (buffer *tailBuffer) Write(data []byte) (int, error) {
 	buffer.data = append(buffer.data, data...)
-	if len(buffer.data) > 2*maxStreamBytes {
-		buffer.data = append(buffer.data[:0], buffer.data[len(buffer.data)-maxStreamBytes:]...)
+	if limit := buffer.size(); len(buffer.data) > 2*limit {
+		buffer.data = append(buffer.data[:0], buffer.data[len(buffer.data)-limit:]...)
 		buffer.truncated = true
 	}
 	return len(data), nil
@@ -239,8 +259,8 @@ func (buffer *tailBuffer) Write(data []byte) (int, error) {
 // output trims the tail to the limit at a rune boundary.
 func (buffer *tailBuffer) output() Output {
 	data, truncated := buffer.data, buffer.truncated
-	if len(data) > maxStreamBytes {
-		data, truncated = data[len(data)-maxStreamBytes:], true
+	if limit := buffer.size(); len(data) > limit {
+		data, truncated = data[len(data)-limit:], true
 	}
 	if truncated {
 		for len(data) > 0 && !utf8.RuneStart(data[0]) {
