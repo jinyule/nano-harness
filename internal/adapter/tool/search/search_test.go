@@ -249,7 +249,9 @@ func TestGlob_CapsResultsAndRejectsInvalidInput(t *testing.T) {
 	if result := h.call(t, "glob", map[string]any{"pattern": "*.txt"}); !result.IsError || !strings.Contains(result.Output, "more than 20 bytes of raw output") {
 		t.Fatalf("raw limit = %#v", result)
 	}
-	h.provider.rawLimit, h.provider.timeout = rawOutputMaxBytes, time.Nanosecond
+	// A zero budget expires when the context is created, so cancellation is
+	// observed deterministically instead of racing the deadline timer.
+	h.provider.rawLimit, h.provider.timeout = rawOutputMaxBytes, 0
 	if result := h.call(t, "glob", map[string]any{"pattern": "*.txt"}); !result.IsError || result.Output != "Error: glob was aborted before completion (tool timeout or caller cancellation)" {
 		t.Fatalf("timeout = %#v", result)
 	}
