@@ -17,6 +17,10 @@ const (
 	OrderBash = 1000
 	// OrderRead positions file-read guidance.
 	OrderRead = 1100
+	// OrderWrite positions full-file write guidance.
+	OrderWrite = 1200
+	// OrderEdit positions literal-edit guidance.
+	OrderEdit = 1300
 	// OrderGlob positions path-discovery guidance.
 	OrderGlob = 1400
 	// OrderGrep positions content-search guidance.
@@ -46,6 +50,8 @@ type Invocation struct {
 	// grant. Tools that require approval must still check it at their
 	// execution point.
 	Approved bool
+	// spill is the store in use when the call started; see CreateSpill.
+	spill SpillStore
 }
 
 // Result is the model-visible content of one successful execution. Text is
@@ -82,11 +88,19 @@ type Spec[A any] struct {
 	Description string
 	Parameters  Parameters
 	Guidance    Guidance
+	// KeepInline exempts successful results from the spill policy that
+	// replaces oversized text with a preview and a locator. read sets it so
+	// reading a spilled artifact cannot spill again.
+	KeepInline bool
 	// Check rejects schema-valid arguments with semantic errors. It runs when
 	// the call's turn comes, after earlier calls in the batch finished and
-	// before any approval is requested, so it may inspect the filesystem.
-	// Nil accepts every schema-valid value.
-	Check func(A) error
+	// before any approval is requested, so it may inspect the filesystem and
+	// session-scoped state through the Invocation. Invocation.Approved is
+	// always false here, and Check must not cause side effects: execution may
+	// never follow, and state can change while approval is pending, so
+	// Execute re-checks everything it relies on. Nil accepts every
+	// schema-valid value.
+	Check func(Invocation, A) error
 	// Concurrent opts a call into overlap with adjacent concurrent calls. It
 	// classifies every schema-valid call before the batch runs, so it must be
 	// pure and total. Nil, invalid arguments, and unknown tools are exclusive.
@@ -110,7 +124,8 @@ type Tool struct {
 // call is one schema-valid invocation bound to its typed arguments.
 type call struct {
 	concurrent bool
-	check      func() error
+	keepInline bool
+	check      func(Invocation) error
 	reason     func() string
 	execute    func(context.Context, Invocation) (Result, error)
 }
@@ -143,11 +158,12 @@ func Define[A any](spec Spec[A]) *Tool {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}
 		prepared := &call{
-			check: func() error {
+			keepInline: spec.KeepInline,
+			check: func(invocation Invocation) error {
 				if spec.Check == nil {
 					return nil
 				}
-				return spec.Check(arguments)
+				return spec.Check(invocation, arguments)
 			},
 			reason: func() string {
 				if spec.Approval == nil {

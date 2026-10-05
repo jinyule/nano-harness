@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -54,14 +55,18 @@ func (provider *Provider) readTool() *appTool.Tool {
 			appTool.Optional("offset", appTool.Number("1-based first line to return. Defaults to 1.")),
 			appTool.Optional("limit", appTool.Number(fmt.Sprintf("Maximum number of lines to return. Defaults to %d.", readLimit))),
 		},
-		Guidance:   appTool.StaticGuidance(appTool.OrderRead, "Use the read tool — not shell commands like cat — to inspect text files. Use offset and limit to continue reading large files."),
-		Check:      checkRead,
+		Guidance: appTool.StaticGuidance(appTool.OrderRead, "Use the read tool — not shell commands like cat — to inspect text files. Use offset and limit to continue reading large files."),
+		Check:    checkRead,
+		// Observation races fail closed: a guarded mutation re-checks the
+		// version under its lock and reports a stale read.
 		Concurrent: func(readArgs) bool { return true },
+		// Reading a spilled artifact must not spill again.
+		KeepInline: true,
 		Execute:    provider.read,
 	})
 }
 
-func checkRead(arguments readArgs) error {
+func checkRead(_ appTool.Invocation, arguments readArgs) error {
 	if strings.TrimSpace(arguments.FilePath) == "" {
 		return errors.New("file_path must be a non-empty string")
 	}
@@ -79,10 +84,13 @@ func checkRead(arguments readArgs) error {
 
 func positiveInteger(value float64) bool { return value >= 1 && value == math.Trunc(value) }
 
-func (provider *Provider) read(ctx context.Context, _ appTool.Invocation, arguments readArgs) (appTool.Result, error) {
-	display, path, err := provider.root.Existing(arguments.FilePath)
+// read streams one window and records what the session observed: absence
+// for a missing path, or the digest of every byte read on success.
+func (provider *Provider) read(ctx context.Context, invocation appTool.Invocation, arguments readArgs) (appTool.Result, error) {
+	display, path, err := provider.root.Readable(arguments.FilePath)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
+		provider.observed.record(invocation.SessionID, display, observation{})
 		return appTool.Result{}, fmt.Errorf("cannot read %q: not found", display)
 	case err != nil:
 		return appTool.Result{}, fmt.Errorf("cannot read %q: %w", arguments.FilePath, err)
@@ -106,13 +114,15 @@ func (provider *Provider) read(ctx context.Context, _ appTool.Invocation, argume
 		return appTool.Result{}, fmt.Errorf("cannot read %q: %w", display, err)
 	}
 	defer func() { _ = reader.Close() }() // read-only; close cannot lose data
-	window, err := readWindow(ctx, reader, offset, limit)
+	hasher := sha256.New()
+	window, err := readWindow(ctx, io.TeeReader(reader, hasher), offset, limit)
 	if err != nil {
 		return appTool.Result{}, fmt.Errorf("cannot read %q: %w", display, err)
 	}
 	if !window.capped && offset > window.total && (window.total != 0 || offset != 1) {
 		return appTool.Result{}, fmt.Errorf("offset %d is out of range for %q (%d lines)", offset, display, window.total)
 	}
+	provider.observed.record(invocation.SessionID, path, observation{present: true, version: version(hasher.Sum(nil))})
 	return appTool.Text(formatRead(display, offset, window)), nil
 }
 

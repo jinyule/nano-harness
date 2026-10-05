@@ -89,5 +89,19 @@
     "before": "record.Turn != state.turn || state.step != 0 || record.Plan.Active == state.plan",
     "after": "record.Turn != state.turn || record.Plan.Active == state.plan",
     "test": "^TestValidateOrder_PlanModeOnlyAtStepBoundaries$"
+  },
+  {
+    "id": "write-unread-overwrite",
+    "file": "internal/adapter/tool/file/write.go",
+    "before": "case exists:",
+    "after": "case false:",
+    "test": "^TestObservation_WriteCreatesFreelyButOverwritesOnlyWhatWasRead$"
+  },
+  {
+    "id": "spill-planted-link",
+    "file": "internal/adapter/tool/workspace/workspace.go",
+    "before": "if !within(directory, resolved) {",
+    "after": "if false && !within(directory, resolved) {",
+    "test": "^TestRoot_ReadableMatrix$"
   }
 ]

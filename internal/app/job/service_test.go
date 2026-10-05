@@ -543,3 +543,27 @@ func TestService_RetainsBoundedOutput(t *testing.T) {
 		t.Fatalf("retained after terminal read = %d", retained)
 	}
 }
+
+func TestService_ReadsListAdvertisedCompleteOutputFiles(t *testing.T) {
+	service, notifier, _ := startService(t)
+	producer := newGate()
+	id, output := launch(t, service, "root", producer)
+	output.Advertise(Stderr, "/spill/err.log")
+	output.Advertise(Stdout, "/spill/out.log")
+	if read, _ := service.Read("root", id); strings.Join(read.Spills, "|") != "/spill/out.log|/spill/err.log" {
+		t.Fatalf("spills = %q", read.Spills)
+	}
+	output.Advertise(Stderr, "")
+	block := strings.Repeat("x", liveRetainBytes)
+	_, _ = output.Writer(Stdout).Write([]byte(block))
+	_, _ = output.Writer(Stdout).Write([]byte("tail"))
+	producer.release <- Outcome{Status: StatusCompleted}
+	<-notifier.sent
+	read, _ := service.Read("root", id)
+	if !read.Lossy || strings.Join(read.Spills, "|") != "/spill/out.log" || !strings.HasSuffix(read.Delta(), "\n[some output was dropped from memory; full output: /spill/out.log]") {
+		t.Fatalf("lossy read = %v %q", read.Lossy, read.Spills)
+	}
+	if got := (Read{Stdout: "p", Lossy: true, Spills: []string{"/a", "/b"}}).Delta(); got != "p\n[some output was dropped from memory; full output: /a, /b]" {
+		t.Fatalf("delta = %q", got)
+	}
+}

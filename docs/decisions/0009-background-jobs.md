@@ -30,7 +30,7 @@
 - producer 用 `Launch(Spec)` 提交 `Kind`、`Label`、`Owner` 和阻塞式 `Run(ctx, *Output) Outcome`。服务在自己拥有的 goroutine 中运行 `Run`，`Kill` 和关闭会取消 `ctx`；producer 在资源释放后返回结果。producer panic 被收敛为 `failed`。
 - 所有读写和控制操作都带调用方 session；访问他人 job 返回 `job <id> belongs to another session`，未知 ID 返回 `unknown job <id>`。ID 可预测，所以边界是所有权而不是保密。
 - ID 计数按 kind、在一个服务实例内递增。前台 `bash` 调用也会消耗编号，所以第一个后台 job 可能是 `bash-2`，与上游一致。
-- 每个 owner 最多 10 个 `running` 或 `stopping` 的 job。输出环在运行中保留 128 KiB；上游保留 256 KiB，但本仓一次读取连同状态行必须放进 256 KiB 的 tool result，减半后完整读取永远不会被统一截断。settle 时保留全部未读字节，settle 后第一次读取把保留量裁到 16 KiB。游标落到保留窗口之前时，读取追加 `[some output was dropped from memory; full output: (unavailable)]`。
+- 每个 owner 最多 10 个 `running` 或 `stopping` 的 job。输出环在运行中保留 128 KiB；上游保留 256 KiB，但本仓一次读取连同状态行必须放进 256 KiB 的 tool result，减半后完整读取永远不会被统一截断。settle 时保留全部未读字节，settle 后第一次读取把保留量裁到 16 KiB。游标落到保留窗口之前时，读取追加 `[some output was dropped from memory; full output: <文件>]`，列出 job 当前声明的完整输出文件（见 [ADR-0008](0008-tool-output-spill-and-observation-policy.md#bash-完整输出)），没有文件时为 `(unavailable)`。
 - `Output` 的 stdout/stderr writer 暂存被拆开的 UTF-8 尾部，字符跨进程写入时仍整体进入输出环。
 - 关闭顺序：拒绝新 job，把活动 job 标为 `stopping` 并取消，等待全部 producer goroutine 返回，然后丢弃记录。job 的 context 来自插件启动 context，进程收到终止信号时运行中的命令同样停止。
 - 已结束的 job 一直列出，直到前台调用把它移除或服务关闭；没有保留数量上限，与上游相同。每次 `bash` 都需要用户审批，job 数量受人工节奏约束。

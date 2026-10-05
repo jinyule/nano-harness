@@ -62,15 +62,18 @@
 - 相对路径按 workspace 解析。绝对路径只有在词法上位于已解析 root 内时才接受，必须使用提示词显示的 root 拼写。`..` 逃逸和 root 外的绝对路径一律拒绝；上游描述中的 “resolved by the filesystem backend” 在本仓即指这一约束。
 - `read`、`glob`/`grep` 的显式 `path` 和 `bash` 的 `workdir` 可以经过 symlink，但解析后必须仍在 root 内。
 - `write` 和 `edit` 拒绝 root 与目标之间任何已存在的 symlink 组件，包括目标本身；审批前检查一次，执行点再检查一次。
+- `read` 与 `grep` 另可读取本 workspace 的 spill 分区：绝对路径须在词法上位于分区内，解析链接后仍须位于分区的解析结果内。`glob`、`write`、`edit` 与 `bash` 的 `workdir` 不能进入该分区。见 [Spill 文件](#spill-文件)。
 - `glob`/`grep` 把已确认在 workspace 内的搜索根以 workspace 相对路径放在 `--` 之后交给 ripgrep，不传 `-L`，遍历时不跟随 symlink。`grep` 拒绝把 FIFO、socket 或设备作为显式路径，避免 ripgrep 阻塞读取。ripgrep 按自身规则读取搜索路径上级目录中的 `.gitignore`/`.ignore` 与仓库的 `.git/info/exclude`；这些只决定跳过哪些文件，结果路径仍限于搜索根之下。
 
 | 工具 | 边界 |
 |---|---|
 | `read` | 只读 UTF-8 普通文件；前 8 KiB 含 NUL 视为二进制，任何非法 UTF-8 都拒绝。流式读取不设文件大小上限，单次最多 2000 行、每行 2000 字符、所选行合计 50 KiB |
-| `write` | 内容受参数上限 128 KiB 约束。写入同目录随机命名的 `0600` 临时文件，`fsync` 后 rename；新文件为 `0600`，新目录为 `0700`，替换文件保留原权限位 |
-| `edit` | 文件最多 10 MiB；拒绝 NUL 与非法 UTF-8；以同样方式原子写回 |
+| `write` | 内容受参数上限 128 KiB 约束。写入同目录随机命名的 `0600` 临时文件，`fsync` 后发布：替换本会话读过且内容未变的文件时 rename，创建时硬链接，目标已存在则拒绝；新文件为 `0600`，新目录为 `0700`，替换文件保留原权限位 |
+| `edit` | 必须先由本会话读取且内容未变；文件最多 10 MiB；拒绝 NUL 与非法 UTF-8；以同样方式原子写回 |
 | `glob` | ripgrep 的完整 stdout 最多 20,000,000 字节，超出即失败；每次调用 30 s；内联最多 100 个路径 |
 | `grep` | ripgrep 正则；`--json` 完整输出最多 20,000,000 字节，超出即失败；每次调用 30 s；内联最多 250 个匹配，每行预览 2000 字节 |
+
+先读后写保护按会话记录 `read` 观察到的内容摘要，`write`/`edit` 在审批前无副作用地比较一次当前内容，并在执行点、进程内互斥锁下再比较一次；未读、已删除或已变化的目标按上游文案拒绝。它防止模型覆盖自己没看过的内容，不是授权机制：观察状态不持久化，delegated child 是独立会话，规则见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md)。
 
 这些检查约束 harness 自身，不宣称抵御同一用户下主动制造 TOCTOU 的恶意进程。需要更强对手模型时应使用独立容器/VM 或基于 descriptor 的安全打开，并新增 ADR。
 
@@ -85,13 +88,24 @@ skill 正文是交给模型的指令。项目根 `<project>/.nano-harness/skills
 
 `skill` 不需要 approval，subagent（包括 `never` 策略）也能加载 skill，但只能得到满足上述规则的 instruction 文件。工具结果给出 skill 的基址目录，不扩大 workspace 文件工具的路径约束：目录在 workspace 外时，模型只能通过受 approval 约束的 `bash` 访问其中的资源。加载或注入的正文进入会话日志，transcript 因此可能包含 skill 内容。
 
+## Spill 文件
+
+超出内联预算的工具结果和 `glob`/`grep` 的完整结果保存在 `--spill-root` 下：
+
+- 根目录为 `0700`，可以是链接但解析后必须是 owner-only 目录；workspace 分区与会话目录为 `0700` 的真实目录，分区是链接或权限过宽时启动失败。
+- 文件名是随机前缀加只含 `[A-Za-z0-9._-]` 的名称提示，以 `O_EXCL`、`0600` 创建，已存在的条目（包括预置链接）一律拒绝；提交前 `fsync`，失败删除部分文件；单个文件最多 64 MiB。
+- 只有本 workspace 的分区可被 `read`/`grep` 读取，其他 workspace 的输出不可见。分区内指向外部的链接被拒绝。
+- 启动清理只进入私有的 `workspace-*`/`session-*` 目录，只删除 30 天前的普通文件，不跟随或删除链接与无关条目，失败时保留现场。
+
+spill 文件可能包含命令输出或文件内容，与 transcript 一样只受本机 owner-only 权限保护，不是静态加密。
+
 ## Approval、shell 与进程
 
 - `write`、`edit` 和 `bash` 在真正执行操作的位置请求一次性 approval，原因由类型化参数生成（目标路径、命令描述或升级理由）。问题与结果均写入 session；UI 不存在、取消、unknown outcome 或持久化失败都不会授权。参数无效或路径不安全的调用不会进入审批。
 - root policy 默认 `ask`，可切换为 `never`。delegated agent 的 policy 持久化为 `never`，approval service 不向 broker 提问，因此 subagent 无法写文件或运行 shell。
 - `bash` 默认通过 macOS `sandbox-exec` 或 Linux `bwrap` 执行。sandbox 只允许写 workspace 和 provider 拥有的临时目录；Linux 使用只读 root bind、workspace 可写 bind、独立 namespace、`--die-with-parent`。sandbox executable 缺失时拒绝执行。失败命令的 stderr 命中当前后端的拒绝签名时，结果追加 `[sandbox: file access denied under workspace-write mode]` 和一次性升级提示。
 - 模型参数沿用上游 `sandbox_permissions` 与 `justification`，按上游规则校验：`write`/`edit` 要求两者成对出现；`bash` 重复 `workspace-write` 时可省略 justification，未给模式时空白 justification 被忽略。`workspace-write` 等同默认模式。`danger-full-access` 只对 `bash` 有效：需要非空 justification，approval 原因为 `escalate sandbox to danger-full-access: <justification>`，批准后仅这一条命令在 host 上运行；delegated request 在执行点无条件拒绝。`write` 和 `edit` 在审批前拒绝 `danger-full-access`，文件工具从不离开 workspace。
-- `bash` 运行 `bash -c`。每次调用在审批之后作为后台任务注册表中的 job 运行，进程没有 runner 截止时间，只在自行结束、`job_kill` 或关闭时停止；停止时终止整个进程组并等待退出，命令结束后同一进程组中残留的后台进程也会被终止。`run_in_background: true` 立即返回 job ID，审批原因注明 background；前台调用等待 `timeoutMs`（默认 60 s、上限 10 min，超过上限按上限，非正值拒绝），到期后命令继续作为后台 job 运行而不是被终止。前台结果中 stdout 与 stderr 各保留最后 64,000 字节；非零退出码和信号以 `[exit code: N]`、`[killed by signal: S]` 标记返回，不是 tool error；取消调用会终止该 job 并返回 `tool call aborted`。owner 已有 10 个活动 job 时，后台调用被拒，前台调用退回到期即终止的执行方式，超时以 `[timed out after Nms]` 标记。
+- `bash` 运行 `bash -c`。每次调用在审批之后作为后台任务注册表中的 job 运行，进程没有 runner 截止时间，只在自行结束、`job_kill` 或关闭时停止；停止时终止整个进程组并等待退出，命令结束后同一进程组中残留的后台进程也会被终止。`run_in_background: true` 立即返回 job ID，审批原因注明 background；前台调用等待 `timeoutMs`（默认 60 s、上限 10 min，超过上限按上限，非正值拒绝），到期后命令继续作为后台 job 运行而不是被终止。前台结果中 stdout 与 stderr 各保留最后 64,000 字节，超出的流另存为 [spill 文件](#spill-文件)（单个最多 64 MiB）；非零退出码和信号以 `[exit code: N]`、`[killed by signal: S]` 标记返回，不是 tool error；取消调用会终止该 job 并返回 `tool call aborted`。owner 已有 10 个活动 job 时，后台调用被拒，前台调用退回到期即终止的执行方式，超时以 `[timed out after Nms]` 标记。
 - job 只能由启动它的 session 读取、等待和终止，其他 session 得到 `belongs to another session`；ID 可预测，边界是所有权。每个 job 的输出环运行中最多保留 128 KiB，结束后第一次读取裁到 16 KiB，丢失的字节以提示标出。插件关闭时先拒绝新 job，再终止并等待全部 job；harness 退出不会留下后台进程。完成通知只包含 job ID、种类、标签（命令文本）和状态，规则见 [ADR-0009](decisions/0009-background-jobs.md)。
 - 子进程环境在固定 allowlist 之外只增加 `NO_COLOR=1`、`TERM=dumb`、`PAGER=cat`、`GIT_PAGER=cat`、`DSH_SHELL=1` 和当前 `DSH_SESSION_ID`。
 - `glob`/`grep` 以 argv 直接运行构造时从 PATH 解析的 `rg`，不经过 shell。它们不需要 approval，也不进入 workspace sandbox：ripgrep 只读取文件，OS sandbox 只限制写入，不限制读取，进入 sandbox 不会缩小可见范围，反而会让没有 sandbox 可执行文件的主机失去搜索能力。每次调用前置 `--no-config`，`RIPGREP_CONFIG_PATH` 和配置文件无法注入 `--pre` 等预处理命令；模型提供的 pattern、include 和路径只以 `--regexp=`、`--glob=` 或 `--` 之后的单个参数传入。环境使用同一 allowlist，不传 `HOME`，因此不会读取用户的全局 git excludes；stdin 是空设备，cwd 是 workspace root。stdout 保留上限为 20,000,000 字节，超出时失败而不解析部分结果；stderr 只保留最后 64,000 字节作为错误摘要；超时或取消时终止进程组并等待退出。这与上游通过 subprocess 直接运行打包的 ripgrep 一致。

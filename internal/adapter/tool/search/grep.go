@@ -68,7 +68,7 @@ func (provider *Provider) grepTool() *appTool.Tool {
 	})
 }
 
-func checkGrep(arguments grepArgs) error {
+func checkGrep(_ appTool.Invocation, arguments grepArgs) error {
 	if arguments.Pattern == "" {
 		return errors.New("pattern must be a non-empty string")
 	}
@@ -101,8 +101,8 @@ func checkGrep(arguments grepArgs) error {
 
 // grep runs `rg --json --regexp=<pattern> [--glob=<include>]` and groups the
 // first matches by file in ripgrep's output order.
-func (provider *Provider) grep(ctx context.Context, _ appTool.Invocation, arguments grepArgs) (appTool.Result, error) {
-	start, err := provider.locate("grep", arguments.Path)
+func (provider *Provider) grep(ctx context.Context, invocation appTool.Invocation, arguments grepArgs) (appTool.Result, error) {
+	start, err := provider.locate("grep", arguments.Path, true)
 	if err != nil {
 		return appTool.Result{}, err
 	}
@@ -124,7 +124,19 @@ func (provider *Provider) grep(ctx context.Context, _ appTool.Invocation, argume
 			return appTool.Result{}, err
 		}
 	}
-	return appTool.Text(renderGrep(matches)), nil
+	if len(matches) <= grepMaxMatches {
+		return appTool.Text(renderGrep(matches, nil)), nil
+	}
+	// The artifact holds every match with its line preview, so it is the
+	// complete search rather than a longer page.
+	complete := fmt.Sprintf("Found %d matches\n\n%s", len(matches), groupMatches(matches))
+	ref, err := invocation.SaveText(ctx, "grep-results.txt", complete)
+	if err != nil {
+		// Like upstream, an unsaved complete result changes the footer, not
+		// the outcome of the search.
+		return appTool.Text(renderGrep(matches, nil)), nil
+	}
+	return appTool.Text(renderGrep(matches, &ref)), nil
 }
 
 // parseMatches reads every match record from complete `rg --json` output.
@@ -187,9 +199,10 @@ func previewLine(line string) string {
 	return line[:cut] + " (line truncated)"
 }
 
-// renderGrep keeps the first grepMaxMatches matches and groups them by file
-// in first-seen order, like upstream.
-func renderGrep(matches []grepMatch) string {
+// renderGrep keeps the first grepMaxMatches matches grouped by file, like
+// upstream; a capped result points at the saved complete result, or says it
+// could not be saved.
+func renderGrep(matches []grepMatch, ref *appTool.SpillRef) string {
 	if len(matches) == 0 {
 		return "No matches found"
 	}
@@ -197,14 +210,22 @@ func renderGrep(matches []grepMatch) string {
 	if len(matches) == 1 {
 		header = "Found 1 match"
 	}
-	retained := matches
-	if len(matches) > grepMaxMatches {
-		retained = matches[:grepMaxMatches]
-		header = fmt.Sprintf("Found %d of %d matches", grepMaxMatches, len(matches))
+	if len(matches) <= grepMaxMatches {
+		return header + "\n\n" + groupMatches(matches)
 	}
+	recovery := "The complete result could not be saved; narrow pattern, path, or include to see more."
+	if ref != nil {
+		recovery = fmt.Sprintf("Full grep result stored at: %s. %s", ref.Locator, ref.Hint)
+	}
+	return fmt.Sprintf("Found %d of %d matches\n\n%s\n\n(%s)", grepMaxMatches, len(matches), groupMatches(matches[:grepMaxMatches]), recovery)
+}
+
+// groupMatches groups matches by file in first-seen order with bounded line
+// previews.
+func groupMatches(matches []grepMatch) string {
 	var order []string
 	groups := map[string][]string{}
-	for _, match := range retained {
+	for _, match := range matches {
 		if _, seen := groups[match.path]; !seen {
 			order = append(order, match.path)
 		}
@@ -214,9 +235,5 @@ func renderGrep(matches []grepMatch) string {
 	for index, path := range order {
 		sections[index] = path + "\n" + strings.Join(groups[path], "\n")
 	}
-	text := header + "\n\n" + strings.Join(sections, "\n\n")
-	if len(matches) > grepMaxMatches {
-		text += "\n\n(The complete result could not be saved; narrow pattern, path, or include to see more.)"
-	}
-	return text
+	return strings.Join(sections, "\n\n")
 }

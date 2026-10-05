@@ -46,7 +46,7 @@ internal/platform
 ```text
 settings → settings file → credential store → LLM runtime
 → OpenAI/Anthropic/OpenRouter providers → approval → user questions
-→ tool runtime → images → prompt → plan mode → retry → compaction → web
+→ tool runtime → spill store → images → prompt → plan mode → retry → compaction → web
 → sessions → agent engine → agent registry → root bootstrap → subagents
 → file/search/shell tools → jobs → job/subagent/todo/web/question/plan/skill tools → TUI
 ```
@@ -140,15 +140,17 @@ Submit user message
 
 ## 工具、approval 与调度
 
-`internal/app/tool` 拥有工具定义抽象和运行时。工具用 `tool.Spec[A]` 声明名称、描述、按模型可见顺序排列的 `Parameters`、可选 prompt guidance，以及基于类型化参数 `A` 的 `Check`、`Concurrent`、`Approval` 和 `Execute`。`tool.Define` 编译 schema，并检查 `A` 的导出字段与声明成员一一对应、Go 类型兼容；无效定义在 `Runtime.Register` 被拒绝。
+`internal/app/tool` 拥有工具定义抽象和运行时。工具用 `tool.Spec[A]` 声明名称、描述、按模型可见顺序排列的 `Parameters`、可选 prompt guidance，以及基于类型化参数 `A` 的 `Check`、`Concurrent`、`Approval` 和 `Execute`；`Check` 与 `Execute` 还接收调用上下文 `Invocation`。`tool.Define` 编译 schema，并检查 `A` 的导出字段与声明成员一一对应、Go 类型兼容；无效定义在 `Runtime.Register` 被拒绝。
 
 - schema 采用上游 `defineTool` 子集中本仓用到的部分：可带 enum 的 string、number、boolean、必须声明 items 的 array，以及显式声明开放性的嵌套 object。序列化键序与上游编译器一致；根对象只输出 `type`、`properties` 和 `required`。
 - 批次开始前，runtime 按 schema 校验并解码每个调用，再用 `Concurrent(A)` 分类。缺少必填、类型不符、null、非有限数、`-0`、重复键和未声明成员（包括根对象）都成为 `invalid arguments: ...` 结果，并按上游遍历顺序列出全部违规。上游根对象对未知成员开放，本仓更严格，模型可见 schema 不变。
 - `Concurrent(A)` 为 true 的相邻调用并行；其余调用、未知工具和无效参数形成独占 barrier。结果顺序始终与原始 call 顺序一致。
-- 每个调用轮到执行时依次运行 `Check(A)`、`Approval(A)` 和 `Execute`。`Check` 因此能观察同一批次前序调用的效果，并在提问前拒绝语义错误或不安全路径；`Approval` 返回非空原因时请求一次性 approval，原因截断到 1 KiB。执行函数仍须在执行点确认 `Invocation.Approved`。
-- `tool.Result` 目前只有文本。runtime 统一替换非法 UTF-8，并把完整结果截断到 256 KiB；多模态结果扩展这个类型，不改变只返回文本的工具。
+- 每个调用轮到执行时依次运行 `Check(Invocation, A)`、`Approval(A)` 和 `Execute`。`Check` 因此能观察同一批次前序调用的效果和会话范围的状态，并在提问前拒绝语义错误、不安全路径或未读的写入目标。`Check` 收到的 `Invocation.Approved` 恒为 false，且不得产生副作用：之后可能不执行，approval 期间状态也可能变化，所以 `Execute` 必须重新检查它依赖的条件；`Approval` 返回非空原因时请求一次性 approval，原因截断到 1 KiB。执行函数仍须在执行点确认 `Invocation.Approved`。
+- `tool.Result` 目前只有文本。runtime 统一替换非法 UTF-8，对成功结果应用 spill 策略，再把完整结果截断到 256 KiB；多模态结果扩展这个类型，不改变只返回文本的工具。
+- spill 策略与上游 Base 相同：估算超过 12,500 token（`ceil(UTF-16 单元/4)+4`）的结果保存到 spill store，模型看到首尾预览和 `(Omitted N bytes. Full formatted result stored at: <locator>. <hint>)`。错误结果和声明 `KeepInline` 的工具（`read`）不进入策略；没有 store、没有会话或保存失败时保留原结果。
 - `Runtime.Catalog(allow)` 一次冻结按名称排序的 schema 和可见工具贡献的 guidance。guidance 按上游 section order 排序，engine 把它追加在 system prompt 的工具列表之后，与 schema 一起写入 `request/header`。
 - `Invocation` 携带 session、cwd、delegation、approval 结果，以及当前 tool/call 的 call ID、turn、step 和调用方 durable journal。需要记录会话事实的工具在 tool/result 之前向该 journal 追加；没有 journal 的调用方必须失败关闭。
+- `Runtime.UseSpill` 在插件 Scope 内发布唯一的 `SpillStore`。`Invocation.CreateSpill`/`SaveText` 按调用方会话打开或保存 spill 文件，没有 store 或会话时返回 `ErrSpillUnavailable`，工具据此使用上游的降级文案。
 - 未知工具、panic、拒绝、执行错误和取消都成为有界 tool result，文本使用上游的 `Error: <message>` 格式；resume 为未决调用补写的结果同样使用这一格式。
 
 内置工具与上游 Base 组合同名同定义（`ask_user_question` 取 Web preset 的默认阻塞定义），映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)，后台任务与 `bash` 后台变体见 [ADR-0009](decisions/0009-background-jobs.md)，提问与规划模式见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)：
@@ -166,7 +168,9 @@ Submit user message
 | `internal/adapter/tool/plan` | `plan-tools` | `exit_plan_mode` |
 | `internal/adapter/tool/skill` | `skill-tools` | `skill`，以及 step 前的 skill 目录与 `/name` 注入 |
 
-`internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。
+`internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。`cmd` 用 `WithReadOnly` 把 spill 分区只读地交给 `read` 与 `grep`；`shell-tools` 收到不含该分区的 root。
+
+`internal/adapter/spill` 是 `spill-local` 插件：在 `--spill-root` 下按 workspace 分区、按会话分组保存 owner-only 文件，启动时清理 30 天前的文件，关闭时等待已打开的文件。`fs-tools` 持有按会话记录的读取观察，`write` 只覆盖读过且内容未变的文件，`edit` 必须先读；观察状态只在内存中。存储布局、读回边界、观察语义和降级见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md)。
 
 `search-tools` 与 `shell-tools` 共用 `cmd` 构造的同一个 platform process runner。search provider 在构造时从 PATH 解析 `rg`，找不到时组装失败；`Start` 运行 `rg --version`，低于 15.0.0 时启动失败，不注册降级工具。`glob` 与 `grep` 按上游参数调用 ripgrep，并解析它的路径列表或 `--json` 输出；进程边界见[安全工程规则](security.md#approvalshell-与进程)，版本前提见[开发规范](development.md#ripgrep)。
 
@@ -270,7 +274,7 @@ subagent/descriptor, todo/write, plan/mode, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill）与 spill 策略的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。

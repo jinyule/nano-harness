@@ -6,6 +6,7 @@ import (
 	modelprovider "github.com/jinyule/nano-harness/internal/adapter/model/provider"
 	sessionjsonl "github.com/jinyule/nano-harness/internal/adapter/session/jsonl"
 	settingsfile "github.com/jinyule/nano-harness/internal/adapter/settings/file"
+	"github.com/jinyule/nano-harness/internal/adapter/spill"
 	filetool "github.com/jinyule/nano-harness/internal/adapter/tool/file"
 	jobtool "github.com/jinyule/nano-harness/internal/adapter/tool/job"
 	plantool "github.com/jinyule/nano-harness/internal/adapter/tool/plan"
@@ -55,6 +56,7 @@ var (
 	newModelRuntime      = llm.New
 	newModelProvider     = modelprovider.New
 	newToolRuntime       = appTool.New
+	newSpillStore        = spill.New
 	newRetryService      = retry.New
 	newCompactionService = compaction.New
 	newSessionManager    = sessionjsonl.New
@@ -109,6 +111,10 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
+	spillStore, err := newSpillStore(toolRuntime, spill.Config{Root: config.spillRoot, Workspace: config.workspaceRoot})
+	if err != nil {
+		return nil, err
+	}
 	images := mediaimage.New()
 	assembler := prompt.New()
 	planMode := plan.New()
@@ -148,12 +154,14 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
-	fileTools, err := newFileTools(toolRuntime, workspaceRoot)
+	// read and grep may open spilled artifacts; nothing else leaves the workspace.
+	readableRoot := workspaceRoot.WithReadOnly(spillStore.Dir())
+	fileTools, err := newFileTools(toolRuntime, readableRoot)
 	if err != nil {
 		return nil, err
 	}
 	processes := platformprocess.New()
-	searchTools, err := newSearchTools(toolRuntime, processes, workspaceRoot)
+	searchTools, err := newSearchTools(toolRuntime, processes, readableRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +207,7 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	// process before the shell temporary directory is removed.
 	plugins := []plugin.Plugin{
 		configuration, settingsProvider, credentials, modelRuntime,
-		providers[0], providers[1], providers[2], approvalService, questionService, toolRuntime,
+		providers[0], providers[1], providers[2], approvalService, questionService, toolRuntime, spillStore,
 		images, assembler, planMode, retryService, compactionService, webService, sessions, engine,
 		registry, root, subagents, fileTools, searchTools, shellTools, jobs, jobTools, subagentTools, todoTools, webTools,
 		questionTools, planTools, skillTools,

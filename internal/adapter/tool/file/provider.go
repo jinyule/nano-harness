@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
@@ -33,6 +34,7 @@ var (
 	lstatFile  = os.Lstat
 	makeDirs   = os.MkdirAll
 	renameFile = os.Rename
+	linkFile   = os.Link
 	removeFile = os.Remove
 	openFile   = func(path string) (io.ReadCloser, error) {
 		return os.Open(path) //nolint:gosec // callers confine the path to the workspace before opening
@@ -42,13 +44,20 @@ var (
 	}
 )
 
-// Provider owns the read, write, and edit registrations.
+// Provider owns the read, write, and edit registrations and the
+// observations that guard mutations. mutate serializes every guarded
+// check-and-publish across sessions, so a version check and its write cannot
+// interleave with another write or edit from this process.
 type Provider struct {
-	runtime *appTool.Runtime
-	root    workspace.Root
+	runtime  *appTool.Runtime
+	root     workspace.Root
+	observed observations
+	mutate   sync.Mutex
 }
 
-// New constructs an inert provider over a resolved workspace.
+// New constructs an inert provider over a resolved workspace. A root widened
+// with WithReadOnly lets read open the spill partition; write and edit stay
+// inside the workspace.
 func New(runtime *appTool.Runtime, root workspace.Root) (*Provider, error) {
 	if runtime == nil || root.Path() == "" {
 		return nil, ErrInvalidConfig
@@ -59,8 +68,15 @@ func New(runtime *appTool.Runtime, root workspace.Root) (*Provider, error) {
 // ID returns the stable plugin identity.
 func (*Provider) ID() string { return "fs-tools" }
 
-// Start publishes the file tools for the caller's scope.
+// Start publishes the file tools for the caller's scope. Cleanup drops every
+// recorded observation after the tools are withdrawn.
 func (provider *Provider) Start(_ context.Context, scope *plugin.Scope) error {
+	if err := scope.Defer(func(context.Context) error {
+		provider.observed.clear()
+		return nil
+	}); err != nil {
+		return err
+	}
 	for _, candidate := range []*appTool.Tool{provider.readTool(), provider.writeTool(), provider.editTool()} {
 		if err := provider.runtime.Register(candidate, scope); err != nil {
 			return err
@@ -70,8 +86,10 @@ func (provider *Provider) Start(_ context.Context, scope *plugin.Scope) error {
 }
 
 // writeAtomic publishes data at target through a synced owner-only sibling
-// file and a rename, so readers observe either the old or the new content.
-func writeAtomic(target string, data []byte, mode fs.FileMode) (err error) {
+// file, so readers observe either the old or the new content. A replacement
+// renames over the target; an exclusive publication hard-links instead, which
+// fails rather than clobbering a file created concurrently.
+func writeAtomic(target string, data []byte, mode fs.FileMode, exclusive bool) (err error) {
 	staged, err := createTemp(filepath.Dir(target), "."+filepath.Base(target)+".*.tmp")
 	if err != nil {
 		return err
@@ -91,7 +109,14 @@ func writeAtomic(target string, data []byte, mode fs.FileMode) (err error) {
 	if err = errors.Join(err, staged.Close()); err != nil {
 		return err
 	}
-	return renameFile(staged.Name(), target)
+	if !exclusive {
+		return renameFile(staged.Name(), target)
+	}
+	if err = linkFile(staged.Name(), target); err != nil {
+		return err
+	}
+	_ = removeFile(staged.Name()) // the target is published; private residue cannot undo it
+	return nil
 }
 
 // checkEscalation accepts upstream's escalation fields but keeps file tools

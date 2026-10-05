@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
@@ -18,11 +19,19 @@ import (
 )
 
 type recordingApprover struct {
+	mu      sync.Mutex
 	outcome session.ApprovalOutcome
 	reasons []string
+	// during runs while the question is pending, before the decision.
+	during func()
 }
 
 func (approver *recordingApprover) Decide(_ context.Context, request appTool.ApprovalRequest) (session.ApprovalOutcome, error) {
+	approver.mu.Lock()
+	defer approver.mu.Unlock()
+	if approver.during != nil {
+		approver.during()
+	}
 	approver.reasons = append(approver.reasons, request.Reason)
 	return approver.outcome, nil
 }
@@ -35,9 +44,9 @@ func (nopJournal) Append(context.Context, session.Record) (session.Event, error)
 
 func restoreHooks(t *testing.T) {
 	t.Helper()
-	stat, lstat, mkdir, rename, remove, open, create := statFile, lstatFile, makeDirs, renameFile, removeFile, openFile, createTemp
+	stat, lstat, mkdir, rename, link, remove, open, create := statFile, lstatFile, makeDirs, renameFile, linkFile, removeFile, openFile, createTemp
 	t.Cleanup(func() {
-		statFile, lstatFile, makeDirs, renameFile, removeFile, openFile, createTemp = stat, lstat, mkdir, rename, remove, open, create
+		statFile, lstatFile, makeDirs, renameFile, linkFile, removeFile, openFile, createTemp = stat, lstat, mkdir, rename, link, remove, open, create
 	})
 }
 
@@ -61,13 +70,17 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newHarnessOver(t, testRoot(t))
+}
+
+func newHarnessOver(t *testing.T, root workspace.Root) *harness {
+	t.Helper()
 	approver := &recordingApprover{outcome: session.ApprovalAllowedOnce}
 	runtime, _ := appTool.New(approver)
 	runtimeScope, providerScope := &plugin.Scope{}, &plugin.Scope{}
 	if err := runtime.Start(context.Background(), runtimeScope); err != nil {
 		t.Fatal(err)
 	}
-	root := testRoot(t)
 	provider, err := New(runtime, root)
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +105,14 @@ func (h *harness) call(t *testing.T, name string, arguments any) session.ToolRes
 		SessionID: "session", Turn: 1, Step: 1, Journal: nopJournal{},
 		Calls: []session.ToolCall{{ID: "call", Name: name, Arguments: encoded}},
 	})[0]
+}
+
+// read reads path through the runtime so the session observes it.
+func (h *harness) read(t *testing.T, path string) {
+	t.Helper()
+	if result := h.call(t, "read", map[string]any{"file_path": path}); result.IsError {
+		t.Fatalf("read %s = %s", path, result.Output)
+	}
 }
 
 func (h *harness) path(parts ...string) string {
@@ -146,14 +167,32 @@ func TestProvider_ValidatesRegistersAndCleansTools(t *testing.T) {
 	if len(catalog.Definitions) != 3 || catalog.Definitions[0].Name != "edit" || catalog.Definitions[1].Name != "read" || catalog.Definitions[2].Name != "write" {
 		t.Fatalf("definitions = %#v", catalog.Definitions)
 	}
-	if len(catalog.Guidance) != 1 || !strings.HasPrefix(catalog.Guidance[0], "Use the read tool") {
+	wantGuidance := []string{
+		"Use the read tool — not shell commands like cat — to inspect text files. Use offset and limit to continue reading large files.",
+		"Read an existing file before overwriting it with write (the default fs-observation-policy requires it) and prefer edit for targeted changes.",
+		"Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.",
+	}
+	if strings.Join(catalog.Guidance, "|") != strings.Join(wantGuidance, "|") {
 		t.Fatalf("guidance = %q", catalog.Guidance)
 	}
+	// Without edit, write drops its pointer to it.
+	if catalog, _ := runtime.Catalog([]string{"write"}); len(catalog.Guidance) != 1 || catalog.Guidance[0] != "Read an existing file before overwriting it with write (the default fs-observation-policy requires it)." {
+		t.Fatalf("write-only guidance = %q", catalog.Guidance)
+	}
+	provider.observed.record("s", root.Path(), observation{present: true})
 	if err := scope.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if catalog, _ := runtime.Catalog(nil); len(catalog.Definitions) != 0 {
 		t.Fatalf("tools retained after cleanup: %#v", catalog.Definitions)
+	}
+	if _, ok := provider.observed.lookup("s", root.Path()); ok {
+		t.Fatal("observations survived scope cleanup")
+	}
+	closed := &plugin.Scope{}
+	_ = closed.Close(context.Background())
+	if err := provider.Start(context.Background(), closed); !errors.Is(err, plugin.ErrScopeClosed) {
+		t.Fatalf("closed scope = %v", err)
 	}
 
 	// A registration failure part-way through leaves earlier tools owned by
@@ -203,7 +242,7 @@ func TestWriteAtomic_PublishesOrRemovesStagedFile(t *testing.T) {
 	restoreHooks(t)
 	directory := t.TempDir()
 	target := filepath.Join(directory, "out.txt")
-	if err := writeAtomic(target, []byte("first"), 0o640); err != nil {
+	if err := writeAtomic(target, []byte("first"), 0o640, false); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(target)
@@ -242,17 +281,33 @@ func TestWriteAtomic_PublishesOrRemovesStagedFile(t *testing.T) {
 				removed = name
 				return nil
 			}
-			if err := writeAtomic(target, []byte("second"), 0o600); !errors.Is(err, failure) || removed != test.staged.name {
+			if err := writeAtomic(target, []byte("second"), 0o600, false); !errors.Is(err, failure) || removed != test.staged.name {
 				t.Fatalf("error = %v, removed = %q", err, removed)
 			}
 		})
 	}
 	createTemp = func(string, string) (stagedFile, error) { return nil, failure }
-	if err := writeAtomic(target, nil, 0o600); !errors.Is(err, failure) {
+	if err := writeAtomic(target, nil, 0o600, false); !errors.Is(err, failure) {
 		t.Fatalf("create error = %v", err)
 	}
 	if readFixture(t, target) != "first" {
 		t.Fatal("failed writes changed the published file")
+	}
+}
+
+func TestWriteAtomic_ExclusivePublicationNeverClobbers(t *testing.T) {
+	restoreHooks(t)
+	directory := t.TempDir()
+	target := filepath.Join(directory, "new.txt")
+	if err := writeAtomic(target, []byte("mine"), 0o600, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(target, []byte("theirs"), 0o600, true); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("second exclusive publication = %v", err)
+	}
+	entries, _ := os.ReadDir(directory)
+	if readFixture(t, target) != "mine" || len(entries) != 1 {
+		t.Fatalf("content = %q, entries = %v", readFixture(t, target), entries)
 	}
 }
 

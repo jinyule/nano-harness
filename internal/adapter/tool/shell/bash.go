@@ -66,7 +66,7 @@ func (provider *Provider) bashTool() *appTool.Tool {
 			appTool.Optional("run_in_background", appTool.Boolean("Run in the background and return a job id immediately (collect with job_output, stop with job_kill). No timeout applies.")),
 		}, workspace.EscalationProperties("command", "command")...),
 		Guidance: appTool.StaticGuidance(appTool.OrderBash, "Check the [exit code: N] marker on every bash result; investigate failures before moving on."),
-		Check: func(arguments bashArgs) error {
+		Check: func(_ appTool.Invocation, arguments bashArgs) error {
 			if err := checkBash(arguments); err != nil {
 				return err
 			}
@@ -145,13 +145,13 @@ func (provider *Provider) bash(ctx context.Context, invocation appTool.Invocatio
 		if ctx.Err() != nil {
 			return appTool.Result{}, errors.New("tool call aborted")
 		}
-		id, err := provider.jobs.Launch(provider.job(invocation.SessionID, arguments.Command, request, &processRun{}))
+		id, err := provider.jobs.Launch(provider.job(invocation, arguments.Command, request, &processRun{}))
 		if err != nil {
 			return appTool.Result{}, err
 		}
 		return appTool.Text("started background job " + id), nil
 	}
-	return provider.foreground(ctx, invocation.SessionID, arguments.Command, request, timeoutMS)
+	return provider.foreground(ctx, invocation, arguments.Command, request, timeoutMS)
 }
 
 // processRun carries a job's process result to the foreground call that
@@ -159,15 +159,27 @@ func (provider *Provider) bash(ctx context.Context, invocation appTool.Invocatio
 type processRun struct {
 	result platformProcess.Result
 	err    error
+	// spills are the committed complete-output files of stdout and stderr.
+	spills [2]string
 }
 
 // job wraps one command as a background job. The process has no deadline:
 // it ends on its own, by job_kill, or at shutdown, and the runner kills its
-// whole process group on cancellation.
-func (provider *Provider) job(owner, command string, request platformProcess.Request, run *processRun) appJob.Spec {
-	return appJob.Spec{Kind: "bash", Label: command, Owner: owner, Run: func(ctx context.Context, output *appJob.Output) appJob.Outcome {
-		request.Stdout, request.Stderr = output.Writer(appJob.Stdout), output.Writer(appJob.Stderr)
+// whole process group on cancellation. Each stream that outgrows the
+// retained tail is also written to a complete-output spill file owned by the
+// calling session; the job advertises it while running and the file is
+// committed before the job settles.
+func (provider *Provider) job(invocation appTool.Invocation, command string, request platformProcess.Request, run *processRun) appJob.Spec {
+	return appJob.Spec{Kind: "bash", Label: command, Owner: invocation.SessionID, Run: func(ctx context.Context, output *appJob.Output) appJob.Outcome {
+		streams := [2]*streamSpill{
+			newStreamSpill(output.Writer(appJob.Stdout), openSpill(ctx, invocation, "bash-stdout.log"),
+				func(locator string) { output.Advertise(appJob.Stdout, locator) }),
+			newStreamSpill(output.Writer(appJob.Stderr), openSpill(ctx, invocation, "bash-stderr.log"),
+				func(locator string) { output.Advertise(appJob.Stderr, locator) }),
+		}
+		request.Stdout, request.Stderr = streams[0], streams[1]
 		run.result, run.err = provider.runner.Run(ctx, request)
+		run.spills = finishAll(streams)
 		return outcome(run.result, run.err)
 	}}
 }
@@ -177,13 +189,19 @@ func (provider *Provider) job(owner, command string, request platformProcess.Req
 // output so far; one that settles in time is removed and rendered like any
 // foreground result. When the owner is at its job limit the command runs
 // under the deadline kill instead.
-func (provider *Provider) foreground(ctx context.Context, owner, command string, request platformProcess.Request, timeoutMS float64) (appTool.Result, error) {
+func (provider *Provider) foreground(ctx context.Context, invocation appTool.Invocation, command string, request platformProcess.Request, timeoutMS float64) (appTool.Result, error) {
 	timeout := max(time.Duration(timeoutMS*float64(time.Millisecond)), time.Nanosecond)
+	owner := invocation.SessionID
 	run := &processRun{}
-	id, err := provider.jobs.Launch(provider.job(owner, command, request, run))
+	id, err := provider.jobs.Launch(provider.job(invocation, command, request, run))
 	if errors.Is(err, appJob.ErrLimit) {
-		request.Timeout = timeout
+		streams := [2]*streamSpill{
+			newStreamSpill(nil, openSpill(ctx, invocation, "bash-stdout.log"), nil),
+			newStreamSpill(nil, openSpill(ctx, invocation, "bash-stderr.log"), nil),
+		}
+		request.Timeout, request.Stdout, request.Stderr = timeout, streams[0], streams[1]
 		run.result, run.err = provider.runner.Run(ctx, request)
+		run.spills = finishAll(streams)
 		return finish(ctx, *run, timeoutMS)
 	}
 	if err != nil {
@@ -218,7 +236,7 @@ func finish(ctx context.Context, run processRun, timeoutMS float64) (appTool.Res
 	if run.err != nil {
 		return appTool.Result{}, run.err
 	}
-	return appTool.Text(render(run.result, timeoutMS)), nil
+	return appTool.Text(render(run.result, run.spills, timeoutMS)), nil
 }
 
 // outcome maps a settled process onto the job vocabulary like upstream: a
@@ -275,10 +293,11 @@ func (provider *Provider) workdir(requested *string) (string, error) {
 
 // render shapes a finished run like upstream: stdout, a marked stderr
 // section, then sandbox, timeout, and exit markers, each on its own line.
-// Non-zero exits are results for the model, not tool errors.
-func render(result platformProcess.Result, timeoutMS float64) string {
-	body := stream(result.Stdout)
-	if stderr := stream(result.Stderr); stderr != "" {
+// A truncated stream names its complete-output file from spills. Non-zero
+// exits are results for the model, not tool errors.
+func render(result platformProcess.Result, spills [2]string, timeoutMS float64) string {
+	body := stream(result.Stdout, spills[0])
+	if stderr := stream(result.Stderr, spills[1]); stderr != "" {
 		if body != "" && !strings.HasSuffix(body, "\n") {
 			body += "\n"
 		}
@@ -309,11 +328,17 @@ func render(result platformProcess.Result, timeoutMS float64) string {
 	return body + strings.Join(markers, "\n")
 }
 
-func stream(output platformProcess.Output) string {
+// stream appends upstream's truncation notice with the complete-output file,
+// or "(unavailable)" when none exists (no store, a failed save, or a stream
+// beyond the spill size limit).
+func stream(output platformProcess.Output, spill string) string {
 	if !output.Truncated {
 		return output.Text
 	}
-	return output.Text + "\n[output truncated; full output: (unavailable)]"
+	if spill == "" {
+		spill = "(unavailable)"
+	}
+	return output.Text + "\n[output truncated; full output: " + spill + "]"
 }
 
 // formatMS prints a millisecond count the way JavaScript stringifies numbers

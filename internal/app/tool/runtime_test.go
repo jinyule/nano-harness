@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -272,7 +273,7 @@ func TestRuntime_ContainsApprovalFailuresPanicsAndLargeOutput(t *testing.T) {
 			return Result{}, errors.New(strings.Repeat("界", session.MaxTextBytes))
 		}),
 		Define(Spec[noArguments]{Name: "check_panic", Description: "panics while classifying", Concurrent: func(noArguments) bool { panic("classifier") }, Execute: never2}),
-		Define(Spec[noArguments]{Name: "checked", Description: "semantic error", Check: func(noArguments) error { return errors.New("semantic") }, Execute: never2}),
+		Define(Spec[noArguments]{Name: "checked", Description: "semantic error", Check: func(Invocation, noArguments) error { return errors.New("semantic") }, Execute: never2}),
 	}
 	for _, candidate := range tools {
 		if err := runtime.Register(candidate, scope); err != nil {
@@ -346,14 +347,23 @@ func TestRuntime_ChecksEachCallAfterEarlierCallsInTheBatch(t *testing.T) {
 	})
 	use := Define(Spec[noArguments]{
 		Name: "use", Description: "needs the created state",
-		Check: func(noArguments) error {
+		Check: func(invocation Invocation, _ noArguments) error {
+			// Check sees the call's context but never an approval grant.
+			if invocation.SessionID != "s" || invocation.CallID == "" || invocation.Turn != 1 || invocation.Approved {
+				return fmt.Errorf("check invocation = %+v", invocation)
+			}
 			if !created {
 				return errors.New("state is missing")
 			}
 			return nil
 		},
 		Approval: func(noArguments) string { return "use state" },
-		Execute:  func(context.Context, Invocation, noArguments) (Result, error) { return Text("used"), nil },
+		Execute: func(_ context.Context, invocation Invocation, _ noArguments) (Result, error) {
+			if !invocation.Approved {
+				return Result{}, errors.New("executed without the grant")
+			}
+			return Text("used"), nil
+		},
 	})
 	scope := &plugin.Scope{}
 	for _, candidate := range []*Tool{create, use} {

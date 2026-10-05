@@ -102,6 +102,13 @@ func (writer channelWriter) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
+// Advertise names the file that holds the complete stream of channel, or
+// withdraws it with an empty locator when that file can no longer hold it.
+// Reads list advertised files after a loss.
+func (output *Output) Advertise(channel Channel, locator string) {
+	output.service.advertise(output.record, channel, locator)
+}
+
 // flush appends bytes still held as incomplete sequences; rendering
 // replaces them with the replacement character.
 func (output *Output) flush() {

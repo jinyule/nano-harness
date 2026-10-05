@@ -33,6 +33,8 @@ type record struct {
 	result          string
 	resultDelivered bool
 	ring            ring
+	// spills are the advertised complete-output files per channel.
+	spills [2]string
 	// cursor is the model's consuming read position in the ring.
 	cursor     int64
 	cancel     context.CancelFunc
@@ -172,6 +174,12 @@ func (service *Service) write(current *record, channel Channel, data []byte) {
 	}
 }
 
+func (service *Service) advertise(current *record, channel Channel, locator string) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	current.spills[channel] = locator
+}
+
 // settle records the terminal outcome, releases waiters, and notifies the
 // owner unless a waiter, a kill, or teardown already accounts for it.
 func (service *Service) settle(current *record, outcome Outcome) {
@@ -264,6 +272,11 @@ func (service *Service) Read(owner, id string) (Read, error) {
 	var read Read
 	read.Stdout, read.Stderr, read.Lossy = current.ring.readFrom(current.cursor)
 	current.cursor = current.ring.total
+	for _, locator := range current.spills {
+		if locator != "" {
+			read.Spills = append(read.Spills, locator)
+		}
+	}
 	if current.status.terminal() {
 		if !current.resultDelivered {
 			read.Result, current.resultDelivered = current.result, true

@@ -42,6 +42,7 @@ var (
 type applicationConfig struct {
 	workspaceRoot   string
 	sessionRoot     string
+	spillRoot       string
 	settingsPath    string
 	credentialPath  string
 	skillsDir       string
@@ -172,6 +173,7 @@ func parseTUIConfig(args []string, stderr io.Writer) (applicationConfig, error) 
 	}
 	config := applicationConfig{
 		workspaceRoot: workspaceRoot, sessionRoot: filepath.Join(applicationRoot, "sessions"),
+		spillRoot:       filepath.Join(applicationRoot, "spill"),
 		settingsPath:    filepath.Join(applicationRoot, "settings.yaml"),
 		credentialPath:  filepath.Join(applicationRoot, "credentials.yaml"),
 		skillsDir:       filepath.Join(applicationRoot, "skills"),
@@ -182,6 +184,7 @@ func parseTUIConfig(args []string, stderr io.Writer) (applicationConfig, error) 
 	flags.SetOutput(stderr)
 	flags.StringVar(&config.workspaceRoot, "root", config.workspaceRoot, "workspace root available to coding tools")
 	flags.StringVar(&config.sessionRoot, "session-root", config.sessionRoot, "private directory for JSONL sessions")
+	flags.StringVar(&config.spillRoot, "spill-root", config.spillRoot, "private directory for complete tool output that did not fit inline")
 	flags.StringVar(&config.settingsPath, "settings", config.settingsPath, "hot-reloadable owner-only settings YAML")
 	flags.StringVar(&config.credentialPath, "credentials", config.credentialPath, "owner-only provider account YAML")
 	flags.StringVar(&config.skillsDir, "skills-dir", config.skillsDir, "user skill directory scanned after the project skill directories")
@@ -205,10 +208,14 @@ func normalizeConfig(config applicationConfig) (applicationConfig, error) {
 		return applicationConfig{}, errors.New("session ID and max-steps 1-256 are required")
 	}
 	for name, value := range map[string]*string{
-		"workspace": &config.workspaceRoot, "session root": &config.sessionRoot,
+		"workspace": &config.workspaceRoot, "session root": &config.sessionRoot, "spill root": &config.spillRoot,
 		"settings": &config.settingsPath, "credentials": &config.credentialPath,
 		"skills": &config.skillsDir, "agents skills": &config.agentsSkillsDir,
 	} {
+		// An empty path would silently resolve to the working directory.
+		if *value == "" {
+			return applicationConfig{}, fmt.Errorf("%s path is required", name)
+		}
 		absolute, err := absolutePath(*value)
 		if err != nil {
 			return applicationConfig{}, fmt.Errorf("resolve %s path: %w", name, err)
@@ -271,7 +278,7 @@ func composeTUI(config applicationConfig, deps dependencies) (*composition, erro
 // each tool provider, and the session format. Bump a provider token whenever
 // its model-visible definitions or behavior change incompatibly.
 func compositionID(config applicationConfig) string {
-	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00fs-tools-v1\x00search-tools-v2\x00shell-tools-v2\x00job-tools-v1\x00subagent-tools-v2\x00todo-tools-v1\x00web-tools-v1\x00question-tools-v1\x00plan-tools-v1\x00skill-tools-v1\x00session-v2"
+	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00fs-tools-v2\x00search-tools-v3\x00shell-tools-v3\x00job-tools-v1\x00subagent-tools-v2\x00todo-tools-v1\x00web-tools-v1\x00question-tools-v1\x00plan-tools-v1\x00skill-tools-v1\x00spill-v1\x00session-v2"
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
 }

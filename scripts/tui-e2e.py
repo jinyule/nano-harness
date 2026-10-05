@@ -160,7 +160,7 @@ class Terminal:
             [str(binary), "tui", "--root", str(workspace), "--settings", str(settings),
              "--credentials", str(directory / "credentials.yaml"), "--session-root", str(directory / "sessions"),
              "--skills-dir", str(directory / "skills"), "--agents-skills-dir", str(directory / "agents-skills"),
-             "--session", "session-pty"],
+             "--spill-root", str(directory / "spill"), "--session", "session-pty"],
             stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
             env={"PATH": tool_path(), "HOME": os.environ["HOME"], "TERM": "xterm-256color", "NANO_FIXTURE_KEY": "fixture-key"},
         )
@@ -209,6 +209,7 @@ class Terminal:
 
 
 def records(directory):
+    assert (directory / "spill").stat().st_mode & 0o777 == 0o700
     result = {}
     for path in (directory / "sessions").glob("*.jsonl"):
         assert path.stat().st_mode & 0o777 == 0o600

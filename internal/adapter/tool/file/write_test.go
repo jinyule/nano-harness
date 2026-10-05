@@ -32,6 +32,7 @@ func TestWrite_CreatesAndReplacesFilesAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFixture(t, h.path("untouched.txt"), "same")
+	h.read(t, "existing.txt")
 	result = h.call(t, "write", map[string]any{"file_path": h.path("existing.txt"), "content": "", "sandbox_permissions": "workspace-write", "justification": "repeat the standing mode"})
 	info, _ = os.Stat(h.path("existing.txt"))
 	if result.IsError || result.Output != envelope(h.path("existing.txt"), "Updated file") || readFixture(t, h.path("existing.txt")) != "" || info.Mode().Perm() != 0o640 {
@@ -91,7 +92,7 @@ func TestWrite_RejectsUnsafeTargetsWithoutTouchingFiles(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(outside, "new.txt")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("write created a file through a symlinked directory")
 	}
-	if strings.Join(h.approver.reasons, "|") != `write file "dir"` {
+	if len(h.approver.reasons) != 0 {
 		t.Fatalf("invalid arguments reached approval: %q", h.approver.reasons)
 	}
 	h.approver.outcome = session.ApprovalRejected
@@ -155,6 +156,7 @@ func TestEdit_ReplacesLiteralTextLikeUpstream(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			path := h.path(test.name + ".txt")
 			writeFixture(t, path, test.content)
+			h.read(t, test.name+".txt")
 			test.arguments["file_path"] = test.name + ".txt"
 			result := h.call(t, "edit", test.arguments)
 			want := fmt.Sprintf("The file %s has been updated successfully.", path)
@@ -174,7 +176,8 @@ func TestEdit_ReplacesLiteralTextLikeUpstream(t *testing.T) {
 func TestEdit_RejectsInvalidAndUnsafeEdits(t *testing.T) {
 	h := newHarness(t)
 	writeFixture(t, h.path("file.txt"), "dup dup")
-	writeFixture(t, h.path("binary"), "a\x00b")
+	// A NUL past the read tool's binary sample is readable but not editable.
+	writeFixture(t, h.path("binary"), strings.Repeat("a", binarySampleBytes)+"\x00b")
 	writeFixture(t, h.path("latin1"), "caf\xe9")
 	if err := os.Mkdir(h.path("dir"), 0o700); err != nil {
 		t.Fatal(err)
@@ -182,8 +185,14 @@ func TestEdit_RejectsInvalidAndUnsafeEdits(t *testing.T) {
 	if err := os.Symlink(h.path("file.txt"), h.path("alias")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(h.path("large"), make([]byte, maxEditBytes+1), 0o600); err != nil {
+	if err := os.WriteFile(h.path("large"), []byte(strings.Repeat("a", maxEditBytes+1)), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	for _, path := range []string{"file.txt", "binary", "large"} {
+		h.read(t, path)
+	}
+	if result := h.call(t, "read", map[string]any{"file_path": "absent.txt"}); !result.IsError {
+		t.Fatal("read of a missing file succeeded")
 	}
 	for _, test := range []struct {
 		arguments map[string]any
@@ -197,12 +206,13 @@ func TestEdit_RejectsInvalidAndUnsafeEdits(t *testing.T) {
 		{map[string]any{"file_path": "file.txt", "old_string": "a", "new_string": "b", "sandbox_permissions": "danger-full-access", "justification": "x"}, "not available for file operations"},
 		{map[string]any{"file_path": "file.txt", "old_string": "dup", "new_string": "x"}, fmt.Sprintf("old_string matched 2 times in %q; provide a more specific old_string or set replace_all to true", h.path("file.txt"))},
 		{map[string]any{"file_path": "file.txt", "old_string": "absent", "new_string": "x"}, fmt.Sprintf("old_string was not found in %q", h.path("file.txt"))},
-		{map[string]any{"file_path": "missing.txt", "old_string": "a", "new_string": "b"}, fmt.Sprintf("cannot edit %q: not found", h.path("missing.txt"))},
-		{map[string]any{"file_path": "dir", "old_string": "a", "new_string": "b"}, "not a regular file"},
+		{map[string]any{"file_path": "missing.txt", "old_string": "a", "new_string": "b"}, fmt.Sprintf("cannot modify %q: file has not been read — read the file, then retry", h.path("missing.txt"))},
+		{map[string]any{"file_path": "absent.txt", "old_string": "a", "new_string": "b"}, fmt.Sprintf("cannot edit %q: not found", h.path("absent.txt"))},
+		{map[string]any{"file_path": "dir", "old_string": "a", "new_string": "b"}, "file has not been read"},
 		{map[string]any{"file_path": "alias", "old_string": "dup", "new_string": "b"}, "path crosses a symbolic link"},
 		{map[string]any{"file_path": "../x", "old_string": "a", "new_string": "b"}, "path is outside the workspace"},
 		{map[string]any{"file_path": "binary", "old_string": "a", "new_string": "b"}, "binary file"},
-		{map[string]any{"file_path": "latin1", "old_string": "caf", "new_string": "b"}, "invalid UTF-8 text"},
+		{map[string]any{"file_path": "latin1", "old_string": "caf", "new_string": "b"}, "file has not been read"},
 		{map[string]any{"file_path": "large", "old_string": "a", "new_string": "b"}, "exceeds the 10485760-byte limit"},
 	} {
 		result := h.call(t, "edit", test.arguments)
@@ -219,7 +229,8 @@ func TestEdit_ExecutionPointGuardsAndFilesystemFailures(t *testing.T) {
 	restoreHooks(t)
 	h := newHarness(t)
 	writeFixture(t, h.path("file.txt"), "old")
-	approved := appTool.Invocation{Approved: true}
+	approved := appTool.Invocation{SessionID: "s", Approved: true}
+	h.provider.observed.record("s", h.path("file.txt"), observation{present: true, version: digest([]byte("old"))})
 	arguments := editArgs{FilePath: "file.txt", OldString: "old", NewString: "new"}
 	if _, err := h.provider.edit(context.Background(), appTool.Invocation{}, arguments); err == nil || !strings.Contains(err.Error(), "approval was not granted") {
 		t.Fatalf("unapproved = %v", err)

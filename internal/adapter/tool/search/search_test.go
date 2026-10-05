@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -70,6 +71,13 @@ type harness struct {
 // directories this test controls.
 func newHarness(t *testing.T, runner Runner) *harness {
 	t.Helper()
+	return newHarnessWith(t, runner, "", nil)
+}
+
+// newHarnessWith optionally grants read-only access to readOnly and puts a
+// spill store in use.
+func newHarnessWith(t *testing.T, runner Runner, readOnly string, store appTool.SpillStore) *harness {
+	t.Helper()
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -82,10 +90,18 @@ func newHarness(t *testing.T, runner Runner) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if readOnly != "" {
+		root = root.WithReadOnly(readOnly)
+	}
 	runtime, _ := appTool.New(denyApprover{})
 	runtimeScope, providerScope := &plugin.Scope{}, &plugin.Scope{}
 	if err := runtime.Start(context.Background(), runtimeScope); err != nil {
 		t.Fatal(err)
+	}
+	if store != nil {
+		if err := runtime.UseSpill(store, providerScope); err != nil {
+			t.Fatal(err)
+		}
 	}
 	provider, err := New(runtime, runner, root)
 	if err != nil {
@@ -500,5 +516,101 @@ func TestLocate_SurfacesMetadataFailures(t *testing.T) {
 	lstatPath = func(string) (os.FileInfo, error) { return nil, errors.New("io failure") }
 	if result := h.call(t, "grep", map[string]any{"pattern": "x"}); !result.IsError || result.Output != "Error: grep search failed: io failure" {
 		t.Fatalf("lstat failure = %#v", result)
+	}
+}
+
+// directorySpill writes artifacts as plain files in one directory.
+type directorySpill struct {
+	dir       string
+	createErr error
+}
+
+func (store *directorySpill) Create(_ context.Context, _, name string) (appTool.SpillFile, error) {
+	if store.createErr != nil {
+		return nil, store.createErr
+	}
+	file, err := os.CreateTemp(store.dir, "*-"+name)
+	if err != nil {
+		return nil, err
+	}
+	return &directoryFile{file: file}, nil
+}
+
+type directoryFile struct {
+	file  *os.File
+	bytes int
+}
+
+func (file *directoryFile) Write(data []byte) (int, error) {
+	written, err := file.file.Write(data)
+	file.bytes += written
+	return written, err
+}
+
+func (file *directoryFile) Locator() string { return file.file.Name() }
+
+func (file *directoryFile) Commit() (appTool.SpillRef, error) {
+	return appTool.SpillRef{Locator: file.file.Name(), Bytes: file.bytes, Hint: "Use read."}, file.file.Close()
+}
+
+func (file *directoryFile) Discard() error {
+	return errors.Join(file.file.Close(), os.Remove(file.file.Name()))
+}
+
+func TestSearch_SavesCompleteResultsAndSearchesTheSpillPartition(t *testing.T) {
+	spill, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &directorySpill{dir: spill}
+	h := newHarnessWith(t, platformProcess.New(), spill, store)
+	var paths []string
+	for index := range globMaxResults + 5 {
+		name := fmt.Sprintf("many/f%03d.txt", index)
+		h.write(t, name, "x")
+		h.touch(t, name, time.Duration(index)*time.Minute)
+		paths = append(paths, name)
+	}
+	result := h.call(t, "glob", map[string]any{"pattern": "*.txt", "path": "many"})
+	footer := regexp.MustCompile(`\n\n\(Showing 100 of 105 paths\. Full sorted result stored at: (\S+-glob-results\.txt)\. Use read\.\)$`).FindStringSubmatch(result.Output)
+	if result.IsError || footer == nil || !strings.HasPrefix(result.Output, strings.Join(paths[:globMaxResults], "\n")+"\n\n") {
+		t.Fatalf("glob = %q", result.Output[max(0, len(result.Output)-200):])
+	}
+	if data, err := os.ReadFile(footer[1]); err != nil || string(data) != strings.Join(paths, "\n") {
+		t.Fatalf("glob artifact = %d bytes, %v", len(data), err)
+	}
+
+	h.write(t, "many.txt", strings.Repeat("needle\n", grepMaxMatches+3))
+	result = h.call(t, "grep", map[string]any{"pattern": "needle", "path": "many.txt"})
+	footer = regexp.MustCompile(`\n\n\(Full grep result stored at: (\S+-grep-results\.txt)\. Use read\.\)$`).FindStringSubmatch(result.Output)
+	if result.IsError || footer == nil || !strings.HasPrefix(result.Output, "Found 250 of 253 matches\n\nmany.txt\nLine 1: needle\n") || !strings.Contains(result.Output, "Line 250: needle\n\n(") {
+		t.Fatalf("grep = %q", result.Output[max(0, len(result.Output)-200):])
+	}
+	var lines []string
+	for line := range grepMaxMatches + 3 {
+		lines = append(lines, fmt.Sprintf("Line %d: needle", line+1))
+	}
+	if data, err := os.ReadFile(footer[1]); err != nil || string(data) != "Found 253 matches\n\nmany.txt\n"+strings.Join(lines, "\n") {
+		t.Fatalf("grep artifact = %q, %v", data[:min(len(data), 80)], err)
+	}
+
+	// grep may search the spill partition by absolute path; glob may not.
+	if result := h.call(t, "grep", map[string]any{"pattern": "Line 253", "path": footer[1]}); result.IsError || result.Output != "Found 1 match\n\n"+footer[1]+"\nLine 256: Line 253: needle" {
+		t.Fatalf("grep artifact = %q", result.Output)
+	}
+	if result := h.call(t, "glob", map[string]any{"pattern": "*", "path": spill}); !strings.Contains(result.Output, "path is outside the workspace") {
+		t.Fatalf("glob spill = %q", result.Output)
+	}
+	if result := h.call(t, "grep", map[string]any{"pattern": "x", "path": filepath.Dir(spill)}); !strings.Contains(result.Output, "path is outside the workspace") {
+		t.Fatalf("grep outside = %q", result.Output)
+	}
+
+	// A failed save keeps the page and reports the unsaved remainder.
+	store.createErr = errors.New("disk full")
+	if result := h.call(t, "glob", map[string]any{"pattern": "*.txt", "path": "many"}); !strings.HasSuffix(result.Output, "(Showing 100 of 105 paths. The complete result could not be saved; narrow pattern or path to see more.)") {
+		t.Fatalf("unsaved glob = %q", result.Output[len(result.Output)-120:])
+	}
+	if result := h.call(t, "grep", map[string]any{"pattern": "needle", "path": "many.txt"}); !strings.HasSuffix(result.Output, "(The complete result could not be saved; narrow pattern, path, or include to see more.)") {
+		t.Fatalf("unsaved grep = %q", result.Output[len(result.Output)-120:])
 	}
 }

@@ -28,8 +28,12 @@ var (
 )
 
 // Root is an absolute, symlink-resolved workspace directory fixed at
-// construction. The zero value is invalid and rejected by tool providers.
-type Root struct{ path string }
+// construction, optionally widened by one read-only directory outside it.
+// The zero value is invalid and rejected by tool providers.
+type Root struct {
+	path     string
+	readOnly string
+}
 
 // Resolve fixes a workspace root, following links once at construction.
 func Resolve(path string) (Root, error) {
@@ -114,6 +118,40 @@ func (root Root) Writable(path string) (string, error) {
 	return target, nil
 }
 
+// WithReadOnly returns a copy of root that also lets Readable open paths
+// inside dir, an absolute directory such as the spill partition. dir need not
+// exist yet; its links are resolved on every check. A relative dir never
+// contains an absolute path, so it grants nothing. Mutations and the other
+// path methods stay confined to the workspace.
+func (root Root) WithReadOnly(dir string) Root {
+	root.readOnly = filepath.Clean(dir)
+	return root
+}
+
+// Readable resolves an existing path for read-only tools. Workspace paths
+// behave exactly like Existing. An absolute path outside the workspace is
+// accepted only when it lies lexically inside the read-only directory and its
+// resolved form stays inside that directory's resolved form, so links planted
+// there cannot redirect a read elsewhere.
+func (root Root) Readable(path string) (lexical, resolved string, err error) {
+	target := filepath.Clean(path)
+	if root.readOnly == "" || !filepath.IsAbs(target) || root.contains(target) || !within(root.readOnly, target) {
+		return root.Existing(path)
+	}
+	directory, err := resolveLinks(root.readOnly)
+	if err != nil {
+		return target, "", err
+	}
+	resolved, err = resolveLinks(target)
+	if err != nil {
+		return target, "", err
+	}
+	if !within(directory, resolved) {
+		return target, "", fmt.Errorf("%w: %s", ErrOutsideRoot, path)
+	}
+	return target, resolved, nil
+}
+
 // Relative returns target relative to the root with forward slashes, the
 // display form used by discovery tools. The root itself is ".".
 func (root Root) Relative(target string) string {
@@ -124,7 +162,10 @@ func (root Root) Relative(target string) string {
 	return filepath.ToSlash(relative)
 }
 
-func (root Root) contains(target string) bool {
-	relative, err := relativePath(root.path, target)
+func (root Root) contains(target string) bool { return within(root.path, target) }
+
+// within reports whether target lies lexically at or below directory.
+func within(directory, target string) bool {
+	relative, err := relativePath(directory, target)
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }

@@ -34,24 +34,38 @@ func (provider *Provider) writeTool() *appTool.Tool {
 			appTool.Required("file_path", appTool.String("Path to write, resolved by the filesystem backend. Provide `file_path` before `content` in the arguments.")),
 			appTool.Required("content", appTool.String("Full UTF-8 text content to write.")),
 		}, workspace.EscalationProperties("operation", "file operation")...),
-		Check: func(arguments writeArgs) error {
+		Check: func(invocation appTool.Invocation, arguments writeArgs) error {
 			if strings.TrimSpace(arguments.FilePath) == "" {
 				return errors.New("file_path must be a non-empty string")
 			}
 			if err := checkEscalation(arguments.SandboxPermissions, arguments.Justification); err != nil {
 				return err
 			}
-			// Refuse unsafe targets before asking; execution re-checks them.
-			if _, err := provider.root.Writable(arguments.FilePath); err != nil {
+			// Refuse unsafe or unobserved targets before asking; execution
+			// re-checks both under the mutation lock.
+			target, err := provider.root.Writable(arguments.FilePath)
+			if err != nil {
 				return fmt.Errorf("cannot write %q: %w", arguments.FilePath, err)
 			}
-			return nil
+			_, _, err = provider.admitWrite(invocation.SessionID, target)
+			return err
 		},
+		Guidance: appTool.Guidance{Order: appTool.OrderWrite, Text: func(visible func(string) bool) string {
+			text := "Read an existing file before overwriting it with write (the default fs-observation-policy requires it)"
+			if visible("edit") {
+				text += " and prefer edit for targeted changes"
+			}
+			return text + "."
+		}},
 		Approval: func(arguments writeArgs) string { return fmt.Sprintf("write file %q", arguments.FilePath) },
 		Execute:  provider.write,
 	})
 }
 
+// write applies upstream's guarded write. A target this session observed
+// present is replaced only while its content still matches that observation;
+// any other target is created exclusively, so an existing file the session
+// has not read is never overwritten.
 func (provider *Provider) write(ctx context.Context, invocation appTool.Invocation, arguments writeArgs) (appTool.Result, error) {
 	if !invocation.Approved {
 		return appTool.Result{}, errors.New("write approval was not granted")
@@ -63,21 +77,57 @@ func (provider *Provider) write(ctx context.Context, invocation appTool.Invocati
 	if err != nil {
 		return appTool.Result{}, fmt.Errorf("cannot write %q: %w", arguments.FilePath, err)
 	}
+	provider.mutate.Lock()
+	defer provider.mutate.Unlock()
+	info, exists, err := provider.admitWrite(invocation.SessionID, target)
+	if err != nil {
+		return appTool.Result{}, err
+	}
 	mode, operation := newFileMode, "Created"
-	info, err := lstatFile(target)
-	switch {
-	case err == nil && !info.Mode().IsRegular():
-		return appTool.Result{}, fmt.Errorf("cannot write %q: not a regular file", target)
-	case err == nil:
+	if exists {
 		mode, operation = info.Mode().Perm(), "Updated"
-	case !errors.Is(err, fs.ErrNotExist):
-		return appTool.Result{}, fmt.Errorf("cannot write %q: %w", target, err)
 	}
 	if err := makeDirs(filepath.Dir(target), newDirectoryMode); err != nil {
 		return appTool.Result{}, fmt.Errorf("cannot write %q: %w", target, err)
 	}
-	if err := writeAtomic(target, []byte(arguments.Content), mode); err != nil {
+	content := []byte(arguments.Content)
+	if err := writeAtomic(target, content, mode, !exists); err != nil {
+		if _, statErr := lstatFile(target); !exists && statErr == nil {
+			return appTool.Result{}, errNotRead(target)
+		}
 		return appTool.Result{}, fmt.Errorf("cannot write %q: %w", target, err)
 	}
+	provider.observed.record(invocation.SessionID, target, observation{present: true, version: digest(content)})
 	return appTool.Text(fmt.Sprintf("<path>%s</path>\n<type>file</type>\n<content>\n%s file\n</content>", target, operation)), nil
+}
+
+// admitWrite decides upstream's write intent without side effects and
+// reports the existing target, if any. The target must be a regular file or
+// missing; one observed present must still hold the observed content, and
+// any other target may only be created.
+func (provider *Provider) admitWrite(sessionID, target string) (fs.FileInfo, bool, error) {
+	info, err := lstatFile(target)
+	exists := err == nil
+	switch {
+	case exists && !info.Mode().IsRegular():
+		return nil, false, fmt.Errorf("cannot write %q: not a regular file", target)
+	case !exists && !errors.Is(err, fs.ErrNotExist):
+		return nil, false, fmt.Errorf("cannot write %q: %w", target, err)
+	}
+	prior, _ := provider.observed.lookup(sessionID, target)
+	switch {
+	case prior.present && !exists:
+		return nil, false, errStale("write", target, "file no longer exists")
+	case prior.present:
+		current, err := digestFile(target)
+		if err != nil {
+			return nil, false, fmt.Errorf("cannot write %q: %w", target, err)
+		}
+		if current != prior.version {
+			return nil, false, errStale("write", target, "file changed since it was read")
+		}
+	case exists:
+		return nil, false, errNotRead(target)
+	}
+	return info, exists, nil
 }

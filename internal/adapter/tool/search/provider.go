@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
@@ -50,7 +51,9 @@ type Provider struct {
 }
 
 // New resolves rg from PATH. A missing executable fails construction; the
-// version is verified when the provider starts.
+// version is verified when the provider starts. A root widened with
+// WithReadOnly lets grep search the spill partition; glob stays inside the
+// workspace.
 func New(runtime *appTool.Runtime, runner Runner, root workspace.Root) (*Provider, error) {
 	if runtime == nil || runner == nil || root.Path() == "" {
 		return nil, ErrInvalidConfig
@@ -80,21 +83,27 @@ func (provider *Provider) Start(ctx context.Context, scope *plugin.Scope) error 
 	return nil
 }
 
-// location is a resolved search root inside the workspace.
+// location is a resolved search root.
 type location struct {
-	// relative is the workspace-relative path passed to ripgrep.
+	// relative is the path passed to ripgrep: workspace-relative inside the
+	// workspace and absolute inside the read-only spill partition.
 	relative string
 	info     fs.FileInfo
 }
 
-// locate confines an optional search path to the workspace; the default is
-// the workspace root.
-func (provider *Provider) locate(tool string, path *string) (location, error) {
+// locate confines an optional search path to the workspace, or with
+// readOnly also to the root's read-only directory; the default is the
+// workspace root.
+func (provider *Provider) locate(tool string, path *string, readOnly bool) (location, error) {
 	requested := "."
 	if path != nil {
 		requested = *path
 	}
-	lexical, resolved, err := provider.root.Existing(requested)
+	resolve := provider.root.Existing
+	if readOnly {
+		resolve = provider.root.Readable
+	}
+	lexical, resolved, err := resolve(requested)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return location{}, fmt.Errorf("%s search failed: %q not found", tool, requested)
@@ -105,7 +114,11 @@ func (provider *Provider) locate(tool string, path *string) (location, error) {
 	if err != nil {
 		return location{}, fmt.Errorf("%s search failed: %w", tool, err)
 	}
-	return location{relative: provider.root.Relative(lexical), info: info}, nil
+	relative := provider.root.Relative(lexical)
+	if relative == ".." || strings.HasPrefix(relative, "../") {
+		relative = lexical
+	}
+	return location{relative: relative, info: info}, nil
 }
 
 // arguments places the search root behind "--" so a leading dash is never a

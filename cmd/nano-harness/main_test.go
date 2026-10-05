@@ -20,6 +20,7 @@ import (
 	modelprovider "github.com/jinyule/nano-harness/internal/adapter/model/provider"
 	sessionjsonl "github.com/jinyule/nano-harness/internal/adapter/session/jsonl"
 	settingsfile "github.com/jinyule/nano-harness/internal/adapter/settings/file"
+	"github.com/jinyule/nano-harness/internal/adapter/spill"
 	filetool "github.com/jinyule/nano-harness/internal/adapter/tool/file"
 	jobtool "github.com/jinyule/nano-harness/internal/adapter/tool/job"
 	plantool "github.com/jinyule/nano-harness/internal/adapter/tool/plan"
@@ -105,7 +106,7 @@ func runToolChain(t *testing.T) toolChain {
 		t.Fatal(err)
 	}
 	config, err := normalizeConfig(applicationConfig{
-		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), settingsPath: settingsPath,
+		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"), settingsPath: settingsPath,
 		credentialPath: filepath.Join(data, "credentials.yaml"), skillsDir: filepath.Join(data, "skills"),
 		agentsSkillsDir: filepath.Join(data, "agents-skills"), sessionID: "session-e2e", maxSteps: 8,
 	})
@@ -296,7 +297,7 @@ func TestRunAndParsing(t *testing.T) {
 	if _, err := parseTUIConfig([]string{"extra"}, &stderr); err == nil {
 		t.Fatal("positional argument accepted")
 	}
-	if _, err := normalizeConfig(applicationConfig{workspaceRoot: root, sessionRoot: root, settingsPath: "x", credentialPath: "y", sessionID: "x", maxSteps: 0}); err == nil {
+	if _, err := normalizeConfig(applicationConfig{workspaceRoot: root, sessionRoot: root, spillRoot: root, settingsPath: "x", credentialPath: "y", sessionID: "x", maxSteps: 0}); err == nil {
 		t.Fatal("zero max steps accepted")
 	}
 	if got := compositionID(config); len(got) != 64 {
@@ -325,7 +326,7 @@ func TestCommandErrorPaths(t *testing.T) {
 		})
 	}
 	root := t.TempDir()
-	config := applicationConfig{workspaceRoot: root, sessionRoot: root, settingsPath: filepath.Join(root, "s"), credentialPath: filepath.Join(root, "c"), skillsDir: filepath.Join(root, "k"), agentsSkillsDir: filepath.Join(root, "a"), sessionID: "id", maxSteps: 1, create: true}
+	config := applicationConfig{workspaceRoot: root, sessionRoot: root, spillRoot: filepath.Join(root, "spill"), settingsPath: filepath.Join(root, "s"), credentialPath: filepath.Join(root, "c"), skillsDir: filepath.Join(root, "k"), agentsSkillsDir: filepath.Join(root, "a"), sessionID: "id", maxSteps: 1, create: true}
 	_, err := composeTUI(config, dependencies{newRuntime: func(...plugin.Plugin) (*plugin.Runtime, error) { return nil, failure }})
 	if !errors.Is(err, failure) {
 		t.Fatalf("compose error=%v", err)
@@ -353,7 +354,7 @@ func restoreMainHooks(t *testing.T) {
 	t.Helper()
 	cwd, config, home, random, inspect, absolute, links := currentWorkingDirectory, userConfigDirectory, userHomeDirectory, readRandom, inspectPath, absolutePath, evaluateLinks
 	settingsProvider, credentials, modelRuntime := newSettingsProvider, newCredentialStore, newModelRuntime
-	modelProvider, toolRuntime, retryService := newModelProvider, newToolRuntime, newRetryService
+	modelProvider, toolRuntime, spillStore, retryService := newModelProvider, newToolRuntime, newSpillStore, newRetryService
 	compactor, sessions, engine := newCompactionService, newSessionManager, newAgentEngine
 	registry, root, subagents := newAgentRegistry, newRootBootstrap, newSubagentService
 	workspaceRoot, fileTools, searchTools, shellTools := newWorkspace, newFileTools, newSearchTools, newShellTools
@@ -365,7 +366,7 @@ func restoreMainHooks(t *testing.T) {
 		newWebService, newWebTools = webService, webTools
 		currentWorkingDirectory, userConfigDirectory, userHomeDirectory, readRandom, inspectPath, absolutePath, evaluateLinks = cwd, config, home, random, inspect, absolute, links
 		newSettingsProvider, newCredentialStore, newModelRuntime = settingsProvider, credentials, modelRuntime
-		newModelProvider, newToolRuntime, newRetryService = modelProvider, toolRuntime, retryService
+		newModelProvider, newToolRuntime, newSpillStore, newRetryService = modelProvider, toolRuntime, spillStore, retryService
 		newCompactionService, newSessionManager, newAgentEngine = compactor, sessions, engine
 		newAgentRegistry, newRootBootstrap, newSubagentService = registry, root, subagents
 		newWorkspace, newFileTools, newSearchTools, newShellTools = workspaceRoot, fileTools, searchTools, shellTools
@@ -457,8 +458,16 @@ func TestRunTUI_MapsParseComposeLifecycleRunAndShutdown(t *testing.T) {
 func TestNormalizeConfig_ContainsEveryPathBoundary(t *testing.T) {
 	restoreMainHooks(t)
 	root := t.TempDir()
-	base := applicationConfig{workspaceRoot: root, sessionRoot: filepath.Join(root, "sessions"), settingsPath: filepath.Join(root, "settings"), credentialPath: filepath.Join(root, "credentials"), sessionID: "session", maxSteps: 1}
+	base := applicationConfig{workspaceRoot: root, sessionRoot: filepath.Join(root, "sessions"), spillRoot: filepath.Join(root, "spill"), settingsPath: filepath.Join(root, "settings"), credentialPath: filepath.Join(root, "credentials"), skillsDir: filepath.Join(root, "skills"), agentsSkillsDir: filepath.Join(root, "agents-skills"), sessionID: "session", maxSteps: 1}
 	failure := errors.New("failure")
+	for _, field := range []*string{&base.spillRoot, &base.skillsDir} {
+		saved := *field
+		*field = ""
+		if _, err := normalizeConfig(base); err == nil || !strings.Contains(err.Error(), "path is required") {
+			t.Fatalf("empty path error = %v", err)
+		}
+		*field = saved
+	}
 	absolutePath = func(string) (string, error) { return "", failure }
 	if _, err := normalizeConfig(base); err == nil || !strings.Contains(err.Error(), "resolve") {
 		t.Fatalf("absolute error = %v", err)
@@ -495,7 +504,7 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 	failure := errors.New("constructor")
 	root := t.TempDir()
 	config := applicationConfig{
-		workspaceRoot: root, sessionRoot: filepath.Join(t.TempDir(), "sessions"), settingsPath: filepath.Join(t.TempDir(), "settings.yaml"),
+		workspaceRoot: root, sessionRoot: filepath.Join(t.TempDir(), "sessions"), spillRoot: filepath.Join(t.TempDir(), "spill"), settingsPath: filepath.Join(t.TempDir(), "settings.yaml"),
 		credentialPath: filepath.Join(t.TempDir(), "credentials.yaml"), skillsDir: filepath.Join(t.TempDir(), "skills"),
 		agentsSkillsDir: filepath.Join(t.TempDir(), "agents-skills"), sessionID: "session", maxSteps: 1, create: true,
 	}
@@ -514,6 +523,9 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 			}
 		}},
 		{name: "tool runtime", set: func() { newToolRuntime = func(appTool.Approver) (*appTool.Runtime, error) { return nil, failure } }},
+		{name: "spill store", set: func() {
+			newSpillStore = func(*appTool.Runtime, spill.Config) (*spill.Store, error) { return nil, failure }
+		}},
 		{name: "retry", set: func() { newRetryService = func(*settings.Service) (*retry.Service, error) { return nil, failure } }},
 		{name: "compaction", set: func() {
 			newCompactionService = func(*llm.Runtime, *settings.Service) (*compaction.Service, error) { return nil, failure }

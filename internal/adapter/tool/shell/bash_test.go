@@ -67,6 +67,7 @@ type fakeRunner struct {
 	result   platformProcess.Result
 	err      error
 	stdout   string
+	stderr   string
 	block    chan struct{}
 	// wrote receives after stdout reached the observer, when set.
 	wrote chan struct{}
@@ -75,8 +76,11 @@ type fakeRunner struct {
 func (runner *fakeRunner) Run(ctx context.Context, request platformProcess.Request) (platformProcess.Result, error) {
 	runner.mu.Lock()
 	runner.requests = append(runner.requests, request)
-	result, err, stdout, block, wrote := runner.result, runner.err, runner.stdout, runner.block, runner.wrote
+	result, err, stdout, stderr, block, wrote := runner.result, runner.err, runner.stdout, runner.stderr, runner.block, runner.wrote
 	runner.mu.Unlock()
+	if request.Stderr != nil && stderr != "" {
+		_, _ = request.Stderr.Write([]byte(stderr))
+	}
 	if request.Stdout != nil && stdout != "" {
 		_, _ = request.Stdout.Write([]byte(stdout))
 		if wrote != nil {
@@ -125,6 +129,12 @@ type harness struct {
 
 func newHarness(t *testing.T, runner Runner) *harness {
 	t.Helper()
+	return newHarnessWith(t, runner, nil)
+}
+
+// newHarnessWith also puts store in use for complete-output files.
+func newHarnessWith(t *testing.T, runner Runner, store appTool.SpillStore) *harness {
+	t.Helper()
 	approver := &recordingApprover{outcome: session.ApprovalAllowedOnce}
 	runtime, _ := appTool.New(approver)
 	notifier := &recordingNotifier{sent: make(chan struct{}, 32)}
@@ -132,6 +142,11 @@ func newHarness(t *testing.T, runner Runner) *harness {
 	runtimeScope, jobScope, providerScope := &plugin.Scope{}, &plugin.Scope{}, &plugin.Scope{}
 	if err := runtime.Start(context.Background(), runtimeScope); err != nil {
 		t.Fatal(err)
+	}
+	if store != nil {
+		if err := runtime.UseSpill(store, runtimeScope); err != nil {
+			t.Fatal(err)
+		}
 	}
 	root, err := workspace.Resolve(t.TempDir())
 	if err != nil {
@@ -482,7 +497,7 @@ func TestBash_FallsBackToDeadlineAtJobLimit(t *testing.T) {
 			arguments["timeoutMs"] = test.timeout
 		}
 		result := h.call(t, arguments)
-		if request := runner.last(); request.Timeout != test.want || request.Stdout != nil || result.IsError || !strings.Contains(result.Output, "[timed out after ") {
+		if request := runner.last(); request.Timeout != test.want || request.Stdout == nil || result.IsError || !strings.Contains(result.Output, "[timed out after ") {
 			t.Fatalf("fallback(%v) = %#v, request %+v", test.timeout, result, request)
 		}
 	}
@@ -584,7 +599,7 @@ func TestRender_MatchesUpstreamMarkers(t *testing.T) {
 		{platformProcess.Result{Stderr: output("touch: x: Operation not permitted\n", false), ExitCode: 1, SandboxDenied: true},
 			"[stderr]\ntouch: x: Operation not permitted\n[sandbox: file access denied under workspace-write mode]\n[sandbox: escalation available — retry this exact command once with sandbox_permissions (the narrowest wider mode that suffices) + justification; the approval prompt asks the user]\n[exit code: 1]"},
 	} {
-		if got := render(test.result, 1500.5); got != test.want {
+		if got := render(test.result, [2]string{}, 1500.5); got != test.want {
 			t.Errorf("render(%+v)\n got: %q\nwant: %q", test.result, got, test.want)
 		}
 	}

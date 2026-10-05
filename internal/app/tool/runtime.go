@@ -72,6 +72,7 @@ type Runtime struct {
 	started bool
 	active  bool
 	tools   map[string]*Tool
+	spill   SpillStore
 }
 
 // New constructs a tool runtime over a fail-closed approver.
@@ -96,6 +97,7 @@ func (runtime *Runtime) Start(_ context.Context, scope *plugin.Scope) error {
 		runtime.mu.Lock()
 		runtime.active = false
 		runtime.tools = map[string]*Tool{}
+		runtime.spill = nil
 		runtime.mu.Unlock()
 		return nil
 	}); err != nil {
@@ -251,11 +253,17 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 			result.Output, result.IsError = "Error: implementation panicked", true
 		}
 	}()
-	if err := validated.call.check(); err != nil {
+	runtime.mu.RLock()
+	store := runtime.spill
+	runtime.mu.RUnlock()
+	invocation := Invocation{
+		SessionID: request.SessionID, Cwd: request.Cwd, Turn: request.Turn, Step: request.Step, CallID: candidate.ID,
+		Journal: request.Journal, Delegated: request.Delegated, spill: store,
+	}
+	if err := validated.call.check(invocation); err != nil {
 		result.Output, result.IsError = errorText(err), true
 		return result
 	}
-	approved := false
 	if reason := validated.call.reason(); reason != "" {
 		outcome, err := runtime.approver.Decide(ctx, ApprovalRequest{
 			SessionID: request.SessionID, Turn: request.Turn, Step: request.Step,
@@ -269,17 +277,18 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 			result.Output, result.IsError = "Error: approval "+string(outcome), true
 			return result
 		}
-		approved = true
+		invocation.Approved = true
 	}
-	output, err := validated.call.execute(ctx, Invocation{
-		SessionID: request.SessionID, Cwd: request.Cwd, Turn: request.Turn, Step: request.Step, CallID: candidate.ID,
-		Journal: request.Journal, Delegated: request.Delegated, Approved: approved,
-	})
+	output, err := validated.call.execute(ctx, invocation)
 	if err != nil {
 		result.Output, result.IsError = errorText(err), true
 		return result
 	}
-	result.Output = finishText(output.Text)
+	text := strings.ToValidUTF8(output.Text, "�")
+	if !validated.call.keepInline {
+		text = retainInline(ctx, invocation, candidate.Name, text)
+	}
+	result.Output = finishText(text)
 	return result
 }
 

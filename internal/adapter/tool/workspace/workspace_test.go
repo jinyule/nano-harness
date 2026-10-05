@@ -189,3 +189,73 @@ func TestEscalationVocabulary_MatchesUpstream(t *testing.T) {
 		t.Fatal("escalation hint")
 	}
 }
+
+// TestRoot_ReadableMatrix pins which paths read-only tools may open once the
+// spill partition is granted.
+func TestRoot_ReadableMatrix(t *testing.T) {
+	restoreHooks(t)
+	base := tempRoot(t)
+	workspaceDir, spill, outside := filepath.Join(base, "work"), filepath.Join(base, "spill", "partition"), filepath.Join(base, "outside")
+	for _, dir := range []string{workspaceDir, filepath.Join(spill, "session"), outside} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range []string{filepath.Join(workspaceDir, "a.txt"), filepath.Join(spill, "session", "out.txt"), filepath.Join(outside, "secret.txt"), filepath.Join(base, "spill", "sibling.txt")} {
+		if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(spill, "session", "planted.txt")); err != nil {
+		t.Fatal(err)
+	}
+	// The partition reached through a linked spelling is still the partition.
+	if err := os.Symlink(filepath.Join(base, "spill"), filepath.Join(base, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	plain, _ := Resolve(workspaceDir)
+	root := plain.WithReadOnly(spill + string(filepath.Separator))
+	if root.Path() != plain.Path() {
+		t.Fatalf("WithReadOnly moved the workspace to %q", root.Path())
+	}
+	aliased := plain.WithReadOnly(filepath.Join(base, "alias", "partition"))
+	// A relative grant fails closed: it never contains an absolute path.
+	relative, _ := filepath.Rel(workspaceDir, spill)
+	for _, test := range []struct {
+		name string
+		root Root
+		path string
+		want error
+	}{
+		{"workspace relative", root, "a.txt", nil},
+		{"workspace absolute", root, filepath.Join(workspaceDir, "a.txt"), nil},
+		{"spill artifact", root, filepath.Join(spill, "session", "out.txt"), nil},
+		{"spill directory", root, spill, nil},
+		{"spill through linked grant", aliased, filepath.Join(base, "alias", "partition", "session", "out.txt"), nil},
+		{"spill missing", root, filepath.Join(spill, "session", "gone.txt"), fs.ErrNotExist},
+		{"spill planted link", root, filepath.Join(spill, "session", "planted.txt"), ErrOutsideRoot},
+		{"spill escape by dots", root, filepath.Join(spill, "..", "sibling.txt"), ErrOutsideRoot},
+		{"spill relative spelling", root, "../spill/partition/session/out.txt", ErrOutsideRoot},
+		{"outside", root, filepath.Join(outside, "secret.txt"), ErrOutsideRoot},
+		{"no grant", plain, filepath.Join(spill, "session", "out.txt"), ErrOutsideRoot},
+		{"relative grant", plain.WithReadOnly(relative), filepath.Join(spill, "session", "out.txt"), ErrOutsideRoot},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, resolved, err := test.root.Readable(test.path)
+			if test.want == nil && (err != nil || resolved == "") || test.want != nil && !errors.Is(err, test.want) {
+				t.Fatalf("Readable(%q) = %q, %v; want %v", test.path, resolved, err, test.want)
+			}
+		})
+	}
+	// Existing and Writable never see the read-only grant.
+	if _, _, err := root.Existing(filepath.Join(spill, "session", "out.txt")); !errors.Is(err, ErrOutsideRoot) {
+		t.Fatalf("Existing = %v", err)
+	}
+	if _, err := root.Writable(filepath.Join(spill, "session", "out.txt")); !errors.Is(err, ErrOutsideRoot) {
+		t.Fatalf("Writable = %v", err)
+	}
+	missing := plain.WithReadOnly(filepath.Join(base, "absent"))
+	if _, _, err := missing.Readable(filepath.Join(base, "absent", "x")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("absent grant = %v", err)
+	}
+}

@@ -32,7 +32,7 @@ func (provider *Provider) globTool() *appTool.Tool {
 			appTool.Optional("path", appTool.String("Directory to search in. Defaults to the session workspace; a relative path resolves against it.")),
 		},
 		Guidance: appTool.StaticGuidance(appTool.OrderGlob, "Use the glob tool — not shell find — to discover files by path pattern."),
-		Check: func(arguments globArgs) error {
+		Check: func(_ appTool.Invocation, arguments globArgs) error {
 			if strings.TrimSpace(arguments.Pattern) == "" {
 				return errors.New("pattern must be a non-empty string")
 			}
@@ -48,8 +48,8 @@ func (provider *Provider) globTool() *appTool.Tool {
 
 // glob runs `rg --files --sort=modified --no-ignore --hidden` with upstream's
 // VCS exclusions, so paths arrive oldest modification first.
-func (provider *Provider) glob(ctx context.Context, _ appTool.Invocation, arguments globArgs) (appTool.Result, error) {
-	start, err := provider.locate("glob", arguments.Path)
+func (provider *Provider) glob(ctx context.Context, invocation appTool.Invocation, arguments globArgs) (appTool.Result, error) {
+	start, err := provider.locate("glob", arguments.Path, false)
 	if err != nil {
 		return appTool.Result{}, err
 	}
@@ -67,16 +67,30 @@ func (provider *Provider) glob(ctx context.Context, _ appTool.Invocation, argume
 	if !empty {
 		paths = strings.FieldsFunc(stdout, func(char rune) bool { return char == '\n' })
 	}
-	return appTool.Text(renderGlob(paths)), nil
+	if len(paths) <= globMaxResults {
+		return appTool.Text(renderGlob(paths, nil)), nil
+	}
+	ref, err := invocation.SaveText(ctx, "glob-results.txt", strings.Join(paths, "\n"))
+	if err != nil {
+		// Like upstream, an unsaved complete result changes the footer, not
+		// the outcome of the search.
+		return appTool.Text(renderGlob(paths, nil)), nil
+	}
+	return appTool.Text(renderGlob(paths, &ref)), nil
 }
 
-func renderGlob(paths []string) string {
+// renderGlob shows a result that fits whole; a larger one keeps the first
+// paths and points at the saved complete list, or says it could not be saved.
+func renderGlob(paths []string, ref *appTool.SpillRef) string {
 	if len(paths) == 0 {
 		return "No files found"
 	}
 	if len(paths) <= globMaxResults {
 		return strings.Join(paths, "\n")
 	}
-	return fmt.Sprintf("%s\n\n(Showing %d of %d paths. The complete result could not be saved; narrow pattern or path to see more.)",
-		strings.Join(paths[:globMaxResults], "\n"), globMaxResults, len(paths))
+	recovery := "The complete result could not be saved; narrow pattern or path to see more."
+	if ref != nil {
+		recovery = fmt.Sprintf("Full sorted result stored at: %s. %s", ref.Locator, ref.Hint)
+	}
+	return fmt.Sprintf("%s\n\n(Showing %d of %d paths. %s)", strings.Join(paths[:globMaxResults], "\n"), globMaxResults, len(paths), recovery)
 }

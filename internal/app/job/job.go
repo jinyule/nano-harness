@@ -115,27 +115,32 @@ func (view View) StatusLine() string {
 }
 
 // Read is one consuming read: the output since the previous read, whether
-// bytes were evicted before it, the value result on the first terminal
-// read only, and the job's state at read time.
+// bytes were evicted before it, the complete-output files the job currently
+// advertises (stdout first), the value result on the first terminal read
+// only, and the job's state at read time.
 type Read struct {
 	Stdout string
 	Stderr string
 	Lossy  bool
+	Spills []string
 	Result string
 	Job    View
 }
 
 // Delta renders the read's output like a foreground shell result: stdout,
-// one marked stderr section, then the dropped-output notice when bytes were
-// evicted unread. Complete-output files do not exist yet, so the notice
-// reports them unavailable.
+// one marked stderr section, then upstream's dropped-output notice naming
+// the complete-output files, or "(unavailable)" when the job has none.
 func (read Read) Delta() string {
 	body := read.Stdout
 	if read.Stderr != "" {
 		body = withNewline(body) + "[stderr]\n" + read.Stderr
 	}
 	if read.Lossy {
-		body = withNewline(body) + "[some output was dropped from memory; full output: (unavailable)]"
+		files := "(unavailable)"
+		if len(read.Spills) > 0 {
+			files = strings.Join(read.Spills, ", ")
+		}
+		body = withNewline(body) + "[some output was dropped from memory; full output: " + files + "]"
 	}
 	return body
 }

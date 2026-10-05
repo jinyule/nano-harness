@@ -10,7 +10,7 @@
 
 上游 `docs/tool-catalog.md` 用每个工具包的默认配置启动，并不等于 Base 组合。`packages/bundle/base/cordis.patch.yml` 把 `sampleOverCapGlobResults` 设为 `false`，并在非 Windows 主机挂载 `dsh-fs-sandbox` 与 `dsh-bash-sandbox`。因此 Base 中的 `glob` 描述不同，`write`、`edit`、`bash` 还会声明 `sandbox_permissions` 和 `justification`。
 
-非目标：上游插件系统、把 ripgrep 打进发布制品、spill 存储、先读后写保护、后台任务和其余 Base 工具。它们由后续工作包负责。
+非目标：上游插件系统、把 ripgrep 打进发布制品、spill 存储、先读后写保护、后台任务和其余 Base 工具。它们由后续工作包负责；spill 与先读后写见 [ADR-0008](0008-tool-output-spill-and-observation-policy.md)。
 
 ## 决策
 
@@ -34,7 +34,7 @@ subagent 工具名称不变；它们的 schema 改用共享子集表达，去掉
 
 `internal/app/tool` 提供 `Spec[A]` 和 `Define`。参数 schema 只声明一次，同时用于序列化、校验和解码到类型化参数 `A`；`Define` 检查 `A` 的字段与声明成员一一对应。支持的子集是上游 `defineTool` 子集中当前工具用到的部分：可带 enum 的 string、number、boolean、array 和显式开放性的嵌套 object。序列化键序与上游编译器一致。
 
-参数在调度前校验，违规按上游遍历顺序全部列出。缺少必填、类型不符、null、非有限数和 `-0` 的处理与上游相同。本仓额外拒绝重复键和未声明的根成员：上游根对象开放，会静默忽略拼错的参数名，与本仓“边界严格校验、禁止静默接受错误输入”的规则冲突。模型可见 schema 不因此改变。语义检查（例如非空路径、正整数行号、升级参数成对）和路径约束在该调用轮到时、审批之前完成，因此能观察同一批次前序调用的效果。
+参数在调度前校验，违规按上游遍历顺序全部列出。缺少必填、类型不符、null、非有限数和 `-0` 的处理与上游相同。本仓额外拒绝重复键和未声明的根成员：上游根对象开放，会静默忽略拼错的参数名，与本仓“边界严格校验、禁止静默接受错误输入”的规则冲突。模型可见 schema 不因此改变。语义检查（例如非空路径、正整数行号、升级参数成对）和路径约束由 `Check(Invocation, A)` 在该调用轮到时、审批之前完成，因此能观察同一批次前序调用的效果；会话范围的检查（例如 [ADR-0008](0008-tool-output-spill-and-observation-policy.md) 的先读后写）通过 `Invocation` 取得会话。`Check` 时 `Invocation.Approved` 恒为 false，`Check` 不得产生副作用，执行点仍须重新检查。
 
 失败结果的文本采用上游 `Error: <message>` 格式（未知工具为 `Error: unknown tool "<name>"`），session resume 补写的中断结果也使用同一格式，模型在本仓和上游看到相同的失败形态。审批失败沿用本仓的 `Error: approval <outcome>`，因为上游 Base 只在 sandbox 升级时询问，没有对应文案。执行上下文 `Invocation` 提供当前 call ID、turn、step 和调用方 durable journal，供需要写会话事实的工具使用；没有 journal 时这类工具失败关闭。
 
@@ -42,7 +42,7 @@ subagent 工具名称不变；它们的 schema 改用共享子集表达，去掉
 
 ### Prompt guidance
 
-上游工具包通过 `ctx.systemPrompt.section` 贡献段落，并按 section order 排列。本仓在定义上附加可选 `Guidance`，`Runtime.Catalog` 只为请求中可见的工具渲染，并按上游顺序追加在工具列表之后；段落随 system prompt 写入 `request/header`。本次逐字采用 `bash`、`read`、`glob`、`grep` 的段落，`grep` 仍按 `read` 是否可见决定第二句。`write` 和 `edit` 的上游段落声明 “the default fs-observation-policy requires it”，在先读后写保护实现前会误导模型，因此暂不贡献。
+上游工具包通过 `ctx.systemPrompt.section` 贡献段落，并按 section order 排列。本仓在定义上附加可选 `Guidance`，`Runtime.Catalog` 只为请求中可见的工具渲染，并按上游顺序追加在工具列表之后；段落随 system prompt 写入 `request/header`。本次逐字采用 `bash`、`read`、`glob`、`grep` 的段落，`grep` 仍按 `read` 是否可见决定第二句。`write` 和 `edit` 的上游段落声明 “the default fs-observation-policy requires it”，随先读后写保护一起由 [ADR-0008](0008-tool-output-spill-and-observation-policy.md) 贡献。
 
 ### Sandbox、approval 与 host 模式
 
@@ -69,16 +69,16 @@ ripgrep 以 argv 直接运行，不经过 shell，也不进入 workspace sandbox
 ### 行为差异
 
 - `read` 按 rune 计算行长，上游按 UTF-16 code unit 计算；两者只在 BMP 以外字符上不同。
-- `edit` 保留 BOM（上游会丢弃），目标不存在时报告 not found（上游提示依赖观察策略），并把可编辑文件限制为 10 MiB。
+- `edit` 保留 BOM（上游会丢弃），并把可编辑文件限制为 10 MiB。目标不存在时的提示随观察策略与上游一致，见 [ADR-0008](0008-tool-output-spill-and-observation-policy.md)。
 - `write` 新建文件为 `0600`（与上游一致）、新建目录为 `0700`（上游受 umask 约束的 `0777`）。
-- `glob`/`grep` 的搜索根必须在 workspace 内（上游不限制），并以规范化的 workspace 相对路径交给 ripgrep，所以输出不保留 `./` 之类的原始拼写，绝对路径参数也显示为相对路径。不传 `HOME`，用户的全局 git excludes 不生效；上游的 subprocess 环境保留 `HOME`。`grep` 拒绝把 FIFO 等特殊文件作为显式路径。结果顺序与上游一样取决于 ripgrep：`glob` 按修改时间排序，`grep` 的跨文件顺序不固定。
-- `bash` 默认超时 60 s、上限 10 min，与 Base 配置一致；stdout 与 stderr 各保留最后 64,000 字节，截断时完整输出位置显示 `(unavailable)`，直到 spill 存储落地；只提供 `DSH_SHELL` 与 `DSH_SESSION_ID`，不暴露 harness home 或 profile。
+- `glob`/`grep` 的搜索根必须在 workspace 内（上游不限制；`grep` 与 `read` 另可读取本 workspace 的 spill 分区，见 ADR-0008），并以规范化的 workspace 相对路径交给 ripgrep，所以输出不保留 `./` 之类的原始拼写，绝对路径参数也显示为相对路径。不传 `HOME`，用户的全局 git excludes 不生效；上游的 subprocess 环境保留 `HOME`。`grep` 拒绝把 FIFO 等特殊文件作为显式路径。结果顺序与上游一样取决于 ripgrep：`glob` 按修改时间排序，`grep` 的跨文件顺序不固定。
+- `bash` 默认超时 60 s、上限 10 min，与 Base 配置一致；stdout 与 stderr 各保留最后 64,000 字节，截断时给出 ADR-0008 的完整输出文件位置，没有文件时显示上游的 `(unavailable)`；只提供 `DSH_SHELL` 与 `DSH_SESSION_ID`，不暴露 harness home 或 profile。
 
 ### 证据与身份
 
 `cmd/nano-harness/testdata/tool-catalog.json` 冻结真实 composition 的全部工具定义，测试从 transcript 的 `request/header` 和 loopback provider 收到的请求比较；`testdata/upstream-base-tools.json` 记录上述 Base 推导和上游来源，测试要求同名工具逐字节一致。两个文件都由人工审查维护，CI 只比较，测试不读取 submodule。
 
-composition ID 改为分别绑定 `fs-tools-v1`、`search-tools-v2`、`shell-tools-v1` 和 `subagent-tools-v2`；改用 ripgrep 后搜索语义变化，search 升到 v2。旧会话的工具名称与 schema 已变化，按 composition mismatch 拒绝恢复。本仓尚无发布 tag，没有需要迁移的用户会话；session v2 格式本身不变。
+composition ID 改为分别绑定 `fs-tools-v1`、`search-tools-v2`、`shell-tools-v1` 和 `subagent-tools-v2`；改用 ripgrep 后搜索语义变化，search 升到 v2。spill 与先读后写落地后又升为 `fs-tools-v2`、`search-tools-v3`、`shell-tools-v3` 并加入 `spill-v1`，见 ADR-0008。旧会话的工具名称与 schema 已变化，按 composition mismatch 拒绝恢复。本仓尚无发布 tag，没有需要迁移的用户会话；session v2 格式本身不变。
 
 ## 后果
 
