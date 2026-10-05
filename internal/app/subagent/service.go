@@ -812,7 +812,9 @@ func (service *Service) Interrupt(callerID, targetID string) error {
 }
 
 // ListChildren returns the caller's direct children from its own catalog,
-// in creation order, with whether each is working now.
+// in the order their catalog records committed, with whether each is
+// working now. Delegations that run concurrently in one step commit in the
+// order they finish creating their children.
 func (service *Service) ListChildren(ctx context.Context, parentID string) ([]Entry, error) {
 	if !service.running() {
 		return nil, ErrNotRunning

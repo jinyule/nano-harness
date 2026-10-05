@@ -265,8 +265,14 @@ func TestComposition_SubagentsEndToEnd(t *testing.T) {
 	if len(settled) != 1 || settled[0] != "Background subagent "+child+" finished and will do no further work unless you send it more.Its closing message:child report after PING" {
 		t.Errorf("root settlement = %q", settled)
 	}
-	children := session.Children(readTranscript(t, filepath.Join(data, "sessions", subagentRoot+".jsonl")))
-	if len(children) != 2 || children[0].SessionID != child || children[0].Mode != session.SubagentContinuable || children[1].Mode != session.SubagentOneShot {
+	// The two delegations ran concurrently in one step, so their catalog
+	// records may commit in either order; identify them by label.
+	children := map[string]session.SubagentCatalog{}
+	for _, entry := range session.Children(readTranscript(t, filepath.Join(data, "sessions", subagentRoot+".jsonl"))) {
+		children[entry.Label] = entry
+	}
+	worker, review := children["worker"], children["review"]
+	if len(children) != 2 || worker.SessionID != child || worker.Mode != session.SubagentContinuable || review.Mode != session.SubagentOneShot || review.SessionID == "" {
 		t.Fatalf("root catalog = %#v", children)
 	}
 	childRecords := transcript(child)
@@ -279,7 +285,7 @@ func TestComposition_SubagentsEndToEnd(t *testing.T) {
 	if tasks := notices(childRecords, appSubagent.SourceDelegation); len(tasks) != 1 || !strings.Contains(tasks[0], `Your parent agent id is "`+subagentRoot+`".`) {
 		t.Errorf("child task = %q", tasks)
 	}
-	forkEvents := readTranscript(t, filepath.Join(data, "sessions", children[1].SessionID+".jsonl"))
+	forkEvents := readTranscript(t, filepath.Join(data, "sessions", review.SessionID+".jsonl"))
 	own := session.OwnEvents(forkEvents)
 	if descriptor := own[0].Record.Subagent; descriptor == nil || descriptor.Provider != session.SubagentFork || descriptor.Inherited == 0 || forkEvents[0].Record.Type != session.RecordApprovalPolicy {
 		t.Errorf("fork transcript starts %#v, own %#v", forkEvents[0], own[0])

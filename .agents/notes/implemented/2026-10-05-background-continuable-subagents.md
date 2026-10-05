@@ -67,4 +67,5 @@ fork 种子复制 parent 的全部事件，包括 WP8 的 `plan/mode` 与 WP6 �
 - rebase 到集成分支 `67c9f83`（WP8、WP6、WP2 已合入）后：`GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check` 通过，逐产品文件 coverage 100.0%，17 个 mutation 全部 killed。
 - `make tui-e2e`：PASS（rebase 后 16 次 root 工具调用，含 spawn/fork 子会话、`never` 策略与目录记录）。
 - `make quality BASE_REF=3b29e7a`：生成报告，见上文观察。
+- 偶发失败修复（2026-10-06，WP5 报告）：`TestComposition_SubagentsEndToEnd` 让模型在同一 step 并发调用 `subagent` 与 `subagent_fork`，两者都是并发安全工具，两条 `subagent/catalog` 的提交顺序取决于哪个 child 先创建完成；测试却假定第一条是 continuable 的 `worker`。复现：在 `05e4012` 上 `go test -race -c` 后以 `-test.count 100 -test.cpu 1,4,8` 运行，300 次中 39 次失败，全部位于该目录顺序断言。产品消费方不依赖顺序：冷恢复与授权按 id 查目录，`list_agents` 按目录提交顺序列出，这一顺序由日志确定，同一 step 内并发委派按完成顺序提交，已写入 `ListChildren` 的文档。修复只把测试改为按标签查找目录项并用 fork 的 id 读取其 transcript。审计：subagent 包测试的 child 都顺序创建；`scripts/tui-e2e.py` 的 `subagent` 与 `subagent_fork` 位于不同 step，目录顺序确定。修复后同一测试二进制以 `-test.count 1000` 分别在 `-test.cpu 1`、`4`、`8` 下运行，3000 次全部通过。
 - 未覆盖：真实 provider 的 live 子代理运行；跨进程重启后的冷恢复只由 registry 与服务测试中的关闭后重开证明，没有 PTY 重启场景。
