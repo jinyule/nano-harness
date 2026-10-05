@@ -30,6 +30,8 @@
 
 - 用开场 admission 取代上游 pre-step 栅栏，陈旧轮次从不进入日志；拒绝原因无法由新 revision 或撤销解释时 driver 以 `prompt-rejected` 阻塞，避免空转。
 - 人类权限依赖 `source.kind = "user"` 只由前端使用这一不变量；本仓所有非人类生产者都已有独立来源（`tool-jobs`、`plan-mode`、`skill-catalog`、`skill-invocation`、`delegation`、`agent-message`、`subagent-settled`、`goal`、`tool-goal`），工具测试覆盖后台通知与规划提示开启的 turn 被拒绝，守卫测试阻止新生产者借用 `user`。
+- 目标只从 session 自己的事件（`session.OwnEvents`）折叠：整体审查发现 fork 子代理的 `get_goal` 会读到种子前缀中的父目标（S3）。修复后 `Get`、变更、准入、权限与结算都只看自有事件，JSONL 仍在原位校验并接受种子中的目标事实；永久测试 `TestService_ForkedChildOwnsOnlyItsOwnGoal` 在修复前失败，`TestOpen_ForkSeedKeepsTheParentGoalInPlace` 证明种子仍被接受。
+- driver 只等待 root 自身空闲（审查项 S4）：上游检查该 agent 的 `status`，`whenIdle()` 的 whole-agent 不含后代；驻留子代理的结算或消息经 `Notify` 唤醒 root。理由写在 ADR-0016。
 - driver 在空闲时从日志 `Settle`，而不是订阅事件流：订阅可丢弃，日志顺序还能准确处理“取消之后又 resume”。
 - 收尾指令走既有 `Notify`，位置在 `step/end` 之后，模型可见内容与上游相同。
 - `/goal` 附件暂缓，因为无法保证附件消息先于 driver 的第一轮。
@@ -49,6 +51,7 @@
 
 ## Verification
 
+- 审查修复（S3）：`go test -race -count=1 -run ForkedChild ./internal/app/goal/` 在撤回 `ownEvents` 时失败、修复后通过；`make check` 再次通过。
 - `go test -race -count=1 ./...`：通过；`go test -race -count=10 ./internal/app/goal/` 与 `-count=8` 的目标 assembled 测试稳定通过。
 - `make coverage`：每个产品源文件 100.0%。
 - `golangci-lint run ./...`（私有 `GOLANGCI_LINT_CACHE`）：0 issues。

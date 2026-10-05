@@ -253,7 +253,7 @@ func (service *Service) Authority(ctx context.Context, sessionID string, turn ui
 	if !service.running {
 		return Authority{}, ErrNotRunning
 	}
-	events, err := journal.Events(ctx)
+	events, err := ownEvents(ctx, journal)
 	if err != nil {
 		return Authority{}, err
 	}
@@ -482,7 +482,7 @@ func (service *Service) Admit(ctx context.Context, journal agent.Journal, messag
 	if !service.running {
 		return agent.ErrNotAdmitted
 	}
-	events, err := journal.Events(ctx)
+	events, err := ownEvents(ctx, journal)
 	if err != nil {
 		return err
 	}
@@ -512,7 +512,7 @@ func (service *Service) Settle(ctx context.Context, sessionID string, after uint
 		service.mu.Unlock()
 		return after, ErrNotRunning
 	}
-	events, err := journal.Events(ctx)
+	events, err := ownEvents(ctx, journal)
 	if err != nil {
 		service.mu.Unlock()
 		return after, err
@@ -647,8 +647,19 @@ func (service *Service) journal(sessionID string) (agent.Journal, error) {
 	return journal, nil
 }
 
-func project(ctx context.Context, journal agent.Journal) (session.GoalState, error) {
+// ownEvents returns the events a session committed itself. A forked child
+// inherits its parent's closed prefix, whose goal facts belong to the parent:
+// the store validates them in place, but they never become the child's goal.
+func ownEvents(ctx context.Context, journal agent.Journal) ([]session.Event, error) {
 	events, err := journal.Events(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return session.OwnEvents(events), nil
+}
+
+func project(ctx context.Context, journal agent.Journal) (session.GoalState, error) {
+	events, err := ownEvents(ctx, journal)
 	if err != nil {
 		return session.GoalState{}, err
 	}

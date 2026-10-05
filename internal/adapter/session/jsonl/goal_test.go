@@ -237,3 +237,41 @@ func TestInterruptedTailRepair_KeepsCommittedGoal(t *testing.T) {
 		t.Fatalf("repair state=%+v err=%v events=%d", state, err, len(events))
 	}
 }
+
+// TestOpen_ForkSeedKeepsTheParentGoalInPlace proves that a fork seed carrying
+// the parent's goal facts is still validated and accepted in place, while the
+// child's own events hold no goal.
+func TestOpen_ForkSeedKeepsTheParentGoalInPlace(t *testing.T) {
+	manager, scope := startManager(t)
+	defer func() { _ = scope.Close(context.Background()) }()
+	parent, err := manager.Open(t.Context(), OpenOptions{SessionID: "parent", Create: true, Cwd: "/workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRecord(t, parent, goalSnapshotRecord(coresession.GoalOpCreate, 1, "ship", coresession.GoalActive, 0, 1000))
+	appendRecord(t, parent, coresession.Record{Type: coresession.RecordTurnStart, Turn: 1})
+	appendRecord(t, parent, coresession.Record{Type: coresession.RecordUserMessage, Turn: 1, Message: goalRoundMessage("round", 1, 1)})
+	appendRecord(t, parent, coresession.Record{Type: coresession.RecordTurnEnd, Turn: 1, Outcome: coresession.OutcomeCompleted})
+	seed, err := parent.Events(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := manager.Open(t.Context(), OpenOptions{SessionID: "child", Create: true, Cwd: "/workspace", ParentSessionID: "parent", DelegationDepth: 1, Seed: seed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRecord(t, child, coresession.Record{Type: coresession.RecordSubagentDescriptor, Subagent: &coresession.SubagentDescriptor{Version: 2, Provider: coresession.SubagentFork, Mode: coresession.SubagentOneShot, Label: "fork", Inherited: uint64(len(seed))}})
+	if err := child.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	_, events, err := manager.Inspect(t.Context(), "child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if full, err := coresession.ProjectGoal(events); err != nil || full.Goal == nil || full.RoundsStarted != 1 {
+		t.Fatalf("seeded log = %+v, %v", full, err)
+	}
+	if own, err := coresession.ProjectGoal(coresession.OwnEvents(events)); err != nil || own.Goal != nil {
+		t.Fatalf("child's own goal = %+v, %v", own, err)
+	}
+}

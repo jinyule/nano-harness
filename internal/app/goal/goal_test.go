@@ -693,3 +693,49 @@ func TestService_AuthorityReadsOnlyTheCallersTurn(t *testing.T) {
 		t.Fatalf("stopped = %v", err)
 	}
 }
+
+// TestService_ForkedChildOwnsOnlyItsOwnGoal proves that the goal facts a
+// forked child inherits from its parent's prefix stay the parent's: the child
+// reads no goal, cannot admit a round of it, and settles nothing from it.
+func TestService_ForkedChildOwnsOnlyItsOwnGoal(t *testing.T) {
+	fixture := startService(t)
+	ctx := context.Background()
+	parent := fixture.create(t, "parent objective", nil)
+	round := RoundMessage(*parent)
+	fixture.journal.raw(
+		session.Record{Type: session.RecordTurnStart, Turn: 1},
+		session.Record{Type: session.RecordUserMessage, Turn: 1, Message: &round},
+		session.Record{Type: session.RecordTurnEnd, Turn: 1, Outcome: session.OutcomeCanceled},
+	)
+	inherited, _ := fixture.journal.Events(ctx)
+	child := &memoryJournal{id: "child", events: inherited}
+	child.raw(session.Record{Type: session.RecordSubagentDescriptor, Subagent: &session.SubagentDescriptor{Version: 2, Provider: "in-process", Mode: "one-shot", Label: "fork", Inherited: uint64(len(inherited))}})
+	service, err := New(memoryJournals{journals: map[string]*memoryJournal{"root": fixture.journal, "child": child}}, &recordingAdmissions{}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := &plugin.Scope{}
+	if err := service.Start(ctx, scope); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = scope.Close(ctx) })
+	if view, err := service.Get(ctx, "child"); err != nil || view != nil {
+		t.Fatalf("child goal = %+v, %v", view, err)
+	}
+	if authority, err := service.Authority(ctx, "child", 1, true); err != nil || authority.Round != nil || authority.Human {
+		t.Fatalf("child authority = %+v, %v", authority, err)
+	}
+	next := RoundMessage(View{Goal: parent.Goal, RoundsStarted: 1})
+	if err := service.Admit(ctx, child, next, func(context.Context) error { return nil }); !errors.Is(err, agent.ErrNotAdmitted) {
+		t.Fatalf("child admitted the parent's round: %v", err)
+	}
+	if _, err := service.Settle(ctx, "child", 0); err != nil {
+		t.Fatal(err)
+	}
+	if view, _ := fixture.service.Get(ctx, "root"); view.Goal.Phase != session.GoalActive {
+		t.Fatalf("settling the child changed the parent: %+v", view)
+	}
+	if _, err := service.Edit(ctx, "child", parent.Goal.Ref(), new("x"), nil, ActorModel); codeOf(err) != CodeNotFound {
+		t.Fatalf("child edited the parent's goal: %v", err)
+	}
+}

@@ -32,7 +32,8 @@
 - 形状规则：操作为 create/edit/pause/resume/complete/block/clear；快照 ID 为 1–128 字节无换行标识；revision ≥ 1；objective 去除首尾空白后非空且不超过 16 KiB；上限为 1 到 2^53−1；`blocked_reason` 恰在 blocked 时出现，code 为 lower-kebab-case（≤ 64 字节），message 去空白非空且不超过 16 KiB；创建时间为正且更新时间不早于它；clear 只有 tombstone 与清除时间。
 - 折叠规则与上游一致：create 要求 revision 1、active、零轮次、没有未完成的当前目标且 ID 未用过；其余操作要求同一 ID、revision 加一、保持创建时间与轮次计数、更新时间不倒退；只有 edit 可改 objective 与上限且不得改阶段与阻塞原因；pause 只从 active，resume 从 active/paused/blocked 且轮次未满，complete 从任何未完成阶段，block 只从 active；clear 必须 tombstone 下一 revision 且时间不早于最近更新。
 - 准入轮次是 `source.kind = "goal"` 的 `user/message`，`source` 增加 `goal_id`、`goal_revision`、`goal_round`。三者只在 goal 来源出现且必须齐全，助手消息不得使用；折叠要求它正是当前 active 目标当前 revision 的下一轮且不超过上限。
-- JSONL 的 order validator 对每个事件执行同一折叠；追加时非法事实被拒绝且文件不变，读取时整份日志被拒绝。
+- JSONL 的 order validator 对每个事件执行同一折叠；追加时非法事实被拒绝且文件不变，读取时整份日志被拒绝。fork 子代理的种子前缀里的父目标事实同样在原位校验并接受。
+- 一个 session 的目标只从它自己提交的事件折叠（`session.OwnEvents`，与 `subagent/catalog`、规划模式的投影一致）：fork 继承的父目标、轮次和 turn 结局属于父会话，不成为子会话的目标，也不参与子会话的准入、权限与结算。
 
 ### 服务、权限与工具
 
@@ -40,7 +41,7 @@
 
 “直接来自人类的根权限”在执行点判定：`Service.Authority(sessionID, turn, delegated)` 读取调用方 turn 的已提交 `user/message`。若有 `source.kind = "user"` 且调用方不是 delegated，即人类权限；若有当前目标当前 revision 当前轮次的 goal 来源消息，即轮次权限。本仓的 `user` 来源只由前端在人类输入时使用（TUI 提交、steer、`/plan TEXT`、附图），后台通知（`tool-jobs`）、规划提示（`plan-mode`）、skill 目录与注入（`skill-catalog`、`skill-invocation`）、委派任务与 agent 消息（`delegation`、`agent-message`、`subagent-settled`）、目标轮次（`goal`）和收尾指令（`tool-goal`）各有来源，所以它们开启的 turn 不具人类权限；人类在这样的 turn 中 steer 后即具备。这一不变量由守卫测试 `TestHumanSource_OnlyFrontendsAttributeHumanInput`（`internal/app/goal`）执行：它用 `go/parser` 解析 `cmd/` 与 `internal/` 下全部非测试产品源码（不含仓库工具 `internal/tools` 与 `testdata`），找出把 `Kind` 设为 `"user"` 或 `HumanSource` 的复合字面量键与赋值，要求它们只出现在 `internal/adapter/tui` 与 `internal/adapter/media/image`（`/attach`）。新的生产者若借用 `user` 来源，测试失败；新增人类输入前端必须同时修改允许列表并经评审。delegated 判断使用持久化的 delegation（`Invocation.Delegated`）：child 永远以 child 身份恢复，与上游“运行时拥有关系”在本仓等价，这与 [ADR-0014](0014-user-questions-and-plan-mode.md) 的判断相同。
 
-`internal/adapter/tool/goal`（插件 `goal-tools`）注册三个工具，名称、描述与参数 schema 与上游 Base 逐字节一致。全部 exclusive，不需要 approval。`update_goal` 携带上游 `tool:goal` 段落（order 2400，阈值 3）。执行顺序与文本沿用上游：先校验 `goal_id` 非空且去空白、revision 为正安全整数；edit/pause/resume 先要求人类权限；空字符串与 0 视为严格 schema 的占位；paused 目标的 resume 返回 `the model cannot resume a paused goal; the user must resume it`；complete/blocked 先判定权限，再拒绝不属于该动作的参数，自主 blocked 在不足 3 轮时返回 `blocked requires at least 3 consecutive goal rounds; current round is N`；blocked 原因以 code `model-reported` 保存。结果是上游紧凑 JSON，字符串按 `JSON.stringify` 规则引用。get_goal 对 delegated agent 可用，返回其自身 session 的目标。
+`internal/adapter/tool/goal`（插件 `goal-tools`）注册三个工具，名称、描述与参数 schema 与上游 Base 逐字节一致。全部 exclusive，不需要 approval。`update_goal` 携带上游 `tool:goal` 段落（order 2400，阈值 3）。执行顺序与文本沿用上游：先校验 `goal_id` 非空且去空白、revision 为正安全整数；edit/pause/resume 先要求人类权限；空字符串与 0 视为严格 schema 的占位；paused 目标的 resume 返回 `the model cannot resume a paused goal; the user must resume it`；complete/blocked 先判定权限，再拒绝不属于该动作的参数，自主 blocked 在不足 3 轮时返回 `blocked requires at least 3 consecutive goal rounds; current round is N`；blocked 原因以 code `model-reported` 保存。结果是上游紧凑 JSON，字符串按 `JSON.stringify` 规则引用。get_goal 对 delegated agent 可用，返回其自身 session 的目标；fork 子代理在自己创建目标之前读到 `{"goal":null}`，而子代理不具人类权限，所以实际上总是如此。
 
 自主轮次中成功的 complete/blocked 经 `Registry.Notify` 投递收尾指令（上游原文，`source.kind = "tool-goal"`）。上游把它作为本次工具结果之后的延迟上下文；本仓在该工具 step 的 `step/end` 之后作为 `user/message` 追加，turn 因此再走一步回复用户，模型可见内容相同。已在最后一步时，通知按 ADR-0009 留待下一个 turn。投递失败不撤销已提交的变更。
 
@@ -51,10 +52,12 @@ engine 增加按 source kind 注册的 `Admission`（`Engine.RegisterAdmission`�
 `internal/app/goal.Driver`（插件 `goal-driver`）驱动 root agent，不另建 turn 启动路径：
 
 1. 启动时解除该 session 的 armed，并从当前日志末尾开始观察。
-2. 循环等待 `WhenIdle`，然后 `Settle` 自上次以来的事件：被取消的目标轮次在其 revision 仍为当前、active、armed 时暂停（暂停失败则解除），其他被取消的 turn 与任何 error turn 解除 armed，之后的 create/resume 抵消前面的停止。step limit 不影响继续。
+2. 循环等待 root 的 `WhenIdle`（不等待其驻留的 continuable 子代理），然后 `Settle` 自上次以来的事件：被取消的目标轮次在其 revision 仍为当前、active、armed 时暂停（暂停失败则解除），其他被取消的 turn 与任何 error turn 解除 armed，之后的 create/resume 抵消前面的停止。step limit 不影响继续。
 3. 目标 active 且 armed 时：达到上限以 `round-limit` 阻塞；否则用 `Followup` 排入上游原文的 `<goal_round>` 提示并等待其结果。排队失败以 `queue-failed` 阻塞；admission 拒绝后若下一次计算出的轮次来源不变（既无新 revision 也未被撤销），以 `prompt-rejected` 阻塞。否则等待目标变更通知。
 4. watcher 收到人类（`ActorHost`）的 pause 时中断当前 turn；模型与 driver 的 pause 不中断。
 5. cleanup 先解除 armed（排队中的轮次因此被 admission 拒绝），再取消循环；在途轮次被中断并等待结果，受 shutdown 期限约束。driver 最后启动，因此在目标服务撤回 admission 之前停止。
+
+“整个 agent 空闲”与上游一致，指 root agent 自身没有活动、排队或被通知唤醒的 turn。上游 driver 检查的是该 agent 的 `status === 'idle'`，`whenIdle()` 文档写明它等待“当前 whole-agent activity”，即该 agent 的 driver 与维护任务，不包括后代 agent。因此 root 有驻留的 continuable 子代理在后台工作时，driver 仍会排下一轮；子代理结算或发来消息时，`Notify` 会唤醒 root，driver 随之等待那次 turn。等待整棵树空闲会让后台子代理阻塞目标推进，并与上游行为不同，所以不采用。
 
 规划模式、approval 等待和用户打断都不需要专门分支：轮次是普通 turn，服从当前规划段落、approval policy 与等待；人类 `/interrupt` 使轮次以 canceled 结束，driver 随后暂停该目标。
 
