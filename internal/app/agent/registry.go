@@ -108,11 +108,15 @@ func (registry *Registry) stop(ctx context.Context) error {
 	}
 	registry.agents = map[string]mountedAgent{}
 	registry.mu.Unlock()
-	var failures []error
-	for _, candidate := range mounted {
-		candidate.agent.Interrupt()
-		failures = append(failures, candidate.scope.Close(ctx))
+	// Every agent closes at once, so turn admission stops for the root and
+	// all children together; closing them one by one would let agents not
+	// yet reached open new turns while earlier ones drain.
+	failures := make([]error, len(mounted))
+	var group sync.WaitGroup
+	for index, candidate := range mounted {
+		group.Go(func() { failures[index] = candidate.agent.close(ctx, candidate.scope) })
 	}
+	group.Wait()
 	return errors.Join(failures...)
 }
 

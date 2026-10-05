@@ -37,6 +37,8 @@ golden/expected output 由拥有行为的测试维护，CI 只比较，不自动
 
 hand-built unit 不足以证明产品入口。产品可见组件还必须经过 `cmd` 使用的真实 composition 顺序，并覆盖每个 constructor/start/run/shutdown failure 的传播和回滚。
 
+关闭顺序有两项证据。`TestComposition_ShutdownQuiescesAgentsBeforeToolsAndTemporaryFiles` 在 root 的前台 `bash` 心跳和子代理的模型请求都在进行时关闭真实组装，要求：子代理请求在 `Shutdown` 返回前被取消；root 只发出一次模型请求；`bash` 结果是 `Error: tool call aborted`，没有 unknown tool；心跳进程已退出，也没有在临时目录被删除后留下标记。`TestComposition_StartOrderEncodesShutdownQuiescence` 固定 agent 层最后启动、jobs 晚于 shell 工具。行为测试在旧顺序下只会间歇失败，因为旧问题是竞态；结构测试在旧顺序下必定失败。`TestRegistry_StopCancelsEveryAgentBeforeWaiting` 用屏障证明 registry 先取消所有 agent，再等待其中任何一个。
+
 ## 真实实现与边界替身
 
 只替换昂贵或不确定边界：远端网络、模型、时钟和难以稳定触发的 OS failure。替身下游的 parser、agent engine、tool scheduler、approval、sandbox request、session、projection 和 UI command 使用真实实现。

@@ -221,16 +221,20 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
-	// Jobs start after shell tools so their cleanup stops every background
-	// process before the shell temporary directory is removed. The goal
-	// driver starts last, so its cleanup disarms and stops goal rounds before
-	// the goal service withdraws round admission.
+	// Shutdown runs in reverse, so the order encodes quiescence:
+	//   - the goal driver starts last and stops goal rounds first;
+	//   - the registry and root start after every tool, job, and delegation
+	//     service, so the registry closes all agents together, cancelling and
+	//     waiting for every in-flight turn while tools are still registered;
+	//   - jobs start after shell tools, so they stop every background process
+	//     before the shell temporary directory is removed;
+	//   - spill, sessions, and the engine outlive everything that writes them.
 	plugins := []plugin.Plugin{
 		configuration, settingsProvider, credentials, modelRuntime,
 		providers[0], providers[1], providers[2], approvalService, questionService, toolRuntime, spillStore,
 		images, assembler, planMode, retryService, compactionService, webService, sessions, engine,
-		registry, root, subagents, goals, fileTools, searchTools, shellTools, jobs, jobTools, subagentTools, todoTools, webTools,
-		questionTools, planTools, skillTools, goalTools, goalDriver,
+		subagents, goals, fileTools, searchTools, shellTools, jobs, jobTools, subagentTools, todoTools, webTools,
+		questionTools, planTools, skillTools, goalTools, registry, root, goalDriver,
 	}
 	return &application{plugins: plugins, root: root, registry: registry, models: modelRuntime,
 		settings: configuration, approval: approvalService, questions: questionService, images: images, subagents: subagents, goals: goals}, nil

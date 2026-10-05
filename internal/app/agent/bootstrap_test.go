@@ -44,8 +44,9 @@ func TestBootstrap_ValidatesCreatesPublishesAndCleansRoot(t *testing.T) {
 	if _, err := bootstrap.Agent(); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("post-close Agent() error = %v", err)
 	}
-	if _, err := registry.Find("root"); !errors.Is(err, ErrAgentNotFound) {
-		t.Fatalf("root remained mounted: %v", err)
+	// The registry, not the bootstrap, closes the root with every other agent.
+	if _, err := registry.Find("root"); err != nil {
+		t.Fatalf("bootstrap cleanup closed the root early: %v", err)
 	}
 }
 

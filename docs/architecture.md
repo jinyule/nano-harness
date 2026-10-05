@@ -47,10 +47,20 @@ internal/platform
 settings → settings file → credential store → LLM runtime
 → OpenAI/Anthropic/OpenRouter providers → approval → user questions
 → tool runtime → spill store → images → prompt → plan mode → retry → compaction → web
-→ sessions → agent engine → agent registry → root bootstrap → subagents → goals
+→ sessions → agent engine → subagents → goals
 → file/search/shell tools → jobs → job/subagent/todo/web/question/plan/skill/goal tools
-→ goal driver → TUI
+→ agent registry → root bootstrap → goal driver → TUI
 ```
+
+关闭按逆序进行，这个顺序本身就是静止契约：
+
+1. 前端先停止，撤销 broker 并结束交互。
+2. goal driver 停止 goal 轮次。
+3. agent registry 同时关闭 root 和所有子代理。在途 turn 被取消，排队的 turn 和 notice 不再执行，registry 等待每个 worker 退出；此时工具仍已注册，前台 `bash` 随 turn 取消被终止并回收，不会出现 unknown tool 结果，也不会再发模型请求。root bootstrap 只撤销发布，root 由 registry 与其他 agent 一起关闭。
+4. 工具撤销注册；jobs 取消并等待所有后台进程；shell provider 删除临时目录。jobs 在 shell 工具之后启动，所以后台进程总在临时目录删除之前结束。
+5. delegation 与 goal 服务、spill、session、engine 和更早的基础组件最后关闭。
+
+`cmd/nano-harness` 的 assembled 测试从真实组装证明这一顺序，结构测试固定 agent 层在最后启动。
 
 纯值、DTO、算法和仓库工具没有运行时 effect，不包装为空插件。
 
@@ -139,7 +149,7 @@ Submit user message
 - 注册了 `Admission` 的 source kind（目前只有目标轮次 `goal`）在 worker 取出 turn 时先经 admission：它在排除并发状态变化的同时提交 `turn/start` 与开场 `user/message`，或以 `ErrNotAdmitted` 丢弃这个 turn，不写任何记录，也不更新 `Status().Last`。规则见[长期目标](#长期目标)。
 - `Notify` 投递模型可见通知：后台任务完成通知、agent 之间的 `send_message` 消息、子代理结算通知和目标收尾指令。agent 忙时，通知在 turn 开始后、工具 step 结束后以及无工具调用的回答之后作为 `user/message` 追加；最后一种情况下 turn 继续一个 step 回应它，已到 step 上限时留待下一 turn。agent 空闲，或 turn 结束后仍有通知且没有排队的 turn 时，worker 以通知开启新 turn；被取消的 turn 留下的通知等待下一个 turn。待投递通知只在内存中，规则见 [ADR-0009](decisions/0009-background-jobs.md)。
 - 调用取消、step limit、错误和恢复中断分别记录稳定 outcome。异常边界会尝试用不继承上游取消的 context 关闭 step/turn。
-- Registry 拥有每个动态 agent 的 Scope、worker 和 journal，关闭时先拒绝新 agent，再 interrupt 并等待所有 agent 回收。
+- Registry 拥有每个动态 agent（包括 root）的 Scope、worker 和 journal。关闭时先拒绝新 agent，再同时关闭全部 agent：每个 worker 立即取消在途 turn、丢弃排队工作，registry 等待所有 worker 回收，不会出现一个 agent 在排空时另一个仍在开启新 turn。
 
 ## 工具、approval 与调度
 

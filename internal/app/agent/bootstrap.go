@@ -30,7 +30,9 @@ func NewBootstrap(registry *Registry, request CreateRequest) (*Bootstrap, error)
 // ID returns the stable root-agent plugin identity.
 func (*Bootstrap) ID() string { return "root-agent" }
 
-// Start creates the root and registers its close before publication.
+// Start creates the root and publishes it until scope cleanup. The registry
+// owns the root's lifetime and closes it together with every other agent,
+// so the root never stops while children can still open turns.
 func (bootstrap *Bootstrap) Start(ctx context.Context, scope *plugin.Scope) error {
 	bootstrap.mu.Lock()
 	if bootstrap.started {
@@ -43,15 +45,14 @@ func (bootstrap *Bootstrap) Start(ctx context.Context, scope *plugin.Scope) erro
 	if err != nil {
 		return err
 	}
-	id := root.Status().SessionID
-	if err := scope.Defer(func(closeContext context.Context) error {
+	if err := scope.Defer(func(context.Context) error {
 		bootstrap.mu.Lock()
 		bootstrap.active = false
 		bootstrap.agent = nil
 		bootstrap.mu.Unlock()
-		return bootstrap.registry.Close(closeContext, id)
+		return nil
 	}); err != nil {
-		_ = bootstrap.registry.Close(context.WithoutCancel(ctx), id)
+		_ = bootstrap.registry.Close(context.WithoutCancel(ctx), root.Status().SessionID)
 		return err
 	}
 	bootstrap.mu.Lock()

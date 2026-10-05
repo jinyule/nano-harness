@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/app/transcript"
@@ -418,4 +419,53 @@ func TestRegistry_ContainsScopePublicationRacesAndIDEntropyFailure(t *testing.T)
 		delete(registry.agents, "raced")
 		registry.mu.Unlock()
 	})
+}
+
+// TestRegistry_StopCancelsEveryAgentBeforeWaiting pins that shutdown stops
+// all agents together: each turn refuses to finish until every turn has
+// been cancelled, which deadlocks if agents are closed one at a time.
+func TestRegistry_StopCancelsEveryAgentBeforeWaiting(t *testing.T) {
+	var cancelled sync.WaitGroup
+	cancelled.Add(2)
+	barrier := func() {
+		cancelled.Done()
+		cancelled.Wait()
+	}
+	started := make(chan struct{}, 2)
+	never := make(chan struct{})
+	harness := startEngineHarness(t, 1,
+		modelAction{started: started, wait: never, cancelled: barrier},
+		modelAction{started: started, wait: never, cancelled: barrier},
+	)
+	registry, scope := startRegistry(t, harness, newMemoryRepository(), newMemoryPolicy())
+	results := make([]<-chan TurnResult, 0, 2)
+	for _, id := range []string{"root", "other"} {
+		agent, err := registry.Create(context.Background(), CreateRequest{SessionID: id, Create: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := agent.Submit(context.Background(), agentMessage(session.RoleUser, "work"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		results = append(results, result)
+		<-started
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stopped := make(chan error, 1)
+	go func() { stopped <- scope.Close(ctx) }()
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("registry stop waited on one agent before cancelling the others")
+	}
+	for _, result := range results {
+		if turn := <-result; turn.Outcome != session.OutcomeCanceled {
+			t.Fatalf("turn = %+v", turn)
+		}
+	}
 }

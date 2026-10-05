@@ -46,7 +46,9 @@ type modelAction struct {
 	err        error
 	wait       <-chan struct{}
 	started    chan<- struct{}
-	panic      bool
+	// cancelled runs when ctx ends during wait, before Stream returns.
+	cancelled func()
+	panic     bool
 }
 
 type scriptedModel struct {
@@ -85,6 +87,9 @@ func (model *scriptedModel) Stream(ctx context.Context, _ llm.Credential, reques
 	if action.wait != nil {
 		select {
 		case <-ctx.Done():
+			if action.cancelled != nil {
+				action.cancelled()
+			}
 			return llm.Completion{}, ctx.Err()
 		case <-action.wait:
 		}
