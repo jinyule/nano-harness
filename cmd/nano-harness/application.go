@@ -146,10 +146,6 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
-	subagents, err := newSubagentService(registry)
-	if err != nil {
-		return nil, err
-	}
 	workspaceRoot, err := newWorkspace(config.workspaceRoot)
 	if err != nil {
 		return nil, err
@@ -166,6 +162,10 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 		return nil, err
 	}
 	jobs, err := newJobService(registry)
+	if err != nil {
+		return nil, err
+	}
+	subagents, err := newSubagentService(registry, jobs, sessions)
 	if err != nil {
 		return nil, err
 	}

@@ -103,5 +103,19 @@
     "before": "if !within(directory, resolved) {",
     "after": "if false && !within(directory, resolved) {",
     "test": "^TestRoot_ReadableMatrix$"
+  },
+  {
+    "id": "subagent-direct-parent",
+    "file": "internal/app/subagent/service.go",
+    "before": "if parentID != senderID {",
+    "after": "if parentID != senderID && false {",
+    "test": "^TestService_RejectsMessagesOutsideDirectLineage$"
+  },
+  {
+    "id": "subagent-descendant-interrupt",
+    "file": "internal/app/subagent/service.go",
+    "before": "return fail(CodeUnauthorized, \"subagent %q is not a live descendant of agent %q\", targetID, callerID)",
+    "after": "break",
+    "test": "^TestService_InterruptReachesDescendantsAndParentWaitsForChildren$"
   }
 ]

@@ -234,7 +234,7 @@ func TestComposition_MatchesUpstreamBaseTools(t *testing.T) {
 		frozen[definition.Name] = definition
 	}
 	upstream := loadCatalog(t, filepath.Join("testdata", "upstream-base-tools.json"))
-	if len(upstream) != 15 {
+	if len(upstream) != 20 {
 		t.Fatalf("upstream fixture lists %d tools", len(upstream))
 	}
 	for _, want := range upstream {
@@ -546,7 +546,6 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 		{name: "bootstrap", set: func() {
 			newRootBootstrap = func(*agent.Registry, agent.CreateRequest) (*agent.Bootstrap, error) { return nil, failure }
 		}},
-		{name: "subagents", set: func() { newSubagentService = func(*agent.Registry) (*subagent.Service, error) { return nil, failure } }},
 		{name: "workspace", set: func() {
 			newWorkspace = func(string) (workspace.Root, error) { return workspace.Root{}, failure }
 		}},
@@ -559,6 +558,11 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 			}
 		}},
 		{name: "jobs", set: func() { newJobService = func(appJob.Notifier) (*appJob.Service, error) { return nil, failure } }},
+		{name: "subagents", set: func() {
+			newSubagentService = func(*agent.Registry, *appJob.Service, transcript.Repository) (*subagent.Service, error) {
+				return nil, failure
+			}
+		}},
 		{name: "shell tools", set: func() {
 			newShellTools = func(*appTool.Runtime, shelltool.Runner, workspace.Root, *appJob.Service) (*shelltool.Provider, error) {
 				return nil, failure

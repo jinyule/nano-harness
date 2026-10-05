@@ -43,7 +43,7 @@ func (repository *memoryRepository) OpenSession(_ context.Context, options trans
 		} else {
 			log = &memoryLog{header: session.Header{
 				SessionID: options.SessionID, Cwd: options.Cwd, ParentSessionID: options.ParentSessionID, DelegationDepth: options.DelegationDepth,
-			}, path: "/sessions/" + options.SessionID + ".jsonl"}
+			}, path: "/sessions/" + options.SessionID + ".jsonl", events: slices.Clone(options.Seed)}
 		}
 		repository.logs[options.SessionID] = log
 		return log, nil
@@ -195,14 +195,35 @@ func TestRegistry_CreatesRootDelegatedAndRestoredAgents(t *testing.T) {
 	}
 
 	child, err := registry.Create(context.Background(), CreateRequest{
-		SessionID: "child", ParentID: "root", Label: "research", Mode: "one-shot", Persona: "focus", Tools: []string{"read"}, Depth: 1, Create: true,
+		SessionID: "child", ParentID: "root", Label: "research", Mode: "one-shot", Provider: session.SubagentSpawn, Persona: "focus", Tools: []string{"read"}, Depth: 1, Create: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	childEvents, _ := child.Events(context.Background())
-	if len(childEvents) != 2 || childEvents[0].Record.Subagent.Mode != "one-shot" || childEvents[1].Record.Approval.Policy != session.ApprovalNever {
+	descriptor := childEvents[0].Record.Subagent
+	if len(childEvents) != 2 || descriptor.Version != 2 || descriptor.Provider != session.SubagentSpawn || descriptor.Mode != "one-shot" || descriptor.Inherited != 0 || childEvents[1].Record.Approval.Policy != session.ApprovalNever {
 		t.Fatalf("child events = %#v", childEvents)
+	}
+
+	// A fork starts from the parent prefix; its descriptor counts the copy.
+	seed := []session.Event{
+		{Sequence: 1, Record: session.Record{Type: session.RecordApprovalPolicy, Approval: &session.ApprovalData{Policy: session.ApprovalAsk}}},
+		{Sequence: 2, Record: session.Record{Type: session.RecordTurnStart, Turn: 1}},
+	}
+	forked, err := registry.Create(context.Background(), CreateRequest{SessionID: "forked", ParentID: "root", Label: "fork", Mode: "continuable", Provider: session.SubagentFork, Seed: seed, Depth: 1, Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forkedEvents, _ := forked.Events(context.Background())
+	if len(forkedEvents) != 4 || forkedEvents[2].Record.Subagent.Inherited != 2 || forkedEvents[2].Record.Subagent.Provider != session.SubagentFork || policy.restored["forked"][3].Record.Approval.Policy != session.ApprovalNever {
+		t.Fatalf("forked events = %#v", forkedEvents)
+	}
+	if opened := repository.options[len(repository.options)-1]; len(opened.Seed) != 2 {
+		t.Fatalf("fork open options = %#v", opened)
+	}
+	if err := registry.Close(context.Background(), "forked"); err != nil {
+		t.Fatal(err)
 	}
 	if err := registry.SetPolicy(context.Background(), "child", session.ApprovalAsk); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("delegated policy error = %v", err)
@@ -257,6 +278,8 @@ func TestRegistry_GeneratesIDsAndRejectsInvalidRequests(t *testing.T) {
 		{SessionID: "deep", ParentID: "root", Depth: 17, Create: true},
 		{SessionID: "parent-zero", ParentID: "root", Depth: 0, Create: true},
 		{SessionID: "depth-no-parent", Depth: 1, Create: true},
+		{SessionID: "root-provider", Provider: session.SubagentSpawn, Create: true},
+		{SessionID: "root-seed", Seed: []session.Event{{Sequence: 1}}, Create: true},
 	} {
 		if _, err := registry.Create(context.Background(), request); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("request %+v error = %v", request, err)

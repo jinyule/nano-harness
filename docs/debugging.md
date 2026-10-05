@@ -47,10 +47,10 @@ make debug-fixture
 | 断点位置 | 可观察内容 |
 |---|---|
 | `internal/adapter/tui/model.go` 的 `model.submit` | TUI 提交的文本与输入模式 |
-| `internal/app/subagent/service.go` 的 `Service.Spawn` | parent session、label、mode、task、tool allowlist |
+| `internal/app/subagent/service.go` 的 `Service.create` | parent session、label、mode、fork 种子长度、catalog 记录 |
 | `internal/adapter/tool/file/read.go` 的 `Provider.read` | session ID、类型化参数、delegated/approved 状态 |
 
-在第二个终端输入 `verify tools`，遇到断点后在 GoLand 查看变量，使用 Step Over 单步或 Resume 继续。子代理的 `invocation.Delegated` 为 `true`，`Approved` 为 `false`。终端中 `write`、`edit` 和两次 `bash` 的四次审批各输入 `y`，随后的两题提问分别按 Enter 接受预填推荐项和输入任意文字；任务完成后在 fixture 的 workspace 下创建 `notify` 文件，后台 job 完成并以 `job>` 通知开启新 turn，之后可用 `/agents` 查看 child。输入 `/plan` 再输入 `PLAN_TASK` 可验证规划审查，输入 `1` 批准。输入 `wait` 后用 `/interrupt` 验证取消，再用 `/quit` 正常退出。最后在第一个终端按 Ctrl+C 停止 fixture；GoLand 的 Stop 会终止调试目标，正常验证优先使用 TUI 的 `/quit`。
+在第二个终端输入 `verify tools`，遇到断点后在 GoLand 查看变量，使用 Step Over 单步或 Resume 继续。子代理的 `invocation.Delegated` 为 `true`，`Approved` 为 `false`。终端中 `write`、`edit` 和两次 `bash` 的四次审批各输入 `y`，随后的两题提问分别按 Enter 接受预填推荐项和输入任意文字；任务完成后在 fixture 的 workspace 下创建 `notify` 文件，后台 job 完成并以 `job>` 通知开启新 turn，fixture 的两个 child 都是前台 one-shot，任务完成后已被回收，`/agents` 显示 `no subagents`。输入 `/plan` 再输入 `PLAN_TASK` 可验证规划审查，输入 `1` 批准。输入 `wait` 后用 `/interrupt` 验证取消，再用 `/quit` 正常退出。最后在第一个终端按 Ctrl+C 停止 fixture；GoLand 的 Stop 会终止调试目标，正常验证优先使用 TUI 的 `/quit`。
 
 Remote 流程用于把 TUI 输入输出留在 Codex 终端，同时在 GoLand 查看断点；它也为 IDE 内置 Delve 无法支持本机 Go 工具链时提供固定 Delve 1.27.1 的替代路径。版本选择见 [Delve 发布记录](https://github.com/go-delve/delve/releases)，终端模拟选项见 [GoLand Run 配置](https://www.jetbrains.com/help/go/running-applications.html)。
 

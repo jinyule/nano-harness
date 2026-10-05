@@ -47,6 +47,8 @@ func (record Record) Validate() error {
 		return record.requireCompaction()
 	case RecordSubagentDescriptor:
 		return record.requireSubagent()
+	case RecordSubagentCatalog:
+		return record.requireCatalog()
 	case RecordTodoWrite:
 		return record.requireTodo()
 	case RecordPlanMode:
@@ -72,7 +74,7 @@ func (record Record) requireBare(step, usage bool) error {
 	if step != (record.Step > 0) {
 		return invalid("%s has invalid step", record.Type)
 	}
-	if record.Message != nil || record.Chunk != nil || record.Call != nil || record.Result != nil || record.Header != nil || record.Retry != nil || record.Approval != nil || record.Compaction != nil || record.Subagent != nil || record.Todo != nil || record.Plan != nil || record.Outcome != "" || !usage && record.Usage != nil {
+	if record.Message != nil || record.Chunk != nil || record.Call != nil || record.Result != nil || record.Header != nil || record.Retry != nil || record.Approval != nil || record.Compaction != nil || record.Subagent != nil || record.Catalog != nil || record.Todo != nil || record.Plan != nil || record.Outcome != "" || !usage && record.Usage != nil {
 		return invalid("%s has unrelated fields", record.Type)
 	}
 	return validateUsage(record.Usage)
@@ -87,7 +89,7 @@ func (record Record) requireMessage(role MessageRole) error {
 }
 
 func (record Record) hasExtras(keep string) bool {
-	return keep != "message" && record.Message != nil || keep != "chunk" && record.Chunk != nil || keep != "call" && record.Call != nil || keep != "result" && record.Result != nil || keep != "header" && record.Header != nil || keep != "usage" && record.Usage != nil || keep != "retry" && record.Retry != nil || keep != "approval" && record.Approval != nil || keep != "compaction" && record.Compaction != nil || keep != "subagent" && record.Subagent != nil || keep != "todo" && record.Todo != nil || keep != "plan" && record.Plan != nil || keep != "outcome" && record.Outcome != ""
+	return keep != "message" && record.Message != nil || keep != "chunk" && record.Chunk != nil || keep != "call" && record.Call != nil || keep != "result" && record.Result != nil || keep != "header" && record.Header != nil || keep != "usage" && record.Usage != nil || keep != "retry" && record.Retry != nil || keep != "approval" && record.Approval != nil || keep != "compaction" && record.Compaction != nil || keep != "subagent" && record.Subagent != nil || keep != "catalog" && record.Catalog != nil || keep != "todo" && record.Todo != nil || keep != "plan" && record.Plan != nil || keep != "outcome" && record.Outcome != ""
 }
 
 func validateMessage(message Message, requireContent bool) error {
@@ -275,7 +277,7 @@ func (record Record) requireApproval() error {
 	case RecordTurnStart, RecordUserMessage, RecordStepStart, RecordRequestHeader,
 		RecordAssistantChunk, RecordAssistantMessage, RecordToolCall, RecordToolResult,
 		RecordRetry, RecordRetryStarted, RecordCompactionStart, RecordCompactionSummary,
-		RecordCompactionEnd, RecordSubagentDescriptor, RecordTodoWrite, RecordPlanMode, RecordStepEnd, RecordTurnEnd:
+		RecordCompactionEnd, RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordPlanMode, RecordStepEnd, RecordTurnEnd:
 		// Validate dispatches only approval record types to this shape-specific helper.
 	}
 	return nil
@@ -341,7 +343,7 @@ func (record Record) requireCompaction() error {
 	case RecordTurnStart, RecordUserMessage, RecordStepStart, RecordRequestHeader,
 		RecordAssistantChunk, RecordAssistantMessage, RecordToolCall, RecordApprovalAsked,
 		RecordApprovalDecided, RecordApprovalPolicy, RecordToolResult, RecordRetry,
-		RecordRetryStarted, RecordSubagentDescriptor, RecordTodoWrite, RecordPlanMode, RecordStepEnd, RecordTurnEnd:
+		RecordRetryStarted, RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordPlanMode, RecordStepEnd, RecordTurnEnd:
 		// Validate dispatches only compaction record types to this shape-specific helper.
 	}
 	return nil
@@ -352,7 +354,7 @@ func (record Record) requireSubagent() error {
 		return invalid("subagent/descriptor shape is invalid")
 	}
 	data := record.Subagent
-	if data.Version != 1 || validateIdentifier("subagent provider", data.Provider, 64) != nil || data.Mode != "one-shot" && data.Mode != "continuable" || data.Label == "" || len(data.Label) > 128 || len(data.Persona) > 4096 || len(data.Tools) > 32 {
+	if data.Version != SubagentDescriptorVersion || data.Provider != SubagentSpawn && data.Provider != SubagentFork || data.Provider == SubagentSpawn && data.Inherited != 0 || !validSubagentMode(data.Mode) || !validSubagentLabel(data.Label) || len(data.Persona) > 4096 || len(data.Tools) > 32 {
 		return invalid("subagent descriptor fields are invalid")
 	}
 	for _, tool := range data.Tools {
@@ -361,6 +363,25 @@ func (record Record) requireSubagent() error {
 		}
 	}
 	return nil
+}
+
+func (record Record) requireCatalog() error {
+	if record.Step == 0 || record.Catalog == nil || record.hasExtras("catalog") {
+		return invalid("subagent/catalog shape is invalid")
+	}
+	data := record.Catalog
+	if validateIdentifier("subagent session ID", data.SessionID, 64) != nil || !validSubagentMode(data.Mode) || !validSubagentLabel(data.Label) {
+		return invalid("subagent catalog fields are invalid")
+	}
+	return nil
+}
+
+func validSubagentMode(mode string) bool {
+	return mode == SubagentOneShot || mode == SubagentContinuable
+}
+
+func validSubagentLabel(label string) bool {
+	return label != "" && len(label) <= 128
 }
 
 func (record Record) requireTurnEnd() error {

@@ -102,13 +102,13 @@ GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点�
 
 - provider-neutral 的 Models → Provider → wire API 路由；provider 拥有 catalog、认证、刷新和流协议。
 - OpenAI Responses/ChatGPT Codex Responses、Anthropic Messages、OpenRouter Chat Completions 的流式适配。
-- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`web_search`、`web_fetch`、`skill`、记录会话任务计划的 `todo_write` 和 `exit_plan_mode`，与 Web preset 一致的 `ask_user_question`，以及 spawn/followup/interrupt/report/list subagent 工具。
+- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`web_search`、`web_fetch`、`skill`、记录会话任务计划的 `todo_write` 和 `exit_plan_mode`，与 Web preset 一致的 `ask_user_question`，以及后台可继续的 `subagent`、继承会话的 `subagent_fork` 和 `send_message`、`interrupt_agent`、`list_agents`。
 - `bash` 可在后台运行，前台命令超时后转为后台 job 继续运行；job 完成后通知所属 agent，agent 空闲时自动开启新 turn。
 - 可持久化的规划模式与经用户审查的退出，以及失败关闭的用户提问接缝。
 - 运行时 skill 发现：skill 目录随会话持久化并在变化时替换，用户可用 `/name` 直接调用。
 - 失败关闭的 approval、相邻只读工具并发、写入与 shell 的独占 barrier。
 - 指数退避 retry、主动/被动 context compaction、followup、steer、interrupt 和恢复。
-- v2 严格 JSONL 事件日志；流式 text/reasoning/tool、审批、重试、压缩、任务计划和 subagent 身份均可审计。
+- v2 严格 JSONL 事件日志；流式 text/reasoning/tool、审批、重试、压缩、任务计划、subagent 身份与目录均可审计。
 
 ## 仓库结构
 

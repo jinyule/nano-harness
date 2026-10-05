@@ -90,7 +90,7 @@ func TestAgent_SubmitFollowupSubscribeAndSnapshots(t *testing.T) {
 		t.Fatalf("manual compaction = %v, %v", compacted, err)
 	}
 
-	oneShot, err := registry.Create(context.Background(), CreateRequest{SessionID: "one", ParentID: "root", Depth: 1, Mode: "one-shot", Create: true})
+	oneShot, err := registry.Create(context.Background(), CreateRequest{SessionID: "one", ParentID: "root", Depth: 1, Mode: "one-shot", Provider: session.SubagentSpawn, Create: true})
 	if err != nil {
 		t.Fatal(err)
 	}

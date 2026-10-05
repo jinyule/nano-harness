@@ -230,6 +230,24 @@
       }
     },
     {
+      "name": "interrupt_agent",
+      "source": "docs/tool-catalog.md with packages/subagent/tool-subagent-control/src/index.ts",
+      "composition": "Base mounts @deepseek-ai/dsh-tool-subagent-control without configuration",
+      "description": "Ask a subagent to stop its current work. This call returns without waiting for it to stop. You can continue a direct child's conversation later with send_message. Subagents it started will keep running.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "description": "The id of an agent created under you: your direct child or a deeper descendant."
+          }
+        },
+        "required": [
+          "agent_id"
+        ]
+      }
+    },
+    {
       "name": "job_kill",
       "source": "docs/tool-catalog.md (packages/jobs/tool-jobs/src/index.ts)",
       "composition": "Base loads @deepseek-ai/dsh-tool-jobs with defaults; identical to the catalog",
@@ -288,6 +306,25 @@
       }
     },
     {
+      "name": "list_agents",
+      "source": "docs/tool-catalog.md with packages/subagent/tool-subagent-control/src/list-agents.ts",
+      "composition": "Base mounts @deepseek-ai/dsh-tool-subagent-control/list-agents without configuration",
+      "description": "List subagents you started, with their ids, labels, and status. running means it is working; inactive means it is not currently working. You will be notified when a subagent finishes; there is no need to keep checking its status. Use send_message to continue the conversation.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "children (default) lists direct children, which accept send_message in any status. descendants lists the whole tree below you with each entry's parent session id and depth; entries deeper than 1 accept only interrupt_agent.",
+            "enum": [
+              "children",
+              "descendants"
+            ]
+          }
+        }
+      }
+    },
+    {
       "name": "read",
       "source": "docs/tool-catalog.md (packages/fs/tool-fs/src/read.ts)",
       "composition": "identical to the catalog",
@@ -314,6 +351,29 @@
       }
     },
     {
+      "name": "send_message",
+      "source": "docs/tool-catalog.md with packages/subagent/tool-subagent-control/src/index.ts",
+      "composition": "Base mounts @deepseek-ai/dsh-tool-subagent-control without configuration",
+      "description": "Send a message to an agent. A working agent receives it at its next step; an idle agent starts a new turn with it. Returns delivery confirmation, not the agent's answer.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "description": "The agent id of your direct continuable child, or your direct parent when you are a resident continuable child."
+          },
+          "message": {
+            "type": "string",
+            "description": "The message to deliver to the agent."
+          }
+        },
+        "required": [
+          "agent_id",
+          "message"
+        ]
+      }
+    },
+    {
       "name": "skill",
       "source": "docs/tool-catalog.md (packages/skill/tool-skill/src/index.ts)",
       "composition": "identical to the catalog; Base mounts @deepseek-ai/dsh-tool-skill with its default config and contributes no system-prompt section",
@@ -328,6 +388,60 @@
         },
         "required": [
           "name"
+        ]
+      }
+    },
+    {
+      "name": "subagent",
+      "source": "docs/tool-catalog.md with packages/subagent/tool-subagent/src/index.ts",
+      "composition": "Base composes @deepseek-ai/dsh-tool-subagent with provider: spawn, toolName: subagent, backgroundMode: continuable; enableRunInBackground and modelSelectionSettings keep their defaults (true, false), so the spawn wording gains the continuable background sentence, run_in_background uses the continuable text, and no provider/model/reasoning_effort parameters appear. The catalog page shows the one-shot default instead",
+      "description": "Delegate a self-contained task to a subagent (a separate agent that works in its own context) to offload focused, independent work — research, a scoped implementation, an analysis — so it does not consume this conversation's context. The subagent returns its result, not its intermediate steps. It runs in the background by default and returns a subagent id you can continue with `send_message`; you are notified when the run settles.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "A short (3-5 word) description of the delegated task, for display."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The complete, self-contained task for the subagent. It does not share this conversation's context, so include everything it needs."
+          },
+          "run_in_background": {
+            "type": "boolean",
+            "description": "Defaults to true. Set false only when your next action depends on the result."
+          }
+        },
+        "required": [
+          "description",
+          "prompt"
+        ]
+      }
+    },
+    {
+      "name": "subagent_fork",
+      "source": "docs/tool-catalog.md with packages/subagent/tool-subagent/src/index.ts and packages/subagent/subagent-fork-in-process/src/index.ts",
+      "composition": "Base composes a second @deepseek-ai/dsh-tool-subagent row with provider: fork, toolName: subagent_fork, backgroundMode: one-shot; the fork provider sets inheritsParentContext, so description and prompt use the inherited-conversation wording, followed by the one-shot foreground sentence and the job-based run_in_background text",
+      "description": "Delegate a task to a subagent that inherits this conversation: a child agent seeded with all completed turns so far (it does not see the current in-flight turn). Use this when the subtask builds on this conversation's context — a follow-up analysis, a review, a continuation — without consuming this conversation's context for the work itself. You receive its result, not its intermediate steps. This call waits for the result by default.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "A short (3-5 word) description of the delegated task, for display."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The task for the subagent. It already sees this conversation's completed turns, so build on them freely and state only what is new."
+          },
+          "run_in_background": {
+            "type": "boolean",
+            "description": "Run as a background job and return its id (collect with job_output, stop with job_kill). Defaults to false."
+          }
+        },
+        "required": [
+          "description",
+          "prompt"
         ]
       }
     },

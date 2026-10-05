@@ -102,7 +102,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 ## Approval、shell 与进程
 
 - `write`、`edit` 和 `bash` 在真正执行操作的位置请求一次性 approval，原因由类型化参数生成（目标路径、命令描述或升级理由）。问题与结果均写入 session；UI 不存在、取消、unknown outcome 或持久化失败都不会授权。参数无效或路径不安全的调用不会进入审批。
-- root policy 默认 `ask`，可切换为 `never`。delegated agent 的 policy 持久化为 `never`，approval service 不向 broker 提问，因此 subagent 无法写文件或运行 shell。
+- root policy 默认 `ask`，可切换为 `never`。delegated agent 的 policy 持久化为 `never`，approval service 不向 broker 提问，因此 subagent 无法写文件或运行 shell；授权矩阵见 [Subagent 与生命周期](#subagent-与生命周期)。
 - `bash` 默认通过 macOS `sandbox-exec` 或 Linux `bwrap` 执行。sandbox 只允许写 workspace 和 provider 拥有的临时目录；Linux 使用只读 root bind、workspace 可写 bind、独立 namespace、`--die-with-parent`。sandbox executable 缺失时拒绝执行。失败命令的 stderr 命中当前后端的拒绝签名时，结果追加 `[sandbox: file access denied under workspace-write mode]` 和一次性升级提示。
 - 模型参数沿用上游 `sandbox_permissions` 与 `justification`，按上游规则校验：`write`/`edit` 要求两者成对出现；`bash` 重复 `workspace-write` 时可省略 justification，未给模式时空白 justification 被忽略。`workspace-write` 等同默认模式。`danger-full-access` 只对 `bash` 有效：需要非空 justification，approval 原因为 `escalate sandbox to danger-full-access: <justification>`，批准后仅这一条命令在 host 上运行；delegated request 在执行点无条件拒绝。`write` 和 `edit` 在审批前拒绝 `danger-full-access`，文件工具从不离开 workspace。
 - `bash` 运行 `bash -c`。每次调用在审批之后作为后台任务注册表中的 job 运行，进程没有 runner 截止时间，只在自行结束、`job_kill` 或关闭时停止；停止时终止整个进程组并等待退出，命令结束后同一进程组中残留的后台进程也会被终止。`run_in_background: true` 立即返回 job ID，审批原因注明 background；前台调用等待 `timeoutMs`（默认 60 s、上限 10 min，超过上限按上限，非正值拒绝），到期后命令继续作为后台 job 运行而不是被终止。前台结果中 stdout 与 stderr 各保留最后 64,000 字节，超出的流另存为 [spill 文件](#spill-文件)（单个最多 64 MiB）；非零退出码和信号以 `[exit code: N]`、`[killed by signal: S]` 标记返回，不是 tool error；取消调用会终止该 job 并返回 `tool call aborted`。owner 已有 10 个活动 job 时，后台调用被拒，前台调用退回到期即终止的执行方式，超时以 `[timed out after Nms]` 标记。
@@ -129,13 +129,25 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 - resume 只对 schema 与因果均有效的完整记录做追加式 repair：取消未决 approval、补 tool error，并关闭 compaction/step/turn。它不截断 torn line、不删除未知内容、不迁移旧格式。
 - model-visible stream chunk、message、call/result、approval、retry、compaction summary、image、skill 目录与注入正文、规划模式切换与切换提示均进入日志；credential、OAuth notice 和内部 provider DTO 不进入。问题与答案只作为 `tool/call` 参数和 `tool/result` 存在。
 - `todo/write` 只由调用方 session 中尚未得到 result 的 `todo_write` call 写入，最多 256 项、每项 `content` 2048 字节。decoder 拒绝未知字段、未知状态、未去空白或重复的内容，以及不引用 pending call 的记录。
+- `subagent/descriptor` 只接受 v2、`spawn`/`fork` provider 与已知 mode，且必须紧跟继承前缀、位于 turn 之外；`subagent/catalog` 必须位于活动 step，同一日志内 child id 唯一。fork 种子必须是从 1 开始连续、schema 有效且 turn 闭合的前缀，与 header 一次写入，校验失败时不创建文件。
 
 ## Subagent 与生命周期
 
-- subagent 是同进程的独立 agent/session，不启动外部 Codex/Claude 进程，也不共享可变 transcript。
-- 最大 delegation depth 为 4，fork context 与任务有大小上限，child persona 和 tool allowlist 被持久化并在恢复时校验。
-- parent identity 在 followup/interrupt 边界校验。delegated agent 只能访问自己的 job，且因 `never` 策略无法通过 `bash` 启动 job。report/list 只返回 session、标签、模式、深度、busy/pending 和最近结果，不返回账户或 prompt secret。
-- plugin shutdown 先停止发布新工作，再取消 child monitor/turn，等待 worker 退出并关闭 writer lock。goroutine、listener、临时目录和 registry contribution 必须由创建它的 Scope 回收。
+- subagent 是同进程的独立 agent/session，不启动外部 Codex/Claude 进程，也不共享可变 transcript。fork child 复制 parent 已完成 turn 的事件作为自己日志的前缀，之后两者独立追加；复制内容与 parent 一样是模型可见数据，可能包含工具输出和图片。
+- delegated session 的 approval 策略在创建时持久化为 `never`，fork 复制的 parent `ask` 策略被其后的 `never` 覆盖；child 因此不能写文件、运行 `bash` 或请求 sandbox 升级。最大 delegation depth 为 4，每个 continuable 池最多 8 个驻留 child。
+- 授权以精确的 live 调用方 session 与持久化 lineage 为准，不信任模型提供的身份：
+
+| 操作 | 允许 | 拒绝 |
+|---|---|---|
+| `send_message` parent→child | 调用方目录中的直接 continuable child（不驻留时冷恢复，并核对 child header 的 parent 与 mode） | 他人的 child、孙代、兄弟、目录外 id、one-shot child |
+| `send_message` child→parent | 驻留 continuable child 写给直接 parent | one-shot child、已结算 child、写给祖父或其他 agent |
+| `interrupt_agent` | 调用方任一 live 后代 | 自身、祖先、兄弟及其子树 |
+| `list_agents` | 调用方自己的目录及其后代目录 | 其他 session 的目录 |
+
+- 消息以 `agent-message`、结算以 `subagent-settled` source kind 写入，只表示来源，不授予权限；接收方仍按自己的策略执行工具。
+- delegated agent 只能访问自己的 job；后台 one-shot child 的 job 属于创建它的 parent。child 被释放时，服务以 `job.Service.Release` 取消并等待它拥有的 job，不留下无人读取的后台工作。
+- 列表只返回 session id、标签、模式、深度、运行状态和不可读诊断，不返回账户、prompt 或 child 输出。
+- plugin shutdown 先停止发布新工作和结算 watcher，再从最深处起中断并关闭 child、等待 worker 退出、释放 writer lock 与 job。goroutine、listener、临时目录和 registry contribution 必须由创建它的 Scope 回收。
 
 ## 依赖与供应链
 

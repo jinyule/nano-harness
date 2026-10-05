@@ -5,72 +5,83 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
-	"github.com/jinyule/nano-harness/internal/app/agent"
 	appSubagent "github.com/jinyule/nano-harness/internal/app/subagent"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
-type allowApprover struct{}
+type allowAll struct{}
 
-func (allowApprover) Decide(context.Context, appTool.ApprovalRequest) (session.ApprovalOutcome, error) {
+func (allowAll) Decide(context.Context, appTool.ApprovalRequest) (session.ApprovalOutcome, error) {
 	return session.ApprovalAllowedOnce, nil
 }
 
+type nullJournal struct{}
+
+func (nullJournal) Append(_ context.Context, record session.Record) (session.Event, error) {
+	return session.Event{Sequence: 1, Record: record}, nil
+}
+
+// fakeService records the last call and returns configured values.
 type fakeService struct {
-	spawnRequest appSubagent.SpawnRequest
-	spawnInfo    appSubagent.Info
-	spawnErr     error
-	waitID       string
-	waitInfo     appSubagent.Info
-	waitErr      error
-	followCaller string
-	followID     string
-	followTask   string
-	followInfo   appSubagent.Info
-	followErr    error
-	interruptIDs [2]string
-	interruptErr error
-	reportID     string
-	reportInfo   appSubagent.Info
-	reportErr    error
-	listParent   string
-	listInfos    []appSubagent.Info
-	listErr      error
+	mu        sync.Mutex
+	calls     []string
+	requests  []appSubagent.StartRequest
+	report    appSubagent.Report
+	entries   []appSubagent.Entry
+	err       error
+	arguments []string
 }
 
-func (service *fakeService) Spawn(_ context.Context, request appSubagent.SpawnRequest) (appSubagent.Info, error) {
-	service.spawnRequest = request
-	return service.spawnInfo, service.spawnErr
-}
-func (service *fakeService) Wait(_ context.Context, id string) (appSubagent.Info, error) {
-	service.waitID = id
-	return service.waitInfo, service.waitErr
-}
-func (service *fakeService) Followup(_ context.Context, caller, id, task string) (appSubagent.Info, error) {
-	service.followCaller, service.followID, service.followTask = caller, id, task
-	return service.followInfo, service.followErr
-}
-func (service *fakeService) Interrupt(caller, id string) error {
-	service.interruptIDs = [2]string{caller, id}
-	return service.interruptErr
-}
-func (service *fakeService) Report(id string) (appSubagent.Info, error) {
-	service.reportID = id
-	return service.reportInfo, service.reportErr
-}
-func (service *fakeService) List(parent string) ([]appSubagent.Info, error) {
-	service.listParent = parent
-	return service.listInfos, service.listErr
+func (service *fakeService) record(call string, request appSubagent.StartRequest) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.calls = append(service.calls, call)
+	service.requests = append(service.requests, request)
 }
 
-// startTools registers the provider on a live runtime and returns a call helper.
-func startTools(t *testing.T, service Service) func(name, arguments string) session.ToolResult {
+func (service *fakeService) StartContinuable(_ context.Context, request appSubagent.StartRequest) (string, error) {
+	service.record("continuable", request)
+	return "child-1", service.err
+}
+
+func (service *fakeService) StartBackground(_ context.Context, request appSubagent.StartRequest) (string, error) {
+	service.record("background", request)
+	return "subagent-1", service.err
+}
+
+func (service *fakeService) Run(_ context.Context, request appSubagent.StartRequest) (appSubagent.Report, error) {
+	service.record("run", request)
+	return service.report, service.err
+}
+
+func (service *fakeService) SendMessage(_ context.Context, senderID, targetID, text string) error {
+	service.arguments = []string{"send", senderID, targetID, text}
+	return service.err
+}
+
+func (service *fakeService) Interrupt(callerID, targetID string) error {
+	service.arguments = []string{"interrupt", callerID, targetID}
+	return service.err
+}
+
+func (service *fakeService) ListChildren(_ context.Context, parentID string) ([]appSubagent.Entry, error) {
+	service.arguments = []string{"children", parentID}
+	return service.entries, service.err
+}
+
+func (service *fakeService) ListDescendants(_ context.Context, rootID string) ([]appSubagent.Entry, error) {
+	service.arguments = []string{"descendants", rootID}
+	return service.entries, service.err
+}
+
+func startProvider(t *testing.T, service Service) *appTool.Runtime {
 	t.Helper()
-	runtime, _ := appTool.New(allowApprover{})
+	runtime, _ := appTool.New(allowAll{})
 	runtimeScope, providerScope := &plugin.Scope{}, &plugin.Scope{}
 	if err := runtime.Start(context.Background(), runtimeScope); err != nil {
 		t.Fatal(err)
@@ -86,194 +97,178 @@ func startTools(t *testing.T, service Service) func(name, arguments string) sess
 		_ = providerScope.Close(context.Background())
 		_ = runtimeScope.Close(context.Background())
 	})
-	return func(name, arguments string) session.ToolResult {
-		return runtime.ExecuteBatch(context.Background(), appTool.BatchRequest{
-			SessionID: "parent", Turn: 1, Step: 1, Journal: nopJournal{},
-			Calls: []session.ToolCall{{ID: "call", Name: name, Arguments: json.RawMessage(arguments)}},
-		})[0]
-	}
+	return runtime
 }
 
-type nopJournal struct{}
-
-func (nopJournal) Append(context.Context, session.Record) (session.Event, error) {
-	return session.Event{}, nil
+func call(t *testing.T, runtime *appTool.Runtime, name string, arguments map[string]any) session.ToolResult {
+	t.Helper()
+	encoded, err := json.Marshal(arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtime.ExecuteBatch(context.Background(), appTool.BatchRequest{
+		SessionID: "root", Turn: 3, Step: 2, Journal: nullJournal{},
+		Calls: []session.ToolCall{{ID: "call", Name: name, Arguments: encoded}},
+	})[0]
 }
 
-func TestProvider_ValidatesRegistersAndCleansTools(t *testing.T) {
-	runtime, _ := appTool.New(allowApprover{})
-	service := &fakeService{}
-	if _, err := New(nil, service); err == nil {
-		t.Fatal("nil runtime accepted")
+func TestProvider_RegistersUpstreamDefinitionsForItsScope(t *testing.T) {
+	runtime, _ := appTool.New(allowAll{})
+	for _, test := range []struct {
+		runtime *appTool.Runtime
+		service Service
+	}{{service: &fakeService{}}, {runtime: runtime}} {
+		if _, err := New(test.runtime, test.service); !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("New(%+v) = %v", test, err)
+		}
 	}
-	if _, err := New(runtime, nil); err == nil {
-		t.Fatal("nil service accepted")
-	}
-	provider, err := New(runtime, service)
-	if err != nil || provider.ID() != "subagent-tools" {
-		t.Fatalf("provider = %+v, %v", provider, err)
+	provider, _ := New(runtime, &fakeService{})
+	if provider.ID() != "subagent-tools" {
+		t.Fatalf("ID = %q", provider.ID())
 	}
 	if err := provider.Start(context.Background(), &plugin.Scope{}); !errors.Is(err, appTool.ErrNotRunning) {
-		t.Fatalf("inactive runtime error = %v", err)
+		t.Fatalf("inactive runtime = %v", err)
 	}
 	runtimeScope := &plugin.Scope{}
 	if err := runtime.Start(context.Background(), runtimeScope); err != nil {
 		t.Fatal(err)
 	}
-	closed := &plugin.Scope{}
-	_ = closed.Close(context.Background())
-	if err := provider.Start(context.Background(), closed); !errors.Is(err, plugin.ErrScopeClosed) {
-		t.Fatalf("closed provider scope error = %v", err)
-	}
-	providerScope := &plugin.Scope{}
-	if err := provider.Start(context.Background(), providerScope); err != nil {
-		t.Fatal(err)
-	}
-	catalog, err := runtime.Catalog(nil)
-	definitions := catalog.Definitions
-	want := []string{"list_subagents", "spawn_subagent", "subagent_followup", "subagent_interrupt", "subagent_report"}
-	if err != nil || len(definitions) != len(want) {
-		t.Fatalf("definitions = %#v, %v", definitions, err)
-	}
-	for index := range want {
-		if definitions[index].Name != want[index] {
-			t.Fatalf("definitions = %#v", definitions)
-		}
-	}
-	if err := providerScope.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	catalog, _ = runtime.Catalog(nil)
-	if len(catalog.Definitions) != 0 {
-		t.Fatalf("tools retained: %#v", definitions)
-	}
-}
-
-func TestTools_PublishSchemasAndRejectInvalidArguments(t *testing.T) {
-	runtime, _ := appTool.New(allowApprover{})
+	t.Cleanup(func() { _ = runtimeScope.Close(context.Background()) })
 	scope := &plugin.Scope{}
-	if err := runtime.Start(context.Background(), scope); err != nil {
+	if err := provider.Start(context.Background(), scope); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = scope.Close(context.Background()) })
-	provider, _ := New(runtime, &fakeService{})
-	if err := provider.Start(context.Background(), &plugin.Scope{}); err != nil {
-		t.Fatal(err)
+	catalog, _ := runtime.Catalog(nil)
+	parameters := map[string]string{}
+	for _, definition := range catalog.Definitions {
+		parameters[definition.Name] = string(definition.Parameters)
 	}
-	catalog, _ := runtime.Catalog([]string{"spawn_subagent"})
-	want := `{"type":"object","properties":{"label":{"type":"string"},"task":{"type":"string"},"mode":{"type":"string","enum":["one-shot","continuable"]},"persona":{"type":"string"},"tools":{"type":"array","items":{"type":"string"}},"fork":{"type":"boolean"}},"required":["label","task","mode"]}`
-	if len(catalog.Definitions) != 1 || string(catalog.Definitions[0].Parameters) != want || len(catalog.Guidance) != 0 {
-		t.Fatalf("spawn schema = %#v", catalog)
+	if len(parameters) != 5 {
+		t.Fatalf("definitions = %#v", catalog.Definitions)
 	}
-	call := startTools(t, &fakeService{})
-	for name, arguments := range map[string]string{
-		"spawn_subagent":     `{"label":"x","task":"t","mode":"forever"}`,
-		"subagent_followup":  `{"session_id":"child"}`,
-		"subagent_interrupt": `{}`,
-		"subagent_report":    `{"session_id":1}`,
-		"list_subagents":     `{"extra":true}`,
+	for name, want := range map[string]string{
+		"subagent":        `{"type":"object","properties":{"description":{"type":"string","description":"` + descriptionText + `"},"prompt":{"type":"string","description":"` + spawnPromptText + `"},"run_in_background":{"type":"boolean","description":"` + spawnBackgroundText + `"}},"required":["description","prompt"]}`,
+		"subagent_fork":   `{"type":"object","properties":{"description":{"type":"string","description":"` + descriptionText + `"},"prompt":{"type":"string","description":"` + forkPromptText + `"},"run_in_background":{"type":"boolean","description":"` + forkBackgroundText + `"}},"required":["description","prompt"]}`,
+		"list_agents":     `{"type":"object","properties":{"scope":{"type":"string","description":"` + scopeText + `","enum":["children","descendants"]}}}`,
+		"interrupt_agent": `{"type":"object","properties":{"agent_id":{"type":"string","description":"The id of an agent created under you: your direct child or a deeper descendant."}},"required":["agent_id"]}`,
 	} {
-		if result := call(name, arguments); !result.IsError || !strings.Contains(result.Output, "invalid arguments") {
-			t.Errorf("%s accepted %s: %#v", name, arguments, result)
+		if parameters[name] != want {
+			t.Errorf("%s parameters = %s", name, parameters[name])
+		}
+	}
+	if len(catalog.Guidance) != 1 || catalog.Guidance[0] != spawnGuidance {
+		t.Fatalf("guidance = %q", catalog.Guidance)
+	}
+	if forkOnly, _ := runtime.Catalog([]string{"subagent_fork", "send_message"}); len(forkOnly.Guidance) != 0 {
+		t.Fatalf("guidance without subagent = %q", forkOnly.Guidance)
+	}
+	if err := scope.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if catalog, _ := runtime.Catalog(nil); len(catalog.Definitions) != 0 {
+		t.Fatal("subagent tools survived cleanup")
+	}
+}
+
+func TestDelegationTools_ChooseLifecycleByToolAndBackgroundFlag(t *testing.T) {
+	service := &fakeService{report: appSubagent.Report{Outcome: session.OutcomeCompleted, Text: "final answer"}}
+	runtime := startProvider(t, service)
+	for _, test := range []struct {
+		name      string
+		arguments map[string]any
+		call      string
+		fork      bool
+		want      string
+	}{
+		{"subagent", map[string]any{"description": "scan", "prompt": "do it"}, "continuable", false, "started subagent child-1"},
+		{"subagent", map[string]any{"description": "scan", "prompt": "do it", "run_in_background": true}, "continuable", false, "started subagent child-1"},
+		{"subagent", map[string]any{"description": "scan", "prompt": "do it", "run_in_background": false}, "run", false, "final answer"},
+		{"subagent_fork", map[string]any{"description": "review", "prompt": "check"}, "run", true, "final answer"},
+		{"subagent_fork", map[string]any{"description": "review", "prompt": "check", "run_in_background": false}, "run", true, "final answer"},
+		{"subagent_fork", map[string]any{"description": "review", "prompt": "check", "run_in_background": true}, "background", true, "started background subagent job subagent-1"},
+	} {
+		result := call(t, runtime, test.name, test.arguments)
+		last := len(service.calls) - 1
+		request := service.requests[last]
+		if result.IsError || result.Output != test.want || service.calls[last] != test.call || request.Fork != test.fork ||
+			request.ParentID != "root" || request.Turn != 3 || request.Step != 2 || request.Journal == nil ||
+			request.Description != test.arguments["description"] || request.Prompt != test.arguments["prompt"] {
+			t.Errorf("%s(%v) = %#v via %s %#v", test.name, test.arguments, result, service.calls[last], request)
+		}
+	}
+	// Independent delegations in one batch run together.
+	encoded, _ := json.Marshal(map[string]any{"description": "a", "prompt": "b"})
+	results := runtime.ExecuteBatch(context.Background(), appTool.BatchRequest{SessionID: "root", Turn: 1, Step: 1, Journal: nullJournal{}, Calls: []session.ToolCall{
+		{ID: "one", Name: "subagent", Arguments: encoded}, {ID: "two", Name: "subagent_fork", Arguments: encoded},
+	}})
+	if len(results) != 2 || results[0].CallID != "one" || results[1].CallID != "two" {
+		t.Fatalf("batch = %#v", results)
+	}
+}
+
+func TestDelegationTools_ReportFailuresAndUnfinishedRuns(t *testing.T) {
+	service := &fakeService{err: errors.New("subagent depth 5 exceeds maxDepth 4")}
+	runtime := startProvider(t, service)
+	for _, name := range []string{"subagent", "subagent_fork"} {
+		for _, background := range []bool{true, false} {
+			result := call(t, runtime, name, map[string]any{"description": "d", "prompt": "p", "run_in_background": background})
+			if !result.IsError || result.Output != "Error: subagent depth 5 exceeds maxDepth 4" {
+				t.Errorf("%s background=%t = %#v", name, background, result)
+			}
+		}
+	}
+	service.err = nil
+	for _, test := range []struct {
+		report appSubagent.Report
+		want   string
+	}{
+		{appSubagent.Report{Outcome: session.OutcomeCanceled, Text: "half"}, "Error: subagent run was cancelled\nPartial output before the run ended:\nhalf"},
+		{appSubagent.Report{Outcome: session.OutcomeInterrupted}, "Error: subagent run was cancelled"},
+		{appSubagent.Report{Outcome: session.OutcomeError}, "Error: subagent run failed"},
+		{appSubagent.Report{Outcome: session.OutcomeStepLimit, Text: "draft"}, "Error: subagent run ended abnormally (step_limit)\nPartial output before the run ended:\ndraft"},
+	} {
+		service.report = test.report
+		if result := call(t, runtime, "subagent_fork", map[string]any{"description": "d", "prompt": "p"}); !result.IsError || result.Output != test.want {
+			t.Errorf("%s = %#v", test.report.Outcome, result)
 		}
 	}
 }
 
-func TestSpawnTool_DelegatesWaitsAndPropagatesFailures(t *testing.T) {
+func TestControlTools_DelegateToTheService(t *testing.T) {
 	service := &fakeService{}
-	call := startTools(t, service)
-	service.spawnErr = errors.New("spawn")
-	arguments := `{"label":"worker","task":"task","mode":"continuable","persona":"focus","tools":["read"],"fork":true}`
-	if result := call("spawn_subagent", arguments); !result.IsError || !strings.Contains(result.Output, "spawn") {
-		t.Fatalf("spawn error = %#v", result)
+	runtime := startProvider(t, service)
+	if result := call(t, runtime, "send_message", map[string]any{"agent_id": "child-1", "message": "hello"}); result.Output != "message delivered to agent child-1" || strings.Join(service.arguments, ",") != "send,root,child-1,hello" {
+		t.Fatalf("send_message = %#v %q", result, service.arguments)
 	}
-	service.spawnErr = nil
-	service.spawnInfo = appSubagent.Info{SessionID: "child"}
-	service.waitErr = errors.New("wait failed")
-	if result := call("spawn_subagent", arguments); !result.IsError || !strings.Contains(result.Output, "wait failed") {
-		t.Fatalf("wait error = %#v", result)
+	if result := call(t, runtime, "interrupt_agent", map[string]any{"agent_id": "grand"}); result.Output != "interrupt requested for agent grand" || strings.Join(service.arguments, ",") != "interrupt,root,grand" {
+		t.Fatalf("interrupt_agent = %#v %q", result, service.arguments)
 	}
-	service.waitErr = nil
-	service.waitInfo = sampleInfo("child", "report")
-	result := call("spawn_subagent", arguments)
-	if result.IsError || !strings.Contains(result.Output, "session=child") || service.waitID != "child" {
-		t.Fatalf("result = %#v, request = %+v, wait=%q", result, service.spawnRequest, service.waitID)
+	if result := call(t, runtime, "list_agents", map[string]any{}); result.Output != "(no subagents)" || service.arguments[0] != "children" {
+		t.Fatalf("empty list_agents = %#v", result)
 	}
-	request := service.spawnRequest
-	if request.ParentSessionID != "parent" || !request.Fork || request.Tools[0] != "read" || request.Persona != "focus" || request.Mode != "continuable" {
-		t.Fatalf("spawn request = %+v", request)
+	service.entries = []appSubagent.Entry{
+		{ID: "a", Parent: "root", Label: "worker", Mode: session.SubagentContinuable, Depth: 1, Running: true},
+		{ID: "b", Parent: "root", Label: "once", Mode: session.SubagentOneShot, Depth: 1},
+		{ID: "c", Parent: "a", Label: "helper", Mode: session.SubagentContinuable, Depth: 2},
+		{ID: "d", Parent: "b", Mode: session.SubagentOneShot, Depth: 2, Unavailable: true},
 	}
-	call("spawn_subagent", `{"label":"bare","task":"task","mode":"one-shot"}`)
-	if bare := service.spawnRequest; bare.Fork || bare.Persona != "" || bare.Tools != nil {
-		t.Fatalf("defaults = %+v", bare)
+	if result := call(t, runtime, "list_agents", map[string]any{"scope": "children"}); result.Output != "a [running] — worker\nc [inactive] — helper\nd [diagnostic: unavailable]" {
+		t.Fatalf("children = %#v", result)
 	}
-}
-
-func TestFollowupInterruptReportAndListTools(t *testing.T) {
-	service := &fakeService{}
-	call := startTools(t, service)
-
-	service.followErr = errors.New("follow")
-	if result := call("subagent_followup", `{"session_id":"child","task":"next"}`); !result.IsError || !strings.Contains(result.Output, "follow") {
-		t.Fatalf("followup error = %#v", result)
+	if result := call(t, runtime, "list_agents", map[string]any{"scope": "descendants"}); result.Output != "a [running] parent=root depth=1 — worker\nc [inactive] parent=a depth=2 — helper\nd [diagnostic: unavailable] parent=b depth=2" || service.arguments[0] != "descendants" {
+		t.Fatalf("descendants = %#v", result)
 	}
-	service.followErr = nil
-	service.followInfo = sampleInfo("child", "next report")
-	result := call("subagent_followup", `{"session_id":"child","task":"next"}`)
-	if result.IsError || !strings.Contains(result.Output, "next report") || service.followCaller != "parent" || service.followID != "child" || service.followTask != "next" {
-		t.Fatalf("followup result = %#v service=%+v", result, service)
+	if result := call(t, runtime, "list_agents", map[string]any{"scope": "everyone"}); !result.IsError || !strings.Contains(result.Output, "invalid arguments") {
+		t.Fatalf("invalid scope = %#v", result)
 	}
-
-	service.interruptErr = errors.New("interrupt")
-	if result := call("subagent_interrupt", `{"session_id":"child"}`); !result.IsError || !strings.Contains(result.Output, "interrupt") {
-		t.Fatalf("interrupt error = %#v", result)
+	service.err = errors.New(`subagent "x" belongs to another parent session`)
+	for name, arguments := range map[string]map[string]any{
+		"send_message":    {"agent_id": "x", "message": "m"},
+		"interrupt_agent": {"agent_id": "x"},
+		"list_agents":     {},
+	} {
+		if result := call(t, runtime, name, arguments); !result.IsError || result.Output != `Error: subagent "x" belongs to another parent session` {
+			t.Errorf("%s = %#v", name, result)
+		}
 	}
-	service.interruptErr = nil
-	if result := call("subagent_interrupt", `{"session_id":"child"}`); result.IsError || result.Output != "subagent interrupted" || service.interruptIDs != [2]string{"parent", "child"} {
-		t.Fatalf("interrupt result = %#v ids=%#v", result, service.interruptIDs)
-	}
-
-	service.reportErr = errors.New("report")
-	if result := call("subagent_report", `{"session_id":"child"}`); !result.IsError || !strings.Contains(result.Output, "report") {
-		t.Fatalf("report error = %#v", result)
-	}
-	service.reportErr = nil
-	service.reportInfo = sampleInfo("child", "current")
-	if result := call("subagent_report", `{"session_id":"child"}`); result.IsError || !strings.Contains(result.Output, "current") || service.reportID != "child" {
-		t.Fatalf("report result = %#v id=%q", result, service.reportID)
-	}
-
-	service.listErr = errors.New("list")
-	if result := call("list_subagents", `{}`); !result.IsError || !strings.Contains(result.Output, "list") {
-		t.Fatalf("list error = %#v", result)
-	}
-	service.listErr = nil
-	if result := call("list_subagents", `{}`); result.IsError || result.Output != "no subagents" || service.listParent != "parent" {
-		t.Fatalf("empty list = %#v parent=%q", result, service.listParent)
-	}
-	service.listInfos = []appSubagent.Info{sampleInfo("one", "first"), sampleInfo("two", "second")}
-	if result := call("list_subagents", `{}`); result.IsError || !strings.Contains(result.Output, "session=one") || !strings.Contains(result.Output, "\nsession=two") {
-		t.Fatalf("list result = %#v", result)
-	}
-}
-
-func TestFormatInfo_DistinguishesIdleBusyAndPending(t *testing.T) {
-	idle := sampleInfo("idle", "done")
-	if output := formatInfo(idle); !strings.Contains(output, "status=idle") || !strings.Contains(output, "outcome=completed") {
-		t.Fatalf("idle = %q", output)
-	}
-	busy := idle
-	busy.Busy = true
-	if output := formatInfo(busy); !strings.Contains(output, "status=running") {
-		t.Fatalf("busy = %q", output)
-	}
-	pending := idle
-	pending.Pending = 1
-	if output := formatInfo(pending); !strings.Contains(output, "status=running") {
-		t.Fatalf("pending = %q", output)
-	}
-}
-
-func sampleInfo(id, text string) appSubagent.Info {
-	return appSubagent.Info{SessionID: id, ParentID: "parent", Label: "worker", Mode: "continuable", Depth: 1, Last: agent.TurnResult{Outcome: session.OutcomeCompleted, Text: text}}
 }

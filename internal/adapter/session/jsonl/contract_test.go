@@ -54,7 +54,7 @@ func TestSessionV2_FrozenContract(t *testing.T) {
 
 	// The writer uses independently constructed records, never decoded fixture values.
 	output := temporaryFile(t)
-	if _, err := writeHeader(output, coresession.Header{SessionID: "fixture", CompositionID: testCompositionID, CreatedAtUnixMS: 1, Cwd: "/synthetic/workspace"}); err != nil {
+	if _, err := writeHeader(output, coresession.Header{SessionID: "fixture", CompositionID: testCompositionID, CreatedAtUnixMS: 1, Cwd: "/synthetic/workspace"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	writer := &Log{file: output, header: header, active: true, size: int64(bytes.IndexByte(fixture, '\n') + 1)}

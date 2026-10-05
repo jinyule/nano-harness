@@ -76,12 +76,16 @@ type Config struct {
 }
 
 // OpenOptions chooses create or resume and supplies immutable create metadata.
+// Seed is a closed event prefix, numbered from 1, that a new session starts
+// with; it is validated as a whole and written with the header in one sync,
+// so a crash never leaves a partial copy. Seed requires Create.
 type OpenOptions struct {
 	SessionID       string
 	Create          bool
 	Cwd             string
 	ParentSessionID string
 	DelegationDepth int
+	Seed            []coresession.Event
 }
 
 // Manager owns every live log and its writer lock.
@@ -148,8 +152,11 @@ func (manager *Manager) Open(ctx context.Context, options OpenOptions) (*Log, er
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if !validSessionID(options.SessionID) || strings.TrimSpace(options.Cwd) == "" || options.DelegationDepth < 0 || options.DelegationDepth > 16 || options.ParentSessionID != "" && !validSessionID(options.ParentSessionID) {
+	if !validSessionID(options.SessionID) || strings.TrimSpace(options.Cwd) == "" || options.DelegationDepth < 0 || options.DelegationDepth > 16 || options.ParentSessionID != "" && !validSessionID(options.ParentSessionID) || len(options.Seed) > 0 && !options.Create {
 		return nil, fmt.Errorf("%w: invalid session metadata", ErrInvalidConfig)
+	}
+	if err := validateSeed(options.Seed); err != nil {
+		return nil, err
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
@@ -169,7 +176,7 @@ func (manager *Manager) Open(ctx context.Context, options OpenOptions) (*Log, er
 		CreatedAtUnixMS: time.Now().UnixMilli(), Cwd: options.Cwd,
 		ParentSessionID: options.ParentSessionID, DelegationDepth: options.DelegationDepth,
 	}
-	file, loadedHeader, events, size, err := openSession(path, header, options.Create)
+	file, loadedHeader, events, size, err := openSession(path, header, options.Create, options.Seed)
 	if err != nil {
 		_ = removeFile(lockPath)
 		return nil, err
@@ -188,7 +195,7 @@ func (manager *Manager) Open(ctx context.Context, options OpenOptions) (*Log, er
 func (manager *Manager) OpenSession(ctx context.Context, options transcript.OpenOptions) (transcript.Log, error) {
 	return manager.Open(ctx, OpenOptions{
 		SessionID: options.SessionID, Create: options.Create, Cwd: options.Cwd,
-		ParentSessionID: options.ParentSessionID, DelegationDepth: options.DelegationDepth,
+		ParentSessionID: options.ParentSessionID, DelegationDepth: options.DelegationDepth, Seed: options.Seed,
 	})
 }
 
@@ -459,7 +466,19 @@ func acquireLock(path string) error {
 	return file.Close()
 }
 
-func openSession(path string, wanted coresession.Header, create bool) (durableFile, coresession.Header, []coresession.Event, int64, error) {
+// validateSeed accepts only a contiguous, schema-valid, closed prefix, so the
+// first event the new session appends continues a consistent log.
+func validateSeed(seed []coresession.Event) error {
+	for index, event := range seed {
+		if want := uint64(index) + 1; event.Sequence != want || event.Record.Validate() != nil {
+			return fmt.Errorf("%w: invalid seed event %d", ErrCorruptSession, index+1)
+		}
+	}
+	_, err := validateOrder(seed, true)
+	return err
+}
+
+func openSession(path string, wanted coresession.Header, create bool, seed []coresession.Event) (durableFile, coresession.Header, []coresession.Event, int64, error) {
 	flags := os.O_RDWR | os.O_APPEND
 	if create {
 		flags |= os.O_CREATE | os.O_EXCL
@@ -472,13 +491,13 @@ func openSession(path string, wanted coresession.Header, create bool) (durableFi
 		return nil, coresession.Header{}, nil, 0, fmt.Errorf("open session: %w", err)
 	}
 	if create {
-		size, err := writeHeader(file, wanted)
+		size, err := writeHeader(file, wanted, seed)
 		if err != nil {
 			_ = file.Close()
 			_ = removeFile(path)
 			return nil, coresession.Header{}, nil, 0, err
 		}
-		return file, wanted, nil, size, nil
+		return file, wanted, cloneEvents(seed), size, nil
 	}
 	header, events, size, err := readSession(file, wanted.CompositionID)
 	if err != nil {
@@ -502,12 +521,27 @@ type fileHeader struct {
 	Header  coresession.Header `json:"header"`
 }
 
-func writeHeader(file durableFile, header coresession.Header) (int64, error) {
+// writeHeader writes the header line and any seed events with one write and
+// one sync.
+func writeHeader(file durableFile, header coresession.Header, seed []coresession.Event) (int64, error) {
 	encoded, err := marshalJSON(fileHeader{Type: "session", Version: coresession.FormatVersion, Header: header})
 	if err != nil {
 		return 0, fmt.Errorf("encode session header: %w", err)
 	}
 	encoded = append(encoded, '\n')
+	for _, event := range seed {
+		line, err := marshalJSON(event)
+		if err != nil {
+			return 0, fmt.Errorf("encode session seed: %w", err)
+		}
+		if len(line)+1 > maxRecordBytes {
+			return 0, ErrSessionSize
+		}
+		encoded = append(append(encoded, line...), '\n')
+	}
+	if len(encoded) > maxSessionBytes {
+		return 0, ErrSessionSize
+	}
 	if written, err := file.Write(encoded); err != nil || written != len(encoded) {
 		if err == nil {
 			err = io.ErrShortWrite

@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	"github.com/jinyule/nano-harness/internal/app/plan"
+	appSubagent "github.com/jinyule/nano-harness/internal/app/subagent"
 	"github.com/jinyule/nano-harness/internal/core/session"
 	"github.com/jinyule/nano-harness/internal/core/skill"
 )
@@ -36,10 +37,14 @@ func (model *model) applyEvent(event session.Event, live bool) {
 		if attachments > 0 {
 			text += fmt.Sprintf(" [images=%d]", attachments)
 		}
-		// Completion notices are harness input, not something the user typed.
-		if record.Message.Source.Kind == appJob.NoticeSource {
+		// Completion notices and agent messages are harness input, not
+		// something the user typed.
+		switch record.Message.Source.Kind {
+		case appJob.NoticeSource:
 			model.addLine("job> " + text)
-		} else {
+		case appSubagent.SourceAgentMessage, appSubagent.SourceSettled:
+			model.addLine("agent> " + text)
+		default:
 			model.addLine("you> " + text)
 		}
 	case session.RecordRequestHeader:
@@ -95,7 +100,7 @@ func (model *model) applyEvent(event session.Event, live bool) {
 		model.layout()
 	case session.RecordStepStart, session.RecordApprovalDecided,
 		session.RecordApprovalPolicy, session.RecordRetryStarted, session.RecordCompactionSummary,
-		session.RecordSubagentDescriptor, session.RecordStepEnd:
+		session.RecordSubagentDescriptor, session.RecordSubagentCatalog, session.RecordStepEnd:
 		// These facts affect replay or lifecycle state but have no standalone TUI line.
 	}
 }

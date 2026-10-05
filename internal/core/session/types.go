@@ -64,6 +64,8 @@ const (
 	RecordCompactionEnd RecordType = "compaction/end"
 	// RecordSubagentDescriptor commits cold-resume metadata for a delegated agent.
 	RecordSubagentDescriptor RecordType = "subagent/descriptor"
+	// RecordSubagentCatalog commits one child a parent created, from inside the creating tool step.
+	RecordSubagentCatalog RecordType = "subagent/catalog"
 	// RecordTodoWrite commits the complete todo list written by one pending tool call.
 	RecordTodoWrite RecordType = "todo/write"
 	// RecordPlanMode commits the plan mode in force from this point on.
@@ -280,14 +282,41 @@ type CompactionData struct {
 	Error              string         `json:"error,omitempty"`
 }
 
-// SubagentDescriptor is the durable identity needed for cold resume.
+// Subagent provider and mode vocabulary shared by descriptors and catalog entries.
+const (
+	// SubagentDescriptorVersion is the only descriptor version this build reads or writes.
+	SubagentDescriptorVersion = 2
+	// SubagentSpawn identifies a child that starts with a fresh conversation.
+	SubagentSpawn = "spawn"
+	// SubagentFork identifies a child seeded with its parent's completed turns.
+	SubagentFork = "fork"
+	// SubagentOneShot identifies a child that runs one task and is released.
+	SubagentOneShot = "one-shot"
+	// SubagentContinuable identifies a child that accepts later messages.
+	SubagentContinuable = "continuable"
+)
+
+// SubagentDescriptor is the durable identity needed for cold resume. It is
+// the first record the child writes itself: Inherited counts the events
+// copied from the parent before it (always zero for spawn), so the
+// descriptor sits at sequence Inherited+1 and every later event is the
+// child's own.
 type SubagentDescriptor struct {
-	Version  int      `json:"version"`
-	Provider string   `json:"provider"`
-	Mode     string   `json:"mode"`
-	Label    string   `json:"label"`
-	Persona  string   `json:"persona,omitempty"`
-	Tools    []string `json:"tools,omitempty"`
+	Version   int      `json:"version"`
+	Provider  string   `json:"provider"`
+	Mode      string   `json:"mode"`
+	Label     string   `json:"label"`
+	Persona   string   `json:"persona,omitempty"`
+	Tools     []string `json:"tools,omitempty"`
+	Inherited uint64   `json:"inherited,omitempty"`
+}
+
+// SubagentCatalog is a parent's durable record of one child it created.
+// Listing reads these entries instead of opening child logs.
+type SubagentCatalog struct {
+	SessionID string `json:"session_id"`
+	Mode      string `json:"mode"`
+	Label     string `json:"label"`
 }
 
 // Record is an unsequenced fact. A store assigns Sequence at commit.
@@ -305,6 +334,7 @@ type Record struct {
 	Approval   *ApprovalData       `json:"approval,omitempty"`
 	Compaction *CompactionData     `json:"compaction,omitempty"`
 	Subagent   *SubagentDescriptor `json:"subagent,omitempty"`
+	Catalog    *SubagentCatalog    `json:"catalog,omitempty"`
 	Todo       *TodoWrite          `json:"todo,omitempty"`
 	Plan       *PlanMode           `json:"plan,omitempty"`
 	Outcome    TurnOutcome         `json:"outcome,omitempty"`

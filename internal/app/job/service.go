@@ -350,6 +350,43 @@ func (service *Service) Kill(owner, id, reason string) (View, bool, error) {
 	return current.view(), true, nil
 }
 
+// Release ends an owner that is going away: it cancels the owner's live
+// jobs, waits until each has settled, and drops every record the owner had.
+// These settlements send no notice because the owner has no reader left.
+// The subagent service calls it after closing a child agent. A stopped
+// service has already cancelled and dropped every job, so Release returns
+// nil; if ctx ends first, Release returns its error and the remaining jobs
+// settle and stay listed until the service stops.
+func (service *Service) Release(ctx context.Context, owner string) error {
+	service.mu.Lock()
+	if !service.active {
+		service.mu.Unlock()
+		return nil
+	}
+	var pending []chan struct{}
+	for _, current := range service.records {
+		if current.owner == owner && !current.status.terminal() {
+			current.status, current.cause = StatusStopping, causeTeardown
+			current.cancel()
+			pending = append(pending, current.done)
+		}
+	}
+	service.mu.Unlock()
+	for _, done := range pending {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	service.mu.Lock()
+	service.records = slices.DeleteFunc(service.records, func(candidate *record) bool {
+		return candidate.owner == owner && candidate.status.terminal()
+	})
+	service.mu.Unlock()
+	return nil
+}
+
 // Remove drops a settled job that its caller collected through its own
 // Wait and never handed out, such as a foreground shell call.
 func (service *Service) Remove(owner, id string) error {

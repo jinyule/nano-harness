@@ -128,7 +128,7 @@ func (registry *Registry) Create(ctx context.Context, request CreateRequest) (*A
 	if request.Mode == "" {
 		request.Mode = "continuable"
 	}
-	if request.Mode != "one-shot" && request.Mode != "continuable" || request.Depth < 0 || request.Depth > 16 || request.ParentID == "" && request.Depth != 0 || request.ParentID != "" && request.Depth == 0 {
+	if request.Mode != "one-shot" && request.Mode != "continuable" || request.Depth < 0 || request.Depth > 16 || request.ParentID == "" && (request.Depth != 0 || request.Provider != "" || len(request.Seed) > 0) || request.ParentID != "" && request.Depth == 0 {
 		return nil, ErrInvalidConfig
 	}
 	registry.mu.Lock()
@@ -143,7 +143,7 @@ func (registry *Registry) Create(ctx context.Context, request CreateRequest) (*A
 	registry.mu.Unlock()
 	log, err := registry.repository.OpenSession(ctx, transcript.OpenOptions{
 		SessionID: request.SessionID, Create: request.Create, Cwd: registry.workspace,
-		ParentSessionID: request.ParentID, DelegationDepth: request.Depth,
+		ParentSessionID: request.ParentID, DelegationDepth: request.Depth, Seed: request.Seed,
 	})
 	if err != nil {
 		return nil, err
@@ -156,7 +156,7 @@ func (registry *Registry) Create(ctx context.Context, request CreateRequest) (*A
 	}
 	if request.Create {
 		if request.ParentID != "" {
-			descriptor := &session.SubagentDescriptor{Version: 1, Provider: "in-process", Mode: request.Mode, Label: request.Label, Persona: request.Persona, Tools: slices.Clone(request.Tools)}
+			descriptor := &session.SubagentDescriptor{Version: session.SubagentDescriptorVersion, Provider: request.Provider, Mode: request.Mode, Label: request.Label, Persona: request.Persona, Tools: slices.Clone(request.Tools), Inherited: uint64(len(request.Seed))}
 			if _, err := ownedJournal.Append(ctx, session.Record{Type: session.RecordSubagentDescriptor, Subagent: descriptor}); err != nil {
 				_ = ownedJournal.Close(context.WithoutCancel(ctx))
 				return nil, err

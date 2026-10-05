@@ -134,7 +134,7 @@ Submit user message
 - 没有输出提交的 retryable provider 失败按热策略指数退避；一旦流内容已提交就不自动重试，避免重复事实。
 - 主动 compaction 在估算上下文超过阈值时运行；context-window 错误触发强制 compaction 后重试新 step。raw log 不删除，surface 用持久化 summary 替换旧 prefix。
 - `Followup` 排队新的 turn；`Steer` 只在活动 turn 的工具 step 边界注入；`Interrupt` 只取消活动 turn，保留已排队 followup；`WhenIdle` 等待队列、活动 turn 和已唤醒的通知 turn 都结算。
-- `Notify` 投递模型可见通知（目前是后台任务完成通知）。agent 忙时，通知在 turn 开始后、工具 step 结束后以及无工具调用的回答之后作为 `user/message` 追加；最后一种情况下 turn 继续一个 step 回应它，已到 step 上限时留待下一 turn。agent 空闲，或 turn 结束后仍有通知且没有排队的 turn 时，worker 以通知开启新 turn；被取消的 turn 留下的通知等待下一个 turn。待投递通知只在内存中，规则见 [ADR-0009](decisions/0009-background-jobs.md)。
+- `Notify` 投递模型可见通知：后台任务完成通知、agent 之间的 `send_message` 消息和子代理结算通知。agent 忙时，通知在 turn 开始后、工具 step 结束后以及无工具调用的回答之后作为 `user/message` 追加；最后一种情况下 turn 继续一个 step 回应它，已到 step 上限时留待下一 turn。agent 空闲，或 turn 结束后仍有通知且没有排队的 turn 时，worker 以通知开启新 turn；被取消的 turn 留下的通知等待下一个 turn。待投递通知只在内存中，规则见 [ADR-0009](decisions/0009-background-jobs.md)。
 - 调用取消、step limit、错误和恢复中断分别记录稳定 outcome。异常边界会尝试用不继承上游取消的 context 关闭 step/turn。
 - Registry 拥有每个动态 agent 的 Scope、worker 和 journal，关闭时先拒绝新 agent，再 interrupt 并等待所有 agent 回收。
 
@@ -161,7 +161,7 @@ Submit user message
 | `internal/adapter/tool/search` | `search-tools` | `glob`、`grep` |
 | `internal/adapter/tool/shell` | `shell-tools` | `bash`（含后台运行与超时转后台） |
 | `internal/adapter/tool/job` | `job-tools` | `job_output`、`job_list`、`job_kill` |
-| `internal/adapter/tool/subagent` | `subagent-tools` | 五个 subagent 工具 |
+| `internal/adapter/tool/subagent` | `subagent-tools` | `subagent`、`subagent_fork`、`send_message`、`interrupt_agent`、`list_agents` |
 | `internal/adapter/tool/todo` | `todo-tools` | `todo_write` |
 | `internal/adapter/tool/web` | `web-tools` | `web_search`、`web_fetch` |
 | `internal/adapter/tool/question` | `question-tools` | 阻塞式 `ask_user_question` |
@@ -174,9 +174,9 @@ Submit user message
 
 `search-tools` 与 `shell-tools` 共用 `cmd` 构造的同一个 platform process runner。search provider 在构造时从 PATH 解析 `rg`，找不到时组装失败；`Start` 运行 `rg --version`，低于 15.0.0 时启动失败，不注册降级工具。`glob` 与 `grep` 按上游参数调用 ripgrep，并解析它的路径列表或 `--json` 输出；进程边界见[安全工程规则](security.md#approvalshell-与进程)，版本前提见[开发规范](development.md#ripgrep)。
 
-`read`、`glob`、`grep`、`web_search`、`web_fetch`、`skill` 可并行；`write`、`edit`、`bash` 和 `job_*` 是 exclusive；`write`、`edit`、`bash` 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。`bash` 的 `sandbox_permissions: danger-full-access` 是唯一离开 workspace sandbox 的方式，规则见[安全工程规则](security.md#approvalshell-与进程)。
+`read`、`glob`、`grep`、`web_search`、`web_fetch`、`skill`、`subagent`、`subagent_fork` 可并行；`write`、`edit`、`bash` 和 `job_*` 是 exclusive；`write`、`edit`、`bash` 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。`bash` 的 `sandbox_permissions: danger-full-access` 是唯一离开 workspace sandbox 的方式，规则见[安全工程规则](security.md#approvalshell-与进程)。
 
-subagent 工具为 `spawn_subagent`、`subagent_followup`、`subagent_interrupt`、`subagent_report` 和 `list_subagents`。它们调用进程内 `app/subagent`，不启动 Codex、Claude 或另一个 harness 进程。
+subagent 工具的名称、描述和参数 schema 与参考 Base 组合逐字节一致，调用进程内 `app/subagent`，不启动 Codex、Claude 或另一个 harness 进程；`subagent` 以 guidance order 2800 贡献上游 `tool:subagent` 段落。行为见 [Subagent](#subagent)。
 
 `todo_write` 的模型可见定义同样与上游 Base 组合一致。每次调用提交完整列表并替换旧列表，`content` 去空白后须非空且唯一，最多 256 项、每项 2048 字节，多个任务可同时为 `in_progress`。成功时先提交 `todo/write`，再返回 `Updated todo list: <pending> pending, <inProgress> in progress, <completed> completed.`。它是 exclusive 工具，不需要 approval；列表属于调用方 session，root 与每个 subagent 各自维护。记录格式和版本策略见 [ADR-0010](decisions/0010-todo-write-session-record.md)。
 
@@ -225,13 +225,24 @@ producer Launch(kind, label, owner, Run)
 
 ## Subagent
 
-一个 child 是 Registry 中的完整 agent、独立 JSONL session 和独立 Scope。创建时持久化 parent/depth 及 versioned descriptor；模式为 `one-shot` 或 `continuable`，最大 delegation depth 为 4。
+一个 child 是 Registry 中的完整 agent、独立 JSONL session 和独立 Scope。`internal/app/subagent.Service`（插件 `subagents`）拥有全部 child 句柄，模型可见契约、持久化与冷恢复见 [ADR-0013](decisions/0013-background-continuable-subagents.md)：
 
-- spawn 可只传任务，也可显式 fork parent 当前 surface；fork 是 bounded text snapshot，不共享可变 transcript。
-- child 可选择 persona 与 tool allowlist。空 allowlist 表示当前已注册工具集合。
-- delegated session 在持久化策略层固定为 `never`，因此需要 approval 的工具无法执行，`bash` 的 sandbox 升级还在工具执行点再次拒绝。
-- followup 仅允许 parent 对自己的 continuable child 发起；interrupt 取消 child 当前 turn；report/list 返回无凭据的状态与最近结果。
-- service cleanup 停止 monitor、等待退出并关闭所有 child Scope；descriptor 支持 cold resume 时恢复 mode、persona 与 tool allowlist。
+```text
+subagent (默认后台)        → StartContinuable → 立即返回 id → child 驻留 → 空闲且无 continuable 子代理 → 结算：关闭 agent，通知 parent
+subagent (run_in_background: false)
+subagent_fork (默认前台)  → Run → 等待唯一 turn → 返回最终回答 → 释放 child
+subagent_fork (后台)       → StartBackground → kind subagent 的 job（owner 为 parent）
+send_message               → parent→直接 continuable child（不驻留则冷恢复）| 驻留 child→直接 parent
+interrupt_agent            → 取消任一 live 后代当前 turn，不等待
+list_agents                → parent 自己的 subagent/catalog；descendants 深度优先遍历
+```
+
+- spawn child 从空会话开始；fork child 以 parent 最后一个 `turn/end` 为止的事件为种子（不含进行中的 turn），provider/model 由同一 route 决定。child 创建时持久化 parent/depth、descriptor v2 与 `never` 策略；parent 在创建它的工具 step 内写 `subagent/catalog`。
+- delegated session 在持久化策略层固定为 `never`，需要 approval 的工具无法执行，`bash` 的 sandbox 升级还在工具执行点再次拒绝。
+- 消息只跨越直接父子边，经 `Agent.Notify` 投递：接收方忙时在下一个 step 边界追加，空闲时开启新 turn。结算通知只在 child 自然结算时发送；服务关闭和 one-shot parent 回收是拆除，不发通知。
+- 每个 continuable 池最多 8 个驻留 child，one-shot 不占池；绝对 delegation depth 上限为 4。
+- 释放 child 时先中断它，深度优先释放其 live 子代理，关闭 agent 与 transcript，再以 `job.Service.Release` 结束它拥有的 job。服务 cleanup 拒绝新操作、停止结算 watcher，再从最深处起释放全部 child。
+- 驻留状态只在内存中；进程重启后，恢复的 root 从目录列出 `inactive` child，并可用 `send_message` 冷恢复它们。
 
 ## 用户提问与规划模式
 
@@ -270,7 +281,7 @@ assistant/chunk, assistant/message, tool/call,
 approval/asked, approval/decided, approval/policy,
 tool/result, llm/retry, llm/retry-started,
 compaction/start, compaction/summary, compaction/end,
-subagent/descriptor, todo/write, plan/mode, step/end, turn/end
+subagent/descriptor, subagent/catalog, todo/write, plan/mode, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
@@ -281,7 +292,9 @@ subagent/descriptor, todo/write, plan/mode, step/end, turn/end
 - resume 会补写未决 approval 的 cancelled、未决 call 的 interrupted error、未结束 compaction/step/turn 的结束事实；不会截断 torn JSON、猜测未知格式或自动接受旧版本。
 - `session.Surface` 从 raw events 折叠消息、tool call/result 与 compaction replacements。TUI subscriber 只是可丢更新提示；磁盘 replay 仍是恢复来源。
 - `todo/write` 必须位于活动 step，引用尚未得到 result 的 call，且每个 call 最多一条。它不进入 surface；模型只从自己的 tool call 参数和 tool result 看到列表。`session.StandingTodos` 把最新一条之后没有更晚 `turn/start` 的 `todo/write` 投影为当前计划。
-- 后台任务完成通知是 source kind 为 `tool-jobs` 的 `user/message`，没有专用记录类型；无工具调用的 step 之后可以出现 `user/message` 并继续 step。
+- 后台任务完成通知是 source kind 为 `tool-jobs` 的 `user/message`，agent 消息与子代理结算通知分别为 `agent-message` 和 `subagent-settled`，都没有专用记录类型；无工具调用的 step 之后可以出现 `user/message` 并继续 step。
+- `subagent/descriptor` 为 v2，是 child 自己写的第一条记录：位于 `inherited + 1` 号序列且不在 turn 内，`inherited` 是 fork 种子复制的事件数（spawn 为 0）。种子在创建时与 header 一次写入并整体校验，复制的事件保留原序号。`session.OwnEvents` 以最后一个 descriptor 区分继承前缀。
+- `subagent/catalog` 必须位于活动 step，同一日志内 `session_id` 唯一，不进入 surface；`session.Children` 只从自有事件投影目录，fork 继承的 parent 目录不属于 child。
 
 格式变化必须同一变更原子更新领域类型、严格 decoder/order validator、所有 provider、测试、本文和 ADR。预发布阶段不保留静默兼容层。
 

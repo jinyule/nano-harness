@@ -24,6 +24,7 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 	approvalCalls := map[string]string{}
 	seenApprovals := map[string]struct{}{}
 	todoCalls := map[string]struct{}{}
+	children := map[string]struct{}{}
 	for _, event := range events {
 		record := event.Record
 		switch record.Type {
@@ -140,7 +141,21 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 				return state, orderError("plan/mode is not a mode change at a step boundary")
 			}
 			state.plan = record.Plan.Active
-		case coresession.RecordApprovalPolicy, coresession.RecordSubagentDescriptor:
+		case coresession.RecordSubagentDescriptor:
+			// A descriptor is the first record a child writes itself, after
+			// the closed prefix it inherited from a forked parent.
+			if state.turn != 0 || record.Subagent.Inherited != event.Sequence-1 {
+				return state, orderError("subagent/descriptor does not follow its inherited prefix")
+			}
+		case coresession.RecordSubagentCatalog:
+			if record.Turn != state.turn || record.Step != state.step {
+				return state, orderError("subagent/catalog outside active step")
+			}
+			if _, exists := children[record.Catalog.SessionID]; exists {
+				return state, orderError("duplicate subagent/catalog for %q", record.Catalog.SessionID)
+			}
+			children[record.Catalog.SessionID] = struct{}{}
+		case coresession.RecordApprovalPolicy:
 			// Durable metadata is independent of the model surface.
 		}
 	}

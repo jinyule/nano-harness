@@ -1,0 +1,24 @@
+{"type":"session","version":2,"header":{"session_id":"fixture","composition_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","created_at_unix_ms":1,"cwd":"/synthetic/workspace","parent_session_id":"parent","delegation_depth":1}}
+{"seq":1,"record":{"type":"turn/start","turn":1}}
+{"seq":2,"record":{"type":"user/message","turn":1,"message":{"role":"user","content":[{"type":"text","text":"delegate"}],"source":{"kind":"test"}}}}
+{"seq":3,"record":{"type":"step/start","turn":1,"step":1}}
+{"seq":4,"record":{"type":"assistant/message","turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"spawning"}],"source":{"kind":"provider"}}}}
+{"seq":5,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-spawn","name":"subagent","arguments":{"description":"scan","prompt":"scan the tree"}}}}
+{"seq":6,"record":{"type":"subagent/catalog","turn":1,"step":1,"catalog":{"session_id":"sibling","mode":"continuable","label":"scan"}}}
+{"seq":7,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-spawn","output":"started subagent sibling","is_error":false}}}
+{"seq":8,"record":{"type":"step/end","turn":1,"step":1}}
+{"seq":9,"record":{"type":"turn/end","turn":1,"outcome":"completed"}}
+{"seq":10,"record":{"type":"subagent/descriptor","subagent":{"version":2,"provider":"fork","mode":"continuable","label":"review","inherited":9}}}
+{"seq":11,"record":{"type":"approval/policy","approval":{"policy":"never","source":"delegation"}}}
+{"seq":12,"record":{"type":"turn/start","turn":2}}
+{"seq":13,"record":{"type":"user/message","turn":2,"message":{"role":"user","content":[{"type":"text","text":"review the scan"},{"type":"text","text":"report back"}],"source":{"kind":"delegation"}}}}
+{"seq":14,"record":{"type":"step/start","turn":2,"step":1}}
+{"seq":15,"record":{"type":"assistant/message","turn":2,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"reporting"}],"source":{"kind":"provider"}}}}
+{"seq":16,"record":{"type":"tool/call","turn":2,"step":1,"call":{"id":"call-send","name":"send_message","arguments":{"agent_id":"parent","message":"looks fine"}}}}
+{"seq":17,"record":{"type":"tool/result","turn":2,"step":1,"result":{"call_id":"call-send","output":"message delivered to agent parent","is_error":false}}}
+{"seq":18,"record":{"type":"step/end","turn":2,"step":1}}
+{"seq":19,"record":{"type":"user/message","turn":2,"message":{"role":"user","content":[{"type":"text","text":"Agent parent sent a message: "},{"type":"text","text":"thanks"}],"source":{"kind":"agent-message"}}}}
+{"seq":20,"record":{"type":"step/start","turn":2,"step":2}}
+{"seq":21,"record":{"type":"assistant/message","turn":2,"step":2,"message":{"role":"assistant","content":[{"type":"text","text":"done"}],"source":{"kind":"provider"}}}}
+{"seq":22,"record":{"type":"step/end","turn":2,"step":2}}
+{"seq":23,"record":{"type":"turn/end","turn":2,"outcome":"completed"}}

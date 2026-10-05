@@ -31,6 +31,8 @@ const (
 	OrderWebSearch = 2000
 	// OrderWebFetch positions web-fetch guidance.
 	OrderWebFetch = 2100
+	// OrderSubagent positions background-delegation guidance.
+	OrderSubagent = 2800
 )
 
 // Invocation is the runtime context of one validated call. Journal is the

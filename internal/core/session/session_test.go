@@ -44,7 +44,9 @@ func TestRecordValidate_AllKinds(t *testing.T) {
 		{Type: RecordCompactionStart, Compaction: &CompactionData{ID: "compact"}},
 		{Type: RecordCompactionSummary, Compaction: &CompactionData{ID: "compact", ShadowedSeqs: []uint64{1}, ShadowedTokenCount: 1, Summary: []ContentBlock{{Type: ContentText, Text: "summary"}}, Provider: "openai", Model: "model", Effort: EffortMax}},
 		{Type: RecordCompactionEnd, Compaction: &CompactionData{ID: "compact", Error: "failure"}},
-		{Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 1, Provider: "in-process", Mode: "continuable", Label: "worker", Tools: []string{"tool"}}},
+		{Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker", Tools: []string{"tool"}}},
+		{Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentFork, Mode: SubagentOneShot, Label: strings.Repeat("x", 128), Inherited: 9}},
+		{Type: RecordSubagentCatalog, Turn: 1, Step: 1, Catalog: &SubagentCatalog{SessionID: "child", Mode: SubagentOneShot, Label: "worker"}},
 		{Type: RecordStepEnd, Turn: 1, Step: 1, Usage: &TokenUsage{InputTokens: 1, OutputTokens: 1}},
 		{Type: RecordTurnEnd, Turn: 1, Outcome: OutcomeCompleted},
 	}
@@ -158,7 +160,21 @@ func TestRecordValidateRejectsEveryInvalidShape(t *testing.T) {
 		"compaction end fields":     {Type: RecordCompactionEnd, Compaction: &CompactionData{ID: "compact", Provider: "p"}},
 		"subagent shape":            {Type: RecordSubagentDescriptor},
 		"subagent fields":           {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{}},
-		"subagent tool":             {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 1, Provider: "in-process", Mode: "continuable", Label: "worker", Tools: []string{""}}},
+		"subagent tool":             {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker", Tools: []string{""}}},
+		"subagent version 1":        {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 1, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker"}},
+		"subagent old provider":     {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: "in-process", Mode: SubagentContinuable, Label: "worker"}},
+		"subagent spawn inherits":   {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker", Inherited: 1}},
+		"subagent mode":             {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentFork, Mode: "resident", Label: "worker"}},
+		"subagent long label":       {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentFork, Mode: SubagentOneShot, Label: strings.Repeat("x", 129)}},
+		"subagent step":             {Type: RecordSubagentDescriptor, Step: 1, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentSpawn, Mode: SubagentOneShot, Label: "worker"}},
+		"catalog shape":             {Type: RecordSubagentCatalog, Turn: 1, Step: 1},
+		"catalog step":              {Type: RecordSubagentCatalog, Turn: 1, Catalog: &SubagentCatalog{SessionID: "child", Mode: SubagentOneShot, Label: "worker"}},
+		"catalog turn":              {Type: RecordSubagentCatalog, Step: 1, Catalog: &SubagentCatalog{SessionID: "child", Mode: SubagentOneShot, Label: "worker"}},
+		"catalog extras":            {Type: RecordSubagentCatalog, Turn: 1, Step: 1, Catalog: &SubagentCatalog{SessionID: "child", Mode: SubagentOneShot, Label: "worker"}, Message: validMessage},
+		"catalog session":           {Type: RecordSubagentCatalog, Turn: 1, Step: 1, Catalog: &SubagentCatalog{SessionID: " child", Mode: SubagentOneShot, Label: "worker"}},
+		"catalog mode":              {Type: RecordSubagentCatalog, Turn: 1, Step: 1, Catalog: &SubagentCatalog{SessionID: "child", Mode: "unknown", Label: "worker"}},
+		"catalog label":             {Type: RecordSubagentCatalog, Turn: 1, Step: 1, Catalog: &SubagentCatalog{SessionID: "child", Mode: SubagentContinuable}},
+		"bare catalog":              {Type: RecordTurnStart, Turn: 1, Catalog: &SubagentCatalog{}},
 		"turn end extras":           {Type: RecordTurnEnd, Turn: 1, Outcome: OutcomeCompleted, Result: validResult},
 		"turn end outcome":          {Type: RecordTurnEnd, Turn: 1, Outcome: "bad"},
 		"message extras":            {Type: RecordUserMessage, Turn: 1, Message: validMessage, Call: validCall},
@@ -229,6 +245,7 @@ func TestCloneEventDetachesEveryMutableField(t *testing.T) {
 		Approval:   &ApprovalData{ID: "approval"},
 		Compaction: &CompactionData{ID: "compact", ShadowedSeqs: []uint64{1}, Summary: []ContentBlock{{Type: ContentImage, Image: testImage()}}},
 		Subagent:   &SubagentDescriptor{Version: 1, Tools: []string{"tool"}},
+		Catalog:    &SubagentCatalog{SessionID: "child"},
 	}}
 	cloned := CloneEvent(event)
 	cloned.Record.Message.Content[0].Image.Name = "changed"
@@ -242,6 +259,10 @@ func TestCloneEventDetachesEveryMutableField(t *testing.T) {
 	cloned.Record.Compaction.ShadowedSeqs[0] = 2
 	cloned.Record.Compaction.Summary[0].Image.Name = "changed"
 	cloned.Record.Subagent.Tools[0] = "changed"
+	cloned.Record.Catalog.SessionID = "changed"
+	if event.Record.Catalog.SessionID == "changed" {
+		t.Fatal("CloneEvent aliases the catalog entry")
+	}
 	if event.Record.Message.Content[0].Image.Name == "changed" || event.Record.Chunk.Text == "changed" || event.Record.Call.Arguments[0] == '[' || event.Record.Result.Output == "changed" || event.Record.Header.Tools[0].Parameters[0] == '[' || event.Record.Usage.InputTokens == 2 || event.Record.Retry.ID == "changed" || event.Record.Approval.ID == "changed" || event.Record.Compaction.ShadowedSeqs[0] == 2 || event.Record.Compaction.Summary[0].Image.Name == "changed" || event.Record.Subagent.Tools[0] == "changed" {
 		t.Fatal("CloneEvent aliases source")
 	}

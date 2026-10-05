@@ -10,7 +10,6 @@ import json
 import os
 from pathlib import Path
 import pty
-import re
 import select
 import shutil
 import signal
@@ -67,29 +66,28 @@ class Fixture(http.server.BaseHTTPRequestHandler):
             if "PLAN_TASK" in task:
                 call = None if outputs else ("exit_plan_mode", {"plan": "# PTY plan\n\n- verify the review"})
                 text = "PLAN_DONE"
-            elif "CHILD_FOLLOW" in task:
-                text = "CHILD_FOLLOW_OK"
+            elif task.startswith("CHILD_FORK"):
+                # The fork inherits the earlier turns' history, not this in-flight turn.
+                text = "CHILD_FORK_OK"
                 call = None
-            elif "CHILD_READ" in task:
+            elif task.startswith("CHILD_READ"):
                 call = None if outputs else ("read", {"file_path": "proof.txt"})
                 text = "CHILD_READ_OK"
             elif task.startswith("background job "):
                 call = None if outputs else ("job_output", {"job_id": "bash-2"})
                 text = "NOTICE_SEEN"
             else:
-                child = re.search(r"session=([^ ]+)", " ".join(outputs))
-                child_id = child.group(1) if child else "missing-child"
                 sequence = [
                     ("todo_write", {"todos": [{"content": "inspect workspace", "status": "in_progress"},
                                               {"content": "report tools", "status": "pending"}]}),
                     ("glob", {"pattern": "*.txt"}),
                     ("grep", {"pattern": "PTY_PROOF"}),
                     ("read", {"file_path": "proof.txt"}),
-                    ("spawn_subagent", {"label": "reader", "task": "CHILD_READ", "mode": "continuable", "tools": ["read"]}),
-                    ("subagent_followup", {"session_id": child_id, "task": "CHILD_FOLLOW"}),
-                    ("subagent_report", {"session_id": child_id}),
-                    ("list_subagents", {}),
-                    ("subagent_interrupt", {"session_id": child_id}),
+                    ("subagent", {"description": "reader", "prompt": "CHILD_READ", "run_in_background": False}),
+                    ("subagent_fork", {"description": "reviewer", "prompt": "CHILD_FORK"}),
+                    ("list_agents", {"scope": "descendants"}),
+                    ("send_message", {"agent_id": "missing-child", "message": "CHILD_FOLLOW"}),
+                    ("interrupt_agent", {"agent_id": "missing-child"}),
                     ("write", {"file_path": "written.txt", "content": "WRITE_PROOF\n"}),
                     ("edit", {"file_path": "written.txt", "old_string": "WRITE_PROOF", "new_string": "EDIT_PROOF"}),
                     ("bash", {"description": "Write the shell proof file", "command": "printf SHELL_PROOF > shell.txt"}),
@@ -244,7 +242,7 @@ def verify(binary):
                 terminal.expect("turn> completed")
                 terminal.resize(100, 32)
                 terminal.send("/agents\r")
-                terminal.expect("reader mode=continuable busy=false outcome=completed")
+                terminal.expect("no subagents")
                 terminal.send("/plan\r")
                 terminal.expect("Plan mode on.")
                 terminal.send("PLAN_TASK\r")
@@ -264,18 +262,26 @@ def verify(binary):
                 terminal.close()
             logs = records(directory)
             root = logs.pop("session-pty")
-            assert len(logs) == 1, "expected an independent child session"
+            assert len(logs) == 2, "expected independent spawn and fork child sessions"
             root_records = [entry["record"] for entry in root[1:]]
             calls = [entry["call"]["name"] for entry in root_records if entry["type"] == "tool/call"]
-            assert calls == ["todo_write", "glob", "grep", "read", "spawn_subagent", "subagent_followup", "subagent_report",
-                             "list_subagents", "subagent_interrupt", "write", "edit", "bash", "bash", "ask_user_question",
+            assert calls == ["todo_write", "glob", "grep", "read", "subagent", "subagent_fork", "list_agents",
+                             "send_message", "interrupt_agent", "write", "edit", "bash", "bash", "ask_user_question",
                              "job_output", "exit_plan_mode"], calls
             results = [entry["result"] for entry in root_records if entry["type"] == "tool/result"]
-            assert len(results) == 16 and all(not entry.get("is_error", False) for entry in results), results
+            failed = [index for index, entry in enumerate(results) if entry.get("is_error", False)]
+            assert len(results) == 16 and failed == [7], results
             assert results[0]["output"] == "Updated todo list: 1 pending, 1 in progress, 0 completed.", results[0]
             assert results[1]["output"] == "proof.txt", results[1]
             assert results[2]["output"] == "Found 1 match\n\nproof.txt\nLine 1: PTY_PROOF", results[2]
             assert "1: PTY_PROOF" in results[3]["output"], results[3]
+            assert results[4]["output"] == "CHILD_READ_OK", results[4]
+            assert results[5]["output"] == "CHILD_FORK_OK", results[5]
+            assert results[6]["output"] == "(no subagents)", results[6]
+            assert results[7]["output"] == 'Error: subagent "missing-child" is unavailable', results[7]
+            assert results[8]["output"] == "interrupt requested for agent missing-child", results[8]
+            catalog = [entry["catalog"] for entry in root_records if entry["type"] == "subagent/catalog"]
+            assert [(entry["label"], entry["mode"]) for entry in catalog] == [("reader", "one-shot"), ("reviewer", "one-shot")], catalog
             assert results[12]["output"] == "started background job bash-2", results[12]
             assert results[13]["output"] == ('{"answers":[{"id":"mode","selected":["Fast (Recommended)"]},'
                                              '{"id":"note","selected":[],"custom":"PTY_ANSWER"}]}'), results[13]
@@ -296,13 +302,24 @@ def verify(binary):
             assert (workspace / "proof.txt").read_text() == "PTY_PROOF\n"
             assert (workspace / "written.txt").read_text() == "EDIT_PROOF\n"
             assert (workspace / "shell.txt").read_text() == "SHELL_PROOF"
-            child = next(iter(logs.values()))
-            assert child[0]["header"]["parent_session_id"] == "session-pty"
-            child_records = [entry["record"] for entry in child[1:]]
-            assert any(entry["type"] == "approval/policy" and entry["approval"]["policy"] == "never" for entry in child_records)
-            assert [entry["call"]["name"] for entry in child_records if entry["type"] == "tool/call"] == ["read"]
-            assert [entry["outcome"] for entry in child_records if entry["type"] == "turn/end"] == ["completed", "completed"]
-            assert "CHILD_READ_OK" in json.dumps(child) and "CHILD_FOLLOW_OK" in json.dumps(child)
+            children = {entry["session_id"]: entry["label"] for entry in catalog}
+            for session_id, label in children.items():
+                child = logs[session_id]
+                assert child[0]["header"]["parent_session_id"] == "session-pty"
+                child_records = [entry["record"] for entry in child[1:]]
+                descriptors = [entry["subagent"] for entry in child_records if entry["type"] == "subagent/descriptor"]
+                own = child_records[descriptors[-1].get("inherited", 0):]
+                assert own[0]["type"] == "subagent/descriptor" and own[0]["subagent"]["mode"] == "one-shot", own[0]
+                assert own[1]["type"] == "approval/policy" and own[1]["approval"]["policy"] == "never", own[1]
+                assert [entry["outcome"] for entry in own if entry["type"] == "turn/end"] == ["completed"], own
+                if label == "reader":
+                    assert own[0]["subagent"]["provider"] == "spawn" and own[0]["subagent"].get("inherited", 0) == 0
+                    assert [entry["call"]["name"] for entry in own if entry["type"] == "tool/call"] == ["read"]
+                    assert "CHILD_READ_OK" in json.dumps(own)
+                else:
+                    # The fork starts in the first PTY turn, so no completed turn exists to inherit.
+                    assert own[0]["subagent"]["provider"] == "fork" and own[0]["subagent"].get("inherited", 0) == 0
+                    assert not [entry for entry in own if entry["type"] == "tool/call"] and "CHILD_FORK_OK" in json.dumps(own)
             assert not list((directory / "sessions").glob("*.lock"))
             terminal = Terminal(binary, directory, workspace, settings)
             try:
@@ -313,7 +330,7 @@ def verify(binary):
                 assert terminal.process.wait(timeout=10) == 0
             finally:
                 terminal.close()
-            print("PASS: real binary/PTY, 16 root tool calls, todo plan, background job notice, question answers, plan review, child read/followup, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
+            print("PASS: real binary/PTY, 16 root tool calls, todo plan, background job notice, question answers, plan review, spawn/fork children, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
 
 
 def main():
