@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"path/filepath"
 	"strings"
 
@@ -42,12 +43,14 @@ func (provider *Provider) writeTool() *appTool.Tool {
 				return err
 			}
 			// Refuse unsafe or unobserved targets before asking; execution
-			// re-checks both under the mutation lock.
+			// re-checks both under the target's lock. Check has no context,
+			// so it hashes only files edit could load and leaves larger ones
+			// to the cancellable execution-point check.
 			target, err := provider.root.Writable(arguments.FilePath)
 			if err != nil {
 				return fmt.Errorf("cannot write %q: %w", arguments.FilePath, err)
 			}
-			_, _, err = provider.admitWrite(invocation.SessionID, target)
+			_, _, err = provider.admitWrite(invocation.SessionID, target, maxEditBytes, func() error { return nil })
 			return err
 		},
 		Guidance: appTool.Guidance{Order: appTool.OrderWrite, Text: func(visible func(string) bool) string {
@@ -77,9 +80,8 @@ func (provider *Provider) write(ctx context.Context, invocation appTool.Invocati
 	if err != nil {
 		return appTool.Result{}, fmt.Errorf("cannot write %q: %w", arguments.FilePath, err)
 	}
-	provider.mutate.Lock()
-	defer provider.mutate.Unlock()
-	info, exists, err := provider.admitWrite(invocation.SessionID, target)
+	defer provider.mutate.lock(target)()
+	info, exists, err := provider.admitWrite(invocation.SessionID, target, math.MaxInt64, ctx.Err)
 	if err != nil {
 		return appTool.Result{}, err
 	}
@@ -97,15 +99,17 @@ func (provider *Provider) write(ctx context.Context, invocation appTool.Invocati
 		}
 		return appTool.Result{}, fmt.Errorf("cannot write %q: %w", target, err)
 	}
-	provider.observed.record(invocation.SessionID, target, observation{present: true, version: digest(content)})
+	provider.observed.record(invocation.SessionID, target, observed(content))
 	return appTool.Text(fmt.Sprintf("<path>%s</path>\n<type>file</type>\n<content>\n%s file\n</content>", target, operation)), nil
 }
 
 // admitWrite decides upstream's write intent without side effects and
 // reports the existing target, if any. The target must be a regular file or
 // missing; one observed present must still hold the observed content, and
-// any other target may only be created.
-func (provider *Provider) admitWrite(sessionID, target string) (fs.FileInfo, bool, error) {
+// any other target may only be created. A size change is stale at once;
+// otherwise the content is hashed when it is at most hashLimit bytes, with
+// stop checked between reads.
+func (provider *Provider) admitWrite(sessionID, target string, hashLimit int64, stop func() error) (fs.FileInfo, bool, error) {
 	info, err := lstatFile(target)
 	exists := err == nil
 	switch {
@@ -118,15 +122,17 @@ func (provider *Provider) admitWrite(sessionID, target string) (fs.FileInfo, boo
 	switch {
 	case prior.present && !exists:
 		return nil, false, errStale("write", target, "file no longer exists")
-	case prior.present:
-		current, err := digestFile(target)
+	case prior.present && info.Size() != prior.size:
+		return nil, false, errStale("write", target, "file changed since it was read")
+	case prior.present && info.Size() <= hashLimit:
+		current, err := digestFile(target, stop)
 		if err != nil {
 			return nil, false, fmt.Errorf("cannot write %q: %w", target, err)
 		}
 		if current != prior.version {
 			return nil, false, errStale("write", target, "file changed since it was read")
 		}
-	case exists:
+	case !prior.present && exists:
 		return nil, false, errNotRead(target)
 	}
 	return info, exists, nil

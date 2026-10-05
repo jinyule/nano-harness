@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"math"
@@ -114,7 +115,7 @@ func (provider *Provider) read(ctx context.Context, invocation appTool.Invocatio
 		return appTool.Result{}, fmt.Errorf("cannot read %q: %w", display, err)
 	}
 	defer func() { _ = reader.Close() }() // read-only; close cannot lose data
-	hasher := sha256.New()
+	hasher := &countingHash{Hash: sha256.New()}
 	window, err := readWindow(ctx, io.TeeReader(reader, hasher), offset, limit)
 	if err != nil {
 		return appTool.Result{}, fmt.Errorf("cannot read %q: %w", display, err)
@@ -122,7 +123,7 @@ func (provider *Provider) read(ctx context.Context, invocation appTool.Invocatio
 	if !window.capped && offset > window.total && (window.total != 0 || offset != 1) {
 		return appTool.Result{}, fmt.Errorf("offset %d is out of range for %q (%d lines)", offset, display, window.total)
 	}
-	provider.observed.record(invocation.SessionID, path, observation{present: true, version: version(hasher.Sum(nil))})
+	provider.observed.record(invocation.SessionID, path, observation{present: true, size: hasher.bytes, version: version(hasher.Sum(nil))})
 	return appTool.Text(formatRead(display, offset, window)), nil
 }
 
@@ -281,4 +282,16 @@ func formatRead(display string, offset int64, window window) string {
 	}
 	body.WriteString(footer)
 	return fmt.Sprintf("<path>%s</path>\n<type>file</type>\n<content>\n%s\n</content>", display, body.String())
+}
+
+// countingHash hashes and counts the bytes a read consumed, so the recorded
+// observation carries the exact size the session saw.
+type countingHash struct {
+	hash.Hash
+	bytes int64
+}
+
+func (counter *countingHash) Write(data []byte) (int, error) {
+	counter.bytes += int64(len(data))
+	return counter.Hash.Write(data)
 }

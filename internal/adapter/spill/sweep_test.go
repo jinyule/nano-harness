@@ -201,3 +201,75 @@ func TestSweep_PrunesSessionDirectoriesUnderTheLayoutLock(t *testing.T) {
 		t.Fatalf("pruned=%d held=%v", pruned, layout.held)
 	}
 }
+
+// TestStore_CleanupWithdrawsThenDrainsThenStopsTheSweep pins the shutdown
+// order: the runtime stops handing out the store first, then new artifacts
+// are refused while open ones finish, and only then is the sweep joined.
+func TestStore_CleanupWithdrawsThenDrainsThenStopsTheSweep(t *testing.T) {
+	restoreHooks(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	readDir = func(path string) ([]os.DirEntry, error) {
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+		return os.ReadDir(path)
+	}
+	runtime := startedRuntime(t)
+	store, _ := New(runtime, Config{Root: filepath.Join(t.TempDir(), "spill"), Workspace: "/w"})
+	scope := &plugin.Scope{}
+	if err := store.Start(context.Background(), scope); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	file, err := store.Create(context.Background(), "s", "x.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release) // a failed assertion must not leave the sweep blocked
+		}
+	})
+	closed := make(chan error, 1)
+	go func() { closed <- scope.Close(context.Background()) }()
+	// Withdrawal comes first and the drain waits for the open artifact; a
+	// cleanup that joined the sweep first would never refuse creates.
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(time.Millisecond) {
+		probe, err := store.Create(context.Background(), "s", "y.txt")
+		if errors.Is(err, ErrClosed) {
+			break
+		}
+		if err == nil {
+			_ = probe.Discard()
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("creates were still accepted while the sweep was running")
+		}
+	}
+	other := &plugin.Scope{}
+	if err := runtime.UseSpill(&Store{}, other); err != nil {
+		t.Fatalf("store still published while draining: %v", err)
+	}
+	_ = other.Close(context.Background())
+	select {
+	case <-store.swept:
+		t.Fatal("the sweep was stopped before the drain finished")
+	default:
+	}
+	if _, err := file.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-store.swept:
+	default:
+		t.Fatal("cleanup returned before joining the sweep")
+	}
+}

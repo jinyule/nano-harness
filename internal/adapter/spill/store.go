@@ -116,8 +116,10 @@ func (*Store) ID() string { return "spill-local" }
 func (store *Store) Dir() string { return store.partition }
 
 // Start prepares the private root and partition, starts the sweep, and
-// publishes the store until scope cleanup. Cleanup stops new artifacts,
-// waits for open ones to finish, and waits for the sweep.
+// publishes the store until scope cleanup. Cleanup runs in reverse: it first
+// withdraws the store from the runtime so new tool calls get none, then
+// refuses new artifacts from calls that still hold it and waits for open
+// ones to commit or discard, and finally cancels and joins the sweep.
 func (store *Store) Start(ctx context.Context, scope *plugin.Scope) error {
 	store.mu.Lock()
 	if store.started {
@@ -132,13 +134,6 @@ func (store *Store) Start(ctx context.Context, scope *plugin.Scope) error {
 	if err := preparePrivate(store.partition, lstatPath); err != nil {
 		return err
 	}
-	store.mu.Lock()
-	store.running = true
-	store.mu.Unlock()
-	if err := scope.Defer(store.stop); err != nil {
-		_ = store.stop(ctx) // nothing is open yet
-		return err
-	}
 	cutoff := now().Add(-retention)
 	sweepContext, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	done := make(chan struct{})
@@ -147,15 +142,21 @@ func (store *Store) Start(ctx context.Context, scope *plugin.Scope) error {
 		defer close(done)
 		sweep(sweepContext, store.root, store.partition, cutoff, &store.layout)
 	}()
-	if err := scope.Defer(func(context.Context) error {
+	// One cleanup drains before it stops the sweep, so the order between
+	// the two cannot depend on registration order.
+	if err := scope.Defer(func(ctx context.Context) error {
+		err := store.stop(ctx)
 		cancel()
 		<-done
-		return nil
+		return err
 	}); err != nil {
 		cancel()
 		<-done
 		return err
 	}
+	store.mu.Lock()
+	store.running = true
+	store.mu.Unlock()
 	return store.runtime.UseSpill(store, scope)
 }
 

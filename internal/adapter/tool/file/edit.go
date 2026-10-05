@@ -55,7 +55,7 @@ func (provider *Provider) editTool() *appTool.Tool {
 				return err
 			}
 			// Refuse unsafe, unobserved, or stale targets before asking;
-			// execution re-checks them under the mutation lock.
+			// execution re-checks them under the target's lock.
 			target, err := provider.root.Writable(arguments.FilePath)
 			if err != nil {
 				return fmt.Errorf("cannot edit %q: %w", arguments.FilePath, err)
@@ -84,8 +84,7 @@ func (provider *Provider) edit(ctx context.Context, invocation appTool.Invocatio
 	if err != nil {
 		return appTool.Result{}, fmt.Errorf("cannot edit %q: %w", arguments.FilePath, err)
 	}
-	provider.mutate.Lock()
-	defer provider.mutate.Unlock()
+	defer provider.mutate.lock(target)()
 	info, raw, err := provider.observedContent(invocation.SessionID, target)
 	if err != nil {
 		return appTool.Result{}, err
@@ -97,7 +96,7 @@ func (provider *Provider) edit(ctx context.Context, invocation appTool.Invocatio
 	if err := writeAtomic(target, edited, info.Mode().Perm(), false); err != nil {
 		return appTool.Result{}, fmt.Errorf("cannot edit %q: %w", target, err)
 	}
-	provider.observed.record(invocation.SessionID, target, observation{present: true, version: digest(edited)})
+	provider.observed.record(invocation.SessionID, target, observed(edited))
 	if arguments.ReplaceAll != nil && *arguments.ReplaceAll {
 		return appTool.Text(fmt.Sprintf("The file %s has been updated. All occurrences were successfully replaced.", target)), nil
 	}
@@ -123,6 +122,8 @@ func (provider *Provider) observedContent(sessionID, target string) (fs.FileInfo
 		return nil, nil, fmt.Errorf("cannot edit %q: %w", target, err)
 	case !info.Mode().IsRegular():
 		return nil, nil, fmt.Errorf("cannot edit %q: not a regular file", target)
+	case info.Size() != prior.size:
+		return nil, nil, errStale("edit", target, "file changed since it was read")
 	case info.Size() > maxEditBytes:
 		return nil, nil, fmt.Errorf("cannot edit %q: %d bytes exceeds the %d-byte limit", target, info.Size(), maxEditBytes)
 	}

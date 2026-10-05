@@ -3,7 +3,6 @@ package file
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	stdimage "image"
@@ -122,7 +121,7 @@ func (provider *Provider) readImage(ctx context.Context, invocation appTool.Invo
 	case err != nil:
 		return appTool.Result{}, fmt.Errorf("cannot read %q: %w", display, err)
 	}
-	provider.observed.record(invocation.SessionID, path, observation{present: true, version: sha256.Sum256(data)})
+	provider.observed.record(invocation.SessionID, path, observed(data))
 	return appTool.Result{Text: formatImageRead(display, normalized, source), Image: &normalized}, nil
 }
 

@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sync"
 
 	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
@@ -45,15 +44,16 @@ var (
 )
 
 // Provider owns the read, write, and edit registrations and the
-// observations that guard mutations. mutate serializes every guarded
-// check-and-publish across sessions, so a version check and its write cannot
-// interleave with another write or edit from this process.
+// observations that guard mutations. mutate serializes guarded
+// check-and-publish per target path across sessions, so a version check and
+// its write cannot interleave with another write or edit of the same file
+// from this process.
 type Provider struct {
 	runtime  *appTool.Runtime
 	root     workspace.Root
 	images   ImageNormalizer
 	observed observations
-	mutate   sync.Mutex
+	mutate   pathLocks
 }
 
 // New constructs an inert provider over a resolved workspace. A root widened

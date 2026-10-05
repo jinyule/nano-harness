@@ -321,3 +321,15 @@ func TestRuntime_ImageResultsStayInlineAndCarryTheRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRetainInline_KeepsTheNameHintWithinTheStoreAlphabet(t *testing.T) {
+	store := &memorySpill{}
+	long := strings.Repeat("t", 64)
+	text := strings.Repeat("x", 60000)
+	if got := retainInline(context.Background(), Invocation{SessionID: "s", spill: store}, long, text); got == text {
+		t.Fatal("a 64-character tool name did not spill")
+	}
+	if name := store.saved[0].name; len(name) > 64 || name != strings.Repeat("t", 60)+".txt" {
+		t.Fatalf("name hint = %q (%d bytes)", name, len(name))
+	}
+}

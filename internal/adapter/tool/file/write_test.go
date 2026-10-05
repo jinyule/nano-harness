@@ -230,7 +230,7 @@ func TestEdit_ExecutionPointGuardsAndFilesystemFailures(t *testing.T) {
 	h := newHarness(t)
 	writeFixture(t, h.path("file.txt"), "old")
 	approved := appTool.Invocation{SessionID: "s", Approved: true}
-	h.provider.observed.record("s", h.path("file.txt"), observation{present: true, version: digest([]byte("old"))})
+	h.provider.observed.record("s", h.path("file.txt"), observed([]byte("old")))
 	arguments := editArgs{FilePath: "file.txt", OldString: "old", NewString: "new"}
 	if _, err := h.provider.edit(context.Background(), appTool.Invocation{}, arguments); err == nil || !strings.Contains(err.Error(), "approval was not granted") {
 		t.Fatalf("unapproved = %v", err)

@@ -27,6 +27,13 @@
 
 协调者决定把 `Spec.Check` 改为 `func(Invocation, A) error`（破坏性调整，同一变更迁移全部调用点：read、write、edit、glob、grep、bash 与 runtime 测试）。runtime 在 Check 前构造 `Invocation`，此时 `Approved` 恒为 false，批准后才置 true；Check 不得产生副作用。`write`/`edit` 在 Check 中完成观察校验，执行点在锁内再校验一次。之后合入的其他工作包按同一签名机械迁移。
 
+整体审查后的修复（2026-10-06）：
+
+- spill store 的 cleanup 顺序改为“从 runtime 撤销 → 拒绝新文件并等待已打开文件 → 取消并等待清理”。后两步合并为一个 cleanup，顺序不再依赖登记顺序；此前代码实际先 join 清理再 drain，与注释和 ADR 相反。
+- `write` 的先读后写校验：观察记录增加大小，大小变化直接判定为已变化；`Check` 只对不超过 10 MiB 的文件求摘要，执行点的摘要每 64 KiB 检查一次取消；全局 `mutate` 锁改为按目标路径加锁，一个文件的慢校验不再阻塞其他会话对其他文件的 write/edit。没有给 `Check` 增加 ctx：那需要再次迁移所有工具（含正在合入的 WP7、WP9、WP10），而有界的 Check 加可取消的执行点已经覆盖这个风险。
+- `normalizeConfig` 拒绝与 workspace 互相包含的 spill 根目录（对已存在的最长前缀解析链接后判断），落实 ADR-0008 否决“spill 放在 workspace 内”的决定。
+- 通用 spill 的名称提示把工具名截到 60 个字符，61–64 字符的工具名不再因 `.txt` 超出 store 的 64 字符上限而静默不 spill。
+
 ## Consequences
 
 模型在本仓看到与上游相同的 spill 预览、尾注、先读后写文案和 guidance，`glob`/`grep` 的完整结果可以读回。`bash` 的截断说明与 job 读取的丢失说明现在给出真实文件位置；WP9 的图片结果目前不进入 spill 策略，扩展 `Result` 时需同时扩展 `retainInline`。
@@ -44,4 +51,5 @@
 - `python3 scripts/mutation-check.py`：10 个用例全部 killed。
 - `GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check`：通过，逐文件 coverage 100.0%。
 - `make tui-e2e`：通过（真实二进制/PTY，11 个根工具、审批、文件、resume、cleanup）。
+- 审查修复先写出可复现的失败测试再修：`TestStore_CleanupWithdrawsThenDrainsThenStopsTheSweep`（旧顺序下 10 s 内仍接受新文件而失败）、`TestObservation_WriteVerificationIsCancellableAndPerPath`、`TestObservation_SizeChangesAreStaleWithoutReading`、`TestObservation_CheckLeavesLargeVerificationsToExecution`（旧代码缺少大小字段而编译失败）、`TestNormalizeConfig_KeepsTheSpillRootOutsideTheWorkspace`（链接进 workspace 和包含 workspace 两例失败）、`TestRetainInline_KeepsTheNameHintWithinTheStoreAlphabet`（名称 68 字节）。
 - 未运行：live provider、Linux/Windows 原生执行（本机 macOS），以及 WP3 合入后的 `bash` 接入。

@@ -228,7 +228,7 @@ func TestObservation_GuardFailures(t *testing.T) {
 	h := newHarness(t)
 	approved := appTool.Invocation{SessionID: "s", Approved: true}
 	writeFixture(t, h.path("file.txt"), "old")
-	h.provider.observed.record("s", h.path("file.txt"), observation{present: true, version: digest([]byte("old"))})
+	h.provider.observed.record("s", h.path("file.txt"), observed([]byte("old")))
 	failure := errors.New("io failure")
 	openFile = func(string) (io.ReadCloser, error) { return nil, failure }
 	if _, err := h.provider.write(context.Background(), approved, writeArgs{FilePath: "file.txt"}); !errors.Is(err, failure) {
@@ -337,5 +337,149 @@ func TestObservation_RefusesBeforeApprovalAndRechecksAtExecution(t *testing.T) {
 	}
 	if readFixture(t, h.path("file.txt")) != "changed during approval" || len(h.approver.reasons) != 2 {
 		t.Fatalf("content = %q, approvals = %q", readFixture(t, h.path("file.txt")), h.approver.reasons)
+	}
+}
+
+// endless is a reader that never ends, signalling its first read.
+type endless struct{ started chan struct{} }
+
+func (reader *endless) Read(buffer []byte) (int, error) {
+	select {
+	case <-reader.started:
+	default:
+		close(reader.started)
+	}
+	return len(buffer), nil
+}
+
+func (*endless) Close() error { return nil }
+
+// blocking is a reader that blocks until released.
+type blocking struct{ entered, release chan struct{} }
+
+func (reader *blocking) Read([]byte) (int, error) {
+	close(reader.entered)
+	<-reader.release
+	return 0, io.EOF
+}
+
+func (*blocking) Close() error { return nil }
+
+func TestObservation_WriteVerificationIsCancellableAndPerPath(t *testing.T) {
+	restoreHooks(t)
+	h := newHarness(t)
+	writeFixture(t, h.path("big.txt"), "observed")
+	writeFixture(t, h.path("other.txt"), "other")
+	h.provider.observed.record("a", h.path("big.txt"), observation{present: true, size: 8, version: digest([]byte("observed"))})
+	h.provider.observed.record("b", h.path("other.txt"), observation{present: true, size: 5, version: digest([]byte("other"))})
+	direct := openFile
+	stalled := &blocking{entered: make(chan struct{}), release: make(chan struct{})}
+	spinning := &endless{started: make(chan struct{})}
+	var mu sync.Mutex
+	var target io.ReadCloser
+	openFile = func(path string) (io.ReadCloser, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if path == h.path("big.txt") && target != nil {
+			return target, nil
+		}
+		return direct(path)
+	}
+	// A verification stalled on one file does not hold other files' writes.
+	mu.Lock()
+	target = stalled
+	mu.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.provider.write(context.Background(), appTool.Invocation{SessionID: "a", Approved: true}, writeArgs{FilePath: "big.txt", Content: "x"})
+		done <- err
+	}()
+	<-stalled.entered
+	edited := make(chan error, 1)
+	go func() {
+		_, err := h.provider.edit(context.Background(), appTool.Invocation{SessionID: "b", Approved: true}, editArgs{FilePath: "other.txt", OldString: "other", NewString: "else"})
+		edited <- err
+	}()
+	select {
+	case err := <-edited:
+		if err != nil {
+			t.Fatalf("edit of another file = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a write verifying one file blocked an edit of another")
+	}
+	close(stalled.release)
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "file changed since it was read") {
+		t.Fatalf("stalled write = %v", err)
+	}
+	// Cancellation stops a verification that would otherwise never end.
+	mu.Lock()
+	target = spinning
+	mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		_, err := h.provider.write(ctx, appTool.Invocation{SessionID: "a", Approved: true}, writeArgs{FilePath: "big.txt", Content: "x"})
+		done <- err
+	}()
+	<-spinning.started
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled write = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancellation did not stop the verification")
+	}
+	if readFixture(t, h.path("big.txt")) != "observed" {
+		t.Fatal("a refused write changed the file")
+	}
+}
+
+func TestObservation_SizeChangesAreStaleWithoutReading(t *testing.T) {
+	restoreHooks(t)
+	h := newHarness(t)
+	writeFixture(t, h.path("file.txt"), "grown content")
+	h.provider.observed.record("s", h.path("file.txt"), observation{present: true, size: 4, version: digest([]byte("four"))})
+	openFile = func(path string) (io.ReadCloser, error) {
+		t.Errorf("opened %s although its size already proved it changed", path)
+		return nil, errors.New("unexpected open")
+	}
+	approved := appTool.Invocation{SessionID: "s", Approved: true}
+	if _, err := h.provider.write(context.Background(), approved, writeArgs{FilePath: "file.txt", Content: "x"}); err == nil || !strings.Contains(err.Error(), "file changed since it was read") {
+		t.Fatalf("write = %v", err)
+	}
+	if _, err := h.provider.edit(context.Background(), approved, editArgs{FilePath: "file.txt", OldString: "grown", NewString: "x"}); err == nil || !strings.Contains(err.Error(), "file changed since it was read") {
+		t.Fatalf("edit = %v", err)
+	}
+}
+
+func TestObservation_CheckLeavesLargeVerificationsToExecution(t *testing.T) {
+	restoreHooks(t)
+	h := newHarness(t)
+	large := strings.Repeat("a", maxEditBytes+1)
+	writeFixture(t, h.path("large.txt"), large)
+	h.read(t, "large.txt")
+	direct := openFile
+	var opens int
+	var mu sync.Mutex
+	openFile = func(path string) (io.ReadCloser, error) {
+		mu.Lock()
+		opens++
+		mu.Unlock()
+		return direct(path)
+	}
+	h.approver.during = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if opens != 0 {
+			t.Errorf("Check read the large file %d times before approval", opens)
+		}
+	}
+	if result := h.call(t, "write", write("large.txt", "small")); result.IsError || readFixture(t, h.path("large.txt")) != "small" {
+		t.Fatalf("write = %s", result.Output)
+	}
+	if opens != 1 {
+		t.Fatalf("execution verified the large file %d times", opens)
 	}
 }

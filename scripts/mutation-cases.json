@@ -93,7 +93,7 @@
   {
     "id": "write-unread-overwrite",
     "file": "internal/adapter/tool/file/write.go",
-    "before": "case exists:",
+    "before": "case !prior.present && exists:",
     "after": "case false:",
     "test": "^TestObservation_WriteCreatesFreelyButOverwritesOnlyWhatWasRead$"
   },

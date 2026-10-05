@@ -10,10 +10,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -227,6 +229,9 @@ func normalizeConfig(config applicationConfig) (applicationConfig, error) {
 		return applicationConfig{}, fmt.Errorf("resolve workspace links: %w", err)
 	}
 	config.workspaceRoot = resolved
+	if err := separateSpillRoot(config.workspaceRoot, config.spillRoot); err != nil {
+		return applicationConfig{}, err
+	}
 	path := filepath.Join(config.sessionRoot, config.sessionID+".jsonl")
 	info, err := inspectPath(path)
 	switch {
@@ -240,6 +245,43 @@ func normalizeConfig(config applicationConfig) (applicationConfig, error) {
 		config.create = false
 	}
 	return config, nil
+}
+
+// separateSpillRoot refuses a spill root that contains or lies inside the
+// resolved workspace: spilled output must stay out of glob/grep results and
+// beyond the reach of write, edit, and sandboxed bash. The spill root may
+// not exist yet, so links are resolved on its longest existing prefix.
+func separateSpillRoot(workspaceRoot, spillRoot string) error {
+	resolved, err := resolveExisting(spillRoot)
+	if err != nil {
+		return fmt.Errorf("resolve spill root links: %w", err)
+	}
+	if contains(workspaceRoot, resolved) || contains(resolved, workspaceRoot) {
+		return fmt.Errorf("spill root %s must lie outside the workspace %s; choose another --spill-root", spillRoot, workspaceRoot)
+	}
+	return nil
+}
+
+// resolveExisting resolves links on the longest existing prefix of an
+// absolute path and appends the missing remainder unchanged.
+func resolveExisting(path string) (string, error) {
+	missing := ""
+	for current := path; ; current = filepath.Dir(current) {
+		resolved, err := evaluateLinks(current)
+		switch {
+		case err == nil:
+			return filepath.Join(resolved, missing), nil
+		case !errors.Is(err, fs.ErrNotExist) || current == filepath.Dir(current):
+			return "", err
+		}
+		missing = filepath.Join(filepath.Base(current), missing)
+	}
+}
+
+// contains reports whether target is directory or lies below it.
+func contains(directory, target string) bool {
+	relative, err := filepath.Rel(directory, target)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func newSessionID() (string, error) {

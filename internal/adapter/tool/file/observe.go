@@ -2,6 +2,7 @@ package file
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -12,10 +13,17 @@ import (
 type version [sha256.Size]byte
 
 // observation is what one session last learned about a target: confirmed
-// absent, or present at a version.
+// absent, or present with a size and a version. A different current size
+// proves a change without reading the file.
 type observation struct {
 	present bool
+	size    int64
 	version version
+}
+
+// observed builds the present observation of data.
+func observed(data []byte) observation {
+	return observation{present: true, size: int64(len(data)), version: digest(data)}
 }
 
 // observations is the in-memory prior-observation record behind the
@@ -63,18 +71,68 @@ func (record *observations) clear() {
 
 func digest(data []byte) version { return sha256.Sum256(data) }
 
-// digestFile hashes the complete current content of path.
-func digestFile(path string) (version, error) {
+// digestBufferBytes is the read size between cancellation checks.
+const digestBufferBytes = 64 << 10
+
+// digestFile hashes the complete current content of path, calling stop
+// before every read so a caller can cancel hashing a large file.
+func digestFile(path string, stop func() error) (version, error) {
 	reader, err := openFile(path)
 	if err != nil {
 		return version{}, err
 	}
 	defer func() { _ = reader.Close() }() // read-only; close cannot lose data
 	hasher := sha256.New()
-	if _, err := io.Copy(hasher, reader); err != nil {
-		return version{}, err
+	buffer := make([]byte, digestBufferBytes)
+	for {
+		if err := stop(); err != nil {
+			return version{}, err
+		}
+		count, err := reader.Read(buffer)
+		_, _ = hasher.Write(buffer[:count]) // hash writes never fail
+		if errors.Is(err, io.EOF) {
+			return version(hasher.Sum(nil)), nil
+		}
+		if err != nil {
+			return version{}, err
+		}
 	}
-	return version(hasher.Sum(nil)), nil
+}
+
+// pathLocks serializes guarded check-and-publish per target path, so a slow
+// verification of one file never blocks writes or edits of others.
+type pathLocks struct {
+	mu   sync.Mutex
+	held map[string]*pathLock
+}
+
+type pathLock struct {
+	sync.Mutex
+	users int
+}
+
+// lock acquires path's lock and returns its release.
+func (locks *pathLocks) lock(path string) func() {
+	locks.mu.Lock()
+	if locks.held == nil {
+		locks.held = map[string]*pathLock{}
+	}
+	entry := locks.held[path]
+	if entry == nil {
+		entry = &pathLock{}
+		locks.held[path] = entry
+	}
+	entry.users++
+	locks.mu.Unlock()
+	entry.Lock()
+	return func() {
+		entry.Unlock()
+		locks.mu.Lock()
+		if entry.users--; entry.users == 0 {
+			delete(locks.held, path)
+		}
+		locks.mu.Unlock()
+	}
 }
 
 // errNotRead and errStale carry upstream's model-facing remedies for the two

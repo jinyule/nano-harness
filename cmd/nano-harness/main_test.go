@@ -257,9 +257,9 @@ func TestComposition_MatchesUpstreamBaseTools(t *testing.T) {
 func TestRunAndParsing(t *testing.T) {
 	restoreMainHooks(t)
 	root := t.TempDir()
-	home := t.TempDir()
+	home, configRoot := t.TempDir(), t.TempDir()
 	currentWorkingDirectory = func() (string, error) { return root, nil }
-	userConfigDirectory = func() (string, error) { return root, nil }
+	userConfigDirectory = func() (string, error) { return configRoot, nil }
 	userHomeDirectory = func() (string, error) { return home, nil }
 	readRandom = func(data []byte) (int, error) {
 		for index := range data {
@@ -285,7 +285,7 @@ func TestRunAndParsing(t *testing.T) {
 	if err != nil || !config.create || config.sessionID != "session-fixed" || config.maxSteps != 4 {
 		t.Fatalf("config=%#v err=%v", config, err)
 	}
-	if config.skillsDir != filepath.Join(root, "nano-harness", "skills") || config.agentsSkillsDir != filepath.Join(home, ".agents", "skills") {
+	if config.skillsDir != filepath.Join(configRoot, "nano-harness", "skills") || config.spillRoot != filepath.Join(configRoot, "nano-harness", "spill") || config.agentsSkillsDir != filepath.Join(home, ".agents", "skills") {
 		t.Fatalf("default skill roots = %q, %q", config.skillsDir, config.agentsSkillsDir)
 	}
 	relative, err := filepath.Abs(filepath.Join("relative", "skills"))
@@ -462,7 +462,7 @@ func TestRunTUI_MapsParseComposeLifecycleRunAndShutdown(t *testing.T) {
 func TestNormalizeConfig_ContainsEveryPathBoundary(t *testing.T) {
 	restoreMainHooks(t)
 	root := t.TempDir()
-	base := applicationConfig{workspaceRoot: root, sessionRoot: filepath.Join(root, "sessions"), spillRoot: filepath.Join(root, "spill"), settingsPath: filepath.Join(root, "settings"), credentialPath: filepath.Join(root, "credentials"), skillsDir: filepath.Join(root, "skills"), agentsSkillsDir: filepath.Join(root, "agents-skills"), sessionID: "session", maxSteps: 1}
+	base := applicationConfig{workspaceRoot: root, sessionRoot: filepath.Join(root, "sessions"), spillRoot: filepath.Join(t.TempDir(), "spill"), settingsPath: filepath.Join(root, "settings"), credentialPath: filepath.Join(root, "credentials"), skillsDir: filepath.Join(root, "skills"), agentsSkillsDir: filepath.Join(root, "agents-skills"), sessionID: "session", maxSteps: 1}
 	failure := errors.New("failure")
 	for _, field := range []*string{&base.spillRoot, &base.skillsDir} {
 		saved := *field
@@ -641,5 +641,60 @@ func TestRunTUI_FailsEarlyWithoutRipgrep(t *testing.T) {
 	code := runTUI(context.Background(), nil, strings.NewReader(""), io.Discard, &stderr, dependencies{})
 	if code != 1 || !strings.Contains(stderr.String(), "configure TUI: ripgrep is unavailable: rg was not found on PATH; install ripgrep 15.0.0 or newer") {
 		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+}
+
+// TestNormalizeConfig_KeepsTheSpillRootOutsideTheWorkspace proves the spill
+// root and the workspace may not contain each other, judged after links are
+// resolved and before either path needs to exist.
+func TestNormalizeConfig_KeepsTheSpillRootOutsideTheWorkspace(t *testing.T) {
+	restoreMainHooks(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceRoot, outside := filepath.Join(base, "home"), filepath.Join(base, "outside")
+	for _, dir := range []string{filepath.Join(workspaceRoot, ".config"), outside} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(workspaceRoot, ".config"), filepath.Join(outside, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	config := func(spill string) applicationConfig {
+		return applicationConfig{
+			workspaceRoot: workspaceRoot, sessionRoot: filepath.Join(outside, "sessions"), spillRoot: spill,
+			settingsPath: filepath.Join(outside, "settings"), credentialPath: filepath.Join(outside, "credentials"),
+			skillsDir: filepath.Join(outside, "skills"), agentsSkillsDir: filepath.Join(outside, "agents"), sessionID: "session", maxSteps: 1,
+		}
+	}
+	for _, test := range []struct {
+		name, spill string
+		allowed     bool
+	}{
+		{"inside, not yet created", filepath.Join(workspaceRoot, ".config", "nano-harness", "spill"), false},
+		{"the workspace itself", workspaceRoot, false},
+		{"linked into the workspace", filepath.Join(outside, "alias", "nano-harness", "spill"), false},
+		{"containing the workspace", base, false},
+		{"sibling", filepath.Join(outside, "spill"), true},
+		{"sibling with a shared prefix", workspaceRoot + "-spill", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := normalizeConfig(config(test.spill))
+			if test.allowed != (err == nil) || !test.allowed && !strings.Contains(err.Error(), "spill root") {
+				t.Fatalf("normalizeConfig(%s) = %v", test.spill, err)
+			}
+		})
+	}
+	failure := errors.New("failure")
+	evaluateLinks = func(path string) (string, error) {
+		if path == workspaceRoot {
+			return path, nil
+		}
+		return "", failure
+	}
+	if _, err := normalizeConfig(config(filepath.Join(outside, "spill"))); !errors.Is(err, failure) {
+		t.Fatalf("spill link failure = %v", err)
 	}
 }

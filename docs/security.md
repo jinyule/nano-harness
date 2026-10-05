@@ -75,7 +75,7 @@
 | `glob` | ripgrep 的完整 stdout 最多 20,000,000 字节，超出即失败；每次调用 30 s；内联最多 100 个路径 |
 | `grep` | ripgrep 正则；`--json` 完整输出最多 20,000,000 字节，超出即失败；每次调用 30 s；内联最多 250 个匹配，每行预览 2000 字节 |
 
-先读后写保护按会话记录 `read` 与 `read_image` 观察到的内容摘要，`write`/`edit` 在审批前无副作用地比较一次当前内容，并在执行点、进程内互斥锁下再比较一次；未读、已删除或已变化的目标按上游文案拒绝。它防止模型覆盖自己没看过的内容，不是授权机制：观察状态不持久化，delegated child 是独立会话，规则见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md)。
+先读后写保护按会话记录 `read` 与 `read_image` 观察到的内容摘要，`write`/`edit` 在审批前无副作用地比较一次当前内容，并在执行点、按目标路径划分的进程内锁下再比较一次（大小变化直接判定为已变化，大文件的摘要可取消）；未读、已删除或已变化的目标按上游文案拒绝。它防止模型覆盖自己没看过的内容，不是授权机制：观察状态不持久化，delegated child 是独立会话，规则见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md)。
 
 这些检查约束 harness 自身，不宣称抵御同一用户下主动制造 TOCTOU 的恶意进程。需要更强对手模型时应使用独立容器/VM 或基于 descriptor 的安全打开，并新增 ADR。
 
@@ -93,6 +93,8 @@ skill 正文是交给模型的指令。项目根 `<project>/.nano-harness/skills
 ## Spill 文件
 
 超出内联预算的工具结果和 `glob`/`grep` 的完整结果保存在 `--spill-root` 下：
+
+- spill 根目录与 workspace 不得互相包含（对 spill 根目录已存在的最长前缀解析链接后判断），否则启动失败，因此 spill 文件不会出现在 `glob`/`grep` 结果中，也不能被 `write`、`edit` 或 sandbox 内的 `bash` 改写。
 
 - 根目录为 `0700`，可以是链接但解析后必须是 owner-only 目录；workspace 分区与会话目录为 `0700` 的真实目录，分区是链接或权限过宽时启动失败。
 - 文件名是随机前缀加只含 `[A-Za-z0-9._-]` 的名称提示，以 `O_EXCL`、`0600` 创建，已存在的条目（包括预置链接）一律拒绝；提交前 `fsync`，失败删除部分文件；单个文件最多 64 MiB。

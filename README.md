@@ -72,7 +72,7 @@ TUI 使用 Bubble Tea v2、Lip Gloss v2 和 Bubbles v2，并作为可回收插�
 
 长行按终端列宽换行，窗口缩放时重新布局，支持 bracketed paste。模型用 `todo_write` 记录计划后，输入区上方显示当前清单，下一轮对话开始时清除。用鼠标滚轮、方向键、Page Up/Page Down 或 Ctrl+U/Ctrl+D 浏览 transcript；浏览历史时新输出保留当前位置，滚到底部后恢复跟随。普通文字输入不会滚动 transcript。
 
-会话默认保存在用户配置目录下的 `nano-harness/sessions`，账户和设置分别保存在同目录的 `credentials.yaml` 与 `settings.yaml`，放不进模型上下文的完整工具输出保存在 `nano-harness/spill`（30 天后在启动时清理）。这些文件使用 owner-only 权限。可以用 `--session ID` 恢复同一会话，用 `--session-root DIR`、`--spill-root DIR`、`--credentials FILE` 和 `--settings FILE` 改变位置。已有会话的 composition fingerprint 必须与 workspace 和工具/会话语义一致，否则拒绝恢复。
+会话默认保存在用户配置目录下的 `nano-harness/sessions`，账户和设置分别保存在同目录的 `credentials.yaml` 与 `settings.yaml`，放不进模型上下文的完整工具输出保存在 `nano-harness/spill`（30 天后在启动时清理）。这些文件使用 owner-only 权限。spill 目录不能位于 workspace 内（例如以 home 目录作为 `--root` 时），否则启动失败，需要另行指定 `--spill-root`。可以用 `--session ID` 恢复同一会话，用 `--session-root DIR`、`--spill-root DIR`、`--credentials FILE` 和 `--settings FILE` 改变位置。已有会话的 composition fingerprint 必须与 workspace 和工具/会话语义一致，否则拒绝恢复。
 
 设置采用默认值与稀疏用户 YAML 合并，并支持运行期热重载。可配置 route、三个 provider 的 HTTPS/loopback endpoint、模型目录、每个模型的可选 `effort`、retry、compaction 和 web 检索 route；无效编辑不会替换最后一个有效快照。`effort` 在 OpenAI Responses、OpenAI compatible Chat Completions 和 Anthropic Messages 中映射为各自协议字段，并在不支持的取值上失败。产品代码不会读取或强制任何订阅配额，模型请求受 provider 账户自身的服务限制约束。
 

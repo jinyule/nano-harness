@@ -118,7 +118,7 @@ func retainInline(ctx context.Context, invocation Invocation, tool, text string)
 	if estimateTokens(text) <= spillInlineTokens {
 		return text
 	}
-	ref, err := invocation.SaveText(ctx, tool+".txt", text)
+	ref, err := invocation.SaveText(ctx, spillName(tool), text)
 	if err != nil {
 		return text
 	}
@@ -127,6 +127,14 @@ func retainInline(ctx context.Context, invocation Invocation, tool, text string)
 		return text
 	}
 	return preview
+}
+
+// spillName is the artifact name hint for a tool's result: the tool name
+// plus ".txt", with the name cut so the hint stays within the 64-character
+// limit stores apply. Tool names are ASCII, so the cut is byte-safe.
+func spillName(tool string) string {
+	const limit, suffix = 64, ".txt"
+	return tool[:min(len(tool), limit-len(suffix))] + suffix
 }
 
 // spillPreview keeps the largest head and tail that fit budget after
