@@ -87,7 +87,8 @@ spill 与先读后写另有专门证据：预览算法用上游 retention 的 Py
 - JSONL：创建、append/fsync、close/reopen、list/inspect、连续 sequence、全部非法 transition、unknown field/version、torn line、权限、composition mismatch、writer lock、I/O rollback 和 interrupted-tail repair。`todo/write` 另覆盖缺失 call、跨 step/turn、同一 call 重复写入、result 之后写入、call ID 复用，以及中断修复后计划仍可从日志投影。fork 种子覆盖与 header 一次写入、事件行与 parent 逐字节相同、恢复时的自有事件边界，以及非连续、schema 非法、turn 未闭合、超出单 record 或单 session 上限的种子被拒且不留文件。
 - settings：defaults + sparse overlay、strict validation、optimistic update、owner-only atomic persist、cross-process lock、external hot reload 与 invalid edit 的 last-good 保留。
 - credentials：环境 fallback、owner-only strict YAML、serialized modify/refresh/delete、symlink 与 unsafe permission、atomic write failure，不在错误中泄露值。
-- images：JPEG/PNG decode、像素/字节/尺寸限制、缩放、重编码、digest/base64、取消、非法文件和 provider vision mapping。
+- images：PNG/JPEG/WebP/GIF decode（GIF 取第一帧，透明像素合成到白色并从解码后的 JPEG 像素验证）、像素/字节/尺寸限制与对应的 `session.ErrImage*` 分类、缩放、重编码、digest/base64、取消、非法文件和 provider vision mapping。
+- 多模态工具结果：`session` 校验覆盖错误结果带图、digest 不符和 clone 隔离；runtime 证明图片结果绕过 spill、携带本 step route；`read_image` 经真实 tool runtime 与真实临时目录覆盖 route 门禁（无 route、文本模型，均不触达规范化）、扩展名与签名矩阵（含 dotfile、无扩展名、`foo.`）、不存在/目录/越界/超限/读取中增长、规范化拒绝的三类文案、观察记录后 `write` 可替换、信封与缩放倍数（`toFixed(2)` 的 1/8 平局）以及两个调用的并发重叠。provider 用 loopback server 比较三种协议的工具结果图片请求字节、文本模型在网络调用前拒绝，以及预算投影（数量、字节、同一消息的多张图片、只含图片的结果、输入不被修改）。
 
 ## TUI 与真实 cmd
 
@@ -101,9 +102,11 @@ TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event f
 
 `TestComposition_SkillCatalogToolAndGesture` 经真实 composition 和 loopback provider 证明：第一次请求带有目录且不含禁止模型调用的 skill 和任何正文，模型调用 `skill` 后下一次请求带有完整 `<skill_content>`，运行中新增的 skill 在下一 turn 产生替换目录，`/name` 注入 user-only skill，重启进程后从磁盘日志推导目录而不重复发布。
 
+`TestComposition_ReadImageEndToEnd` 经真实 CLI config、settings 文件和 composition 让 loopback 模型对 workspace 中 3000×1000 的 PNG 调用 `read_image`：从磁盘 transcript 断言结果信封（路径、规范化字节数、缩放倍数）、`image` 字段的 2048×682 JPEG 与 SHA-256，并比较下一次 provider 请求中 `function_call_output` 的 `input_text`/`input_image` 数组；随后以新 composition 恢复同一会话，证明 replay 请求携带同一张图片。`TestComposition_ReadImageRefusesTextOnlyModels` 证明模型未声明 vision 时结果是门禁错误、日志与请求都没有图片。
+
 命令级 failure matrix 覆盖路径归一化、create/resume、每个 constructor、runtime start、TUI run、shutdown、usage/version output 和 write failure；PATH 中没有 `rg` 时，`tui` 以退出码 1 结束并给出安装提示。发布 smoke 必须运行编译后的 `bin/nano-harness`，不能以 `go run` 或直接调用内部函数替代。
 
-`make tui-e2e` 是独立的本机 PTY 验证入口，需要 Python 3、Unix 和 PATH 中的 ripgrep；脚本给被测二进制的最小 PATH 加上当前 `rg` 所在目录。`scripts/tui-e2e.py` 只替换远端模型，在 loopback 的动态端口提供 Responses SSE；TUI、composition、工具、审批、sandbox 和 session 均走编译后的真实 `cmd`。脚本从终端发送任务、审批和提问答案，确认终端显示 `todo_write` 计划，再独立检查根会话的十八次工具调用与 `todo/write` 快照（含两题 `ask_user_question` 的预填推荐项与自由回答，`/plan` 后一次真实 TUI 批准的 `exit_plan_mode`，以及 `/goal` 创建目标后 driver 自动轮次中的 `get_goal` 与 `update_goal` complete、两条 `goal/change`、轮次与收尾指令消息和状态栏）、`plan/mode` 记录与切换提示、规划段落只出现在批准前的请求中、前台 spawn 与 fork 两个子会话的目录记录、descriptor、`never` 策略与 child 的 `read`、`write`/`edit`/两次 `bash` 的四次审批决定、实际文件字节、长行末尾、打断、重启 replay（后续 turn 已清除计划）、私有权限（含 `--spill-root` 的 `0700`）和退出后的 lock 清理。其中一个后台 `bash` job 在第一个 turn 结束后才完成，终端显示 `job>` 通知，通知开启的 turn 用 `job_output` 读到输出。PTY 场景里 `list_agents` 不列出已回收的 one-shot child，`send_message` 写给目录外 id 返回错误，`interrupt_agent` 对不存在的目标是空操作；后台 continuable 生命周期由上面的 assembled 测试与 subagent 包测试覆盖。
+`make tui-e2e` 是独立的本机 PTY 验证入口，需要 Python 3、Unix 和 PATH 中的 ripgrep；脚本给被测二进制的最小 PATH 加上当前 `rg` 所在目录。`scripts/tui-e2e.py` 只替换远端模型，在 loopback 的动态端口提供 Responses SSE；TUI、composition、工具、审批、sandbox 和 session 均走编译后的真实 `cmd`。脚本从终端发送任务、审批和提问答案，确认终端显示 `todo_write` 计划和 `read_image` 结果的图片摘要，再独立检查根会话的十九次工具调用（`read_image` 结果带规范化 JPEG，且下一次请求携带同一张图片）与 `todo/write` 快照（含两题 `ask_user_question` 的预填推荐项与自由回答，`/plan` 后一次真实 TUI 批准的 `exit_plan_mode`，以及 `/goal` 创建目标后 driver 自动轮次中的 `get_goal` 与 `update_goal` complete、两条 `goal/change`、轮次与收尾指令消息和状态栏）、`plan/mode` 记录与切换提示、规划段落只出现在批准前的请求中、前台 spawn 与 fork 两个子会话的目录记录、descriptor、`never` 策略与 child 的 `read`、`write`/`edit`/两次 `bash` 的四次审批决定、实际文件字节、长行末尾、打断、重启 replay（后续 turn 已清除计划）、私有权限（含 `--spill-root` 的 `0700`）和退出后的 lock 清理。其中一个后台 `bash` job 在第一个 turn 结束后才完成，终端显示 `job>` 通知，通知开启的 turn 用 `job_output` 读到输出。PTY 场景里 `list_agents` 不列出已回收的 one-shot child，`send_message` 写给目录外 id 返回错误，`interrupt_agent` 对不存在的目标是空操作；后台 continuable 生命周期由上面的 assembled 测试与 subagent 包测试覆盖。
 
 TUI 回归测试还覆盖 v2 粘贴、按键释放、secret 遮罩、小窗口布局（含计划面板在 18×8 到 80×24 窗口中的行数上限、溢出窗口和 transcript 保留行）、计划的初始 replay、实时替换与下一 turn 清除，以及 Scope 关闭正在运行的 terminal、取消并等待登录命令和拒绝迟到命令。PTY 在两种窗口尺寸下使用 bracketed paste 输入任务。TUI 回归测试证明流式输出与系统行不会串接、reasoning 不隐藏最终回答、中文长行可见、历史浏览保留位置，以及键盘输入和分页/鼠标滚动各自生效。断点调试另按[调试步骤](debugging.md)验证；直接 IDE 与 Remote 各自需要真实断点、调用栈和变量证据，协议 fixture 不等于远端模型 live 证据。
 
@@ -148,7 +151,7 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 
 ## 定向 mutation 与断言有效性
 
-`make mutation` 执行 `scripts/mutation-cases.json` 中十九个已审查回归：Scope cleanup 顺序、approval never、会话序号、事件因果、read 字节上限、路径逃逸、写入跨 symlink、已提交输出后的 retry、web 抓取公网地址校验、同源重定向限制、后台 job 的 owner 隔离、delegated 提问拒绝、`plan/mode` 只在 step 边界、未读文件被 `write` 覆盖、spill 分区内预置链接、`send_message` 的直接父子授权、`interrupt_agent` 的后代授权、目标的人类权限排除 delegated agent，以及目标轮次必须属于当前 revision。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
+`make mutation` 执行 `scripts/mutation-cases.json` 中二十一个已审查回归：Scope cleanup 顺序、approval never、会话序号、事件因果、read 字节上限、路径逃逸、写入跨 symlink、已提交输出后的 retry、web 抓取公网地址校验、同源重定向限制、后台 job 的 owner 隔离、delegated 提问拒绝、`plan/mode` 只在 step 边界、未读文件被 `write` 覆盖、spill 分区内预置链接、`send_message` 的直接父子授权、`interrupt_agent` 的后代授权、目标的人类权限排除 delegated agent、目标轮次必须属于当前 revision、`read_image` 的图片输入门禁，以及 provider 对工具结果图片的 vision 拒绝。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
 
 执行器使用 Python 3 标准库，在 Unix 私有临时目录复制当前 cmd/internal、go.mod/go.sum（包含未提交源码与测试），拒绝源 symlink；不在工作树变异，不运行用户数据，不复用历史结果。每项先运行明确选择的真实测试且至少一个测试通过，再变异、独立编译、以 `-count=1` 重跑。只有 Go JSON 输出中的具名测试失败可认定 killed；build-error、timeout、infrastructure-error、no-tests、baseline failure、stale-site 和 survived 全部失败。当前列举的每个 site 都执行，不依赖 coverage 筛选，因此没有“缺失 coverage 就跳过”的成功路径。空集合、重复 ID 或找不到唯一替换位置均拒绝。超时终止并等待整个测试进程组；临时树最终清理。
 
@@ -166,13 +169,15 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 
 `testdata/session-v2-skill.jsonl` 固定目录、`/name` 注入和 `skill` call/result 作为普通 v2 `user/message` 的形态。`TestSessionV2Skill_FrozenContract` 用同样的读取、投影和独立 writer 比较，并证明恢复后的日志不会重复发布同一目录、删除全部 skill 时产生空目录、已消费的 `/name` 不再待处理；`TestSessionV2Skill_RejectsMisplacedContext` 拒绝 turn 外、错位 step、空内容和来源多余字段的变体。
 
+`testdata/session-v2-image.jsonl` 固定带规范化 JPEG 的 `read_image` call/result。`TestSessionV2Image_FrozenContract` 用同样的读取、投影和独立 writer 比较；`TestSessionV2Image_RejectsChangedContract` 拒绝图片中的未知字段、digest 不符、不支持的 media type、宽度为 0 或超过 4096、非法 base64、空名称和携带图片的错误结果。
+
 修改持久化字段、枚举、顺序、版本或恢复语义时，PR 明确选择同版本兼容、严格拒绝旧版或迁移，给出样本与因果/事务证据并更新架构和 ADR。固定样本不是全部记录类型的 schema catalog，也不代替现有图片、compaction、subagent、错误恢复和 I/O rollback 测试。CI 不重写样本，nano v2 严格拒绝旧格式的承诺不变。
 
 ## 模型可见工具目录
 
 `cmd/nano-harness/testdata/tool-catalog.json` 冻结真实 composition 的全部工具定义。`TestComposition_ToolCatalogGolden` 经 `cmd` 跑完一轮，从磁盘 transcript 的第一个 `request/header` 取出 tools，逐项比较名称、描述和紧凑化后的参数 JSON（保留键序），并确认 loopback provider 收到的 wire 定义与 header 相同。fixture 是人工审查的期望值，CI 只比较；有意变化时手工修改 fixture 并在同一变更中提升 composition 版本。
 
-`cmd/nano-harness/testdata/upstream-base-tools.json` 记录上游 Base 组合中 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`skill`、`todo_write`、`web_search`、`web_fetch`、`exit_plan_mode`、`subagent`、`subagent_fork`、`send_message`、`interrupt_agent`、`list_agents`、`create_goal`、`get_goal`、`update_goal` 和 Web preset 的 `ask_user_question` 定义，以及 Base 规划段落与目标段落原文（`prompt_sections`），标注上游提交、来源文件和组合推导，测试不读取 submodule。`TestComposition_MatchesUpstreamBaseTools` 要求同名工具逐字节一致；规划模式与目标 assembled 测试要求请求中的规划段落与目标段落和 fixture 原文一致。更新参考指针时按 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md) 重新推导这份数据。
+`cmd/nano-harness/testdata/upstream-base-tools.json` 记录上游 Base 组合中 `read`、`read_image`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`skill`、`todo_write`、`web_search`、`web_fetch`、`exit_plan_mode`、`subagent`、`subagent_fork`、`send_message`、`interrupt_agent`、`list_agents`、`create_goal`、`get_goal`、`update_goal` 和 Web preset 的 `ask_user_question` 定义，以及 Base 规划段落与目标段落原文（`prompt_sections`），标注上游提交、来源文件和组合推导，测试不读取 submodule。`TestComposition_MatchesUpstreamBaseTools` 要求同名工具逐字节一致；规划模式与目标 assembled 测试要求请求中的规划段落与目标段落和 fixture 原文一致。更新参考指针时按 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md) 重新推导这份数据。
 
 ## 性能观测与预算
 

@@ -3,11 +3,13 @@ package image
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
 	stdimage "image"
 	"image/color"
+	"image/gif"
 	"image/png"
 	"io"
 	"os"
@@ -150,25 +152,28 @@ func TestNormalizerLifecycleAndFileValidation(t *testing.T) {
 
 func TestNormalizeBytesFormatsScalingAndFailures(t *testing.T) {
 	valid := encodedPNG(t, 4, 3)
-	if _, err := normalizeBytes(context.Background(), "image.png", []byte("bad")); !errors.Is(err, ErrInvalidImage) {
+	if _, _, err := normalizeBytes(context.Background(), "image.png", []byte("bad")); !errors.Is(err, ErrInvalidImage) || !errors.Is(err, session.ErrImageFormat) {
 		t.Fatalf("bad format=%v", err)
 	}
-	if _, err := normalizeBytes(context.Background(), "large.png", pngHeader(4001, 4000)); !errors.Is(err, ErrInvalidImage) {
-		t.Fatalf("pixel limit=%v", err)
+	if _, source, err := normalizeBytes(context.Background(), "large.png", pngHeader(4001, 4000)); !errors.Is(err, ErrInvalidImage) || !errors.Is(err, session.ErrImagePixels) || source != stdimage.Pt(4001, 4000) {
+		t.Fatalf("pixel limit=%v source=%v", err, source)
 	}
-	if _, err := normalizeBytes(context.Background(), "truncated.png", pngHeader(1, 1)); !errors.Is(err, ErrInvalidImage) {
+	if _, _, err := normalizeBytes(context.Background(), "truncated.png", pngHeader(1, 1)); !errors.Is(err, ErrInvalidImage) || !errors.Is(err, session.ErrImageFormat) {
 		t.Fatalf("decode failure=%v", err)
+	}
+	if _, _, err := normalizeBytes(context.Background(), "image.bmp", append([]byte("BM"), make([]byte, 64)...)); !errors.Is(err, session.ErrImageFormat) {
+		t.Fatalf("unregistered format=%v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := normalizeBytes(ctx, "image.png", valid); !errors.Is(err, context.Canceled) {
+	if _, _, err := normalizeBytes(ctx, "image.png", valid); !errors.Is(err, context.Canceled) {
 		t.Fatalf("decode cancellation=%v", err)
 	}
-	wide, err := normalizeBytes(context.Background(), "wide.png", encodedPNG(t, 2200, 2))
-	if err != nil || wide.Width != maxDimension || wide.Height != 1 {
-		t.Fatalf("wide=%#v err=%v", wide, err)
+	wide, source, err := normalizeBytes(context.Background(), "wide.png", encodedPNG(t, 2200, 2))
+	if err != nil || wide.Width != maxDimension || wide.Height != 1 || source != stdimage.Pt(2200, 2) {
+		t.Fatalf("wide=%#v source=%v err=%v", wide, source, err)
 	}
-	tall, err := normalizeBytes(context.Background(), "tall.png", encodedPNG(t, 2, 2200))
+	tall, _, err := normalizeBytes(context.Background(), "tall.png", encodedPNG(t, 2, 2200))
 	if err != nil || tall.Width != 1 || tall.Height != maxDimension {
 		t.Fatalf("tall=%#v err=%v", tall, err)
 	}
@@ -179,7 +184,7 @@ func TestNormalizeBytesFormatsScalingAndFailures(t *testing.T) {
 	originalEncode := encodeImage
 	t.Cleanup(func() { encodeImage = originalEncode })
 	encodeImage = func(stdimage.Image, int) ([]byte, error) { return nil, errors.New("encode") }
-	if _, err := normalizeBytes(context.Background(), "image.png", valid); !errors.Is(err, ErrInvalidImage) {
+	if _, _, err := normalizeBytes(context.Background(), "image.png", valid); !errors.Is(err, ErrInvalidImage) {
 		t.Fatalf("encode error=%v", err)
 	}
 	largeSource := encodedPNG(t, 1000, 1000)
@@ -192,11 +197,11 @@ func TestNormalizeBytesFormatsScalingAndFailures(t *testing.T) {
 		}
 		return nil, errors.New("scaled encode")
 	}
-	if _, err := normalizeBytes(context.Background(), "image.png", largeSource); !errors.Is(err, ErrInvalidImage) {
+	if _, _, err := normalizeBytes(context.Background(), "image.png", largeSource); !errors.Is(err, ErrInvalidImage) {
 		t.Fatalf("scaled encode error=%v", err)
 	}
 	encodeImage = func(stdimage.Image, int) ([]byte, error) { return oversized, nil }
-	if _, err := normalizeBytes(context.Background(), "image.png", largeSource); !errors.Is(err, ErrInvalidImage) {
+	if _, _, err := normalizeBytes(context.Background(), "image.png", largeSource); !errors.Is(err, ErrInvalidImage) || !errors.Is(err, session.ErrImageBytes) {
 		t.Fatalf("oversized normalized image=%v", err)
 	}
 	calls = 0
@@ -207,11 +212,124 @@ func TestNormalizeBytesFormatsScalingAndFailures(t *testing.T) {
 		}
 		return encodeJPEG(source, quality)
 	}
-	if attachment, err := normalizeBytes(context.Background(), "image.png", largeSource); err != nil || attachment.Width >= 1000 {
-		t.Fatalf("scaled attachment=%#v err=%v", attachment, err)
+	if attachment, source, err := normalizeBytes(context.Background(), "image.png", largeSource); err != nil || attachment.Width >= 1000 || source != stdimage.Pt(1000, 1000) {
+		t.Fatalf("scaled attachment=%#v source=%v err=%v", attachment, source, err)
 	}
 	encodeImage = originalEncode
-	if _, err := normalizeBytes(context.Background(), strings.Repeat("n", 256), valid); !errors.Is(err, ErrInvalidImage) {
+	if _, _, err := normalizeBytes(context.Background(), strings.Repeat("n", 256), valid); !errors.Is(err, ErrInvalidImage) {
 		t.Fatalf("invalid normalized metadata=%v", err)
+	}
+}
+
+// alphaWebP is a 3x2 lossless WebP whose top-left pixel is transparent and
+// whose other pixels are opaque RGB(200,30,30), produced by cwebp -lossless.
+const alphaWebP = "UklGRiAAAABXRUJQVlA4TBQAAAAvAkAAEA8wHoM8HvMf8LjBQUT/Qw=="
+
+func decodeNormalized(t *testing.T, normalized session.Image) stdimage.Image {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString(normalized.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, format, err := stdimage.Decode(bytes.NewReader(data))
+	if err != nil || format != "jpeg" {
+		t.Fatalf("normalized bytes format=%q err=%v", format, err)
+	}
+	return decoded
+}
+
+func TestNormalizeBytes_AcceptsWebPAndFirstGIFFrameOnWhite(t *testing.T) {
+	webp, err := base64.StdEncoding.DecodeString(alphaWebP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized, source, err := normalizeBytes(context.Background(), "alpha.webp", webp)
+	if err != nil || normalized.MediaType != "image/jpeg" || normalized.Width != 3 || normalized.Height != 2 || source != stdimage.Pt(3, 2) {
+		t.Fatalf("webp=%#v source=%v err=%v", normalized, source, err)
+	}
+	// The transparent corner becomes white instead of the black that
+	// encoding premultiplied pixels would produce.
+	if red, green, blue, _ := decodeNormalized(t, normalized).At(0, 0).RGBA(); red>>8 < 200 || green>>8 < 200 || blue>>8 < 200 {
+		t.Fatalf("transparent corner=(%d,%d,%d)", red>>8, green>>8, blue>>8)
+	}
+
+	// JPEG subsampling blends neighboring pixels, so the frames use 16x16
+	// halves and the assertions sample well inside each half.
+	palette := color.Palette{color.Transparent, color.RGBA{R: 255, A: 255}, color.RGBA{B: 255, A: 255}}
+	first := stdimage.NewPaletted(stdimage.Rect(0, 0, 16, 16), palette)
+	second := stdimage.NewPaletted(stdimage.Rect(0, 0, 16, 16), palette)
+	for y := range 16 {
+		for x := range 16 {
+			if x < 8 {
+				first.SetColorIndex(x, y, 1)
+			}
+			second.SetColorIndex(x, y, 2)
+		}
+	}
+	var animation bytes.Buffer
+	if err := gif.EncodeAll(&animation, &gif.GIF{Image: []*stdimage.Paletted{first, second}, Delay: []int{0, 0}}); err != nil {
+		t.Fatal(err)
+	}
+	normalized, _, err = normalizeBytes(context.Background(), "anim.gif", animation.Bytes())
+	if err != nil || normalized.Width != 16 || normalized.Height != 16 {
+		t.Fatalf("gif=%#v err=%v", normalized, err)
+	}
+	pixels := decodeNormalized(t, normalized)
+	if red, _, blue, _ := pixels.At(3, 8).RGBA(); red>>8 < 200 || blue>>8 > 60 {
+		t.Fatalf("first frame pixel=(%d,_,%d)", red>>8, blue>>8)
+	}
+	if red, green, blue, _ := pixels.At(12, 8).RGBA(); red>>8 < 200 || green>>8 < 200 || blue>>8 < 200 {
+		t.Fatalf("transparent GIF pixel=(%d,%d,%d)", red>>8, green>>8, blue>>8)
+	}
+}
+
+// opaqueless lacks an Opaque method, so flatten must composite it.
+type opaqueless struct{ stdimage.Image }
+
+func TestFlatten_KeepsOpaqueSourcesAndCompositesTheRest(t *testing.T) {
+	opaque := stdimage.NewRGBA(stdimage.Rect(0, 0, 1, 1))
+	opaque.Set(0, 0, color.Black)
+	if flatten(opaque) != stdimage.Image(opaque) {
+		t.Fatal("opaque source was copied")
+	}
+	transparent := stdimage.NewNRGBA(stdimage.Rect(5, 5, 6, 6))
+	flattened := flatten(opaqueless{transparent})
+	if flattened.Bounds() != stdimage.Rect(0, 0, 1, 1) {
+		t.Fatalf("bounds=%v", flattened.Bounds())
+	}
+	if red, green, blue, alpha := flattened.At(0, 0).RGBA(); red != 0xffff || green != 0xffff || blue != 0xffff || alpha != 0xffff {
+		t.Fatalf("composited=(%d,%d,%d,%d)", red, green, blue, alpha)
+	}
+}
+
+func TestNormalizer_NormalizeBytesLifecycleAndBounds(t *testing.T) {
+	normalizer := New()
+	valid := encodedPNG(t, 3, 2)
+	if _, _, err := normalizer.NormalizeBytes(context.Background(), "x.png", valid); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("inactive=%v", err)
+	}
+	scope := &plugin.Scope{}
+	if err := normalizer.Start(context.Background(), scope); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := normalizer.NormalizeBytes(ctx, "x.png", valid); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled=%v", err)
+	}
+	for _, data := range [][]byte{nil, make([]byte, maxSourceBytes+1)} {
+		if _, _, err := normalizer.NormalizeBytes(context.Background(), "x.png", data); !errors.Is(err, ErrInvalidImage) || errors.Is(err, session.ErrImageFormat) {
+			t.Fatalf("source size %d=%v", len(data), err)
+		}
+	}
+	normalized, source, err := normalizer.NormalizeBytes(context.Background(), "x.png", valid)
+	if err != nil || normalized.Name != "x.png" || source != stdimage.Pt(3, 2) {
+		t.Fatalf("normalized=%#v source=%v err=%v", normalized, source, err)
+	}
+	if err := scope.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := normalizer.NormalizeBytes(context.Background(), "x.png", valid); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("closed=%v", err)
 	}
 }

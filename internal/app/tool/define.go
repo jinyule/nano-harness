@@ -45,6 +45,7 @@ const (
 type Invocation struct {
 	SessionID string
 	Cwd       string
+	Route     Route
 	Turn      uint64
 	Step      uint64
 	CallID    string
@@ -58,11 +59,21 @@ type Invocation struct {
 	spill SpillStore
 }
 
-// Result is the model-visible content of one successful execution. Text is
-// the only content kind today; richer content extends this type without
-// changing tools that only return text.
+// Route identifies the model whose response requested a batch. ImageInput
+// reports that this model declares image input, so a tool may return an
+// image it can inspect. The zero value is a caller without a model route.
+type Route struct {
+	Provider   string
+	Model      string
+	ImageInput bool
+}
+
+// Result is the model-visible content of one successful execution. Image is
+// an optional normalized image the model sees after Text; a result that
+// carries one keeps its text inline instead of entering the spill policy.
 type Result struct {
-	Text string
+	Text  string
+	Image *session.Image
 }
 
 // Text returns a text-only result.

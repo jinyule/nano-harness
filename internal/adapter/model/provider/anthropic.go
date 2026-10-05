@@ -26,8 +26,10 @@ type anthropicBlock struct {
 	Name      string           `json:"name,omitempty"`
 	Input     json.RawMessage  `json:"input,omitempty"`
 	ToolUseID string           `json:"tool_use_id,omitempty"`
-	Content   string           `json:"content,omitempty"`
-	IsError   bool             `json:"is_error,omitempty"`
+	// Content is a tool result's string, or text and image blocks when the
+	// result carries an image.
+	Content any  `json:"content,omitempty"`
+	IsError bool `json:"is_error,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -111,7 +113,7 @@ func (provider *Provider) anthropicRequest(model llm.ModelInfo, request llm.Requ
 		case node.Call != nil:
 			appendBlocks("assistant", anthropicBlock{Type: "tool_use", ID: node.Call.ID, Name: node.Call.Name, Input: node.Call.Arguments})
 		case node.Result != nil:
-			appendBlocks("user", anthropicBlock{Type: "tool_result", ToolUseID: node.Result.CallID, Content: node.Result.Output, IsError: node.Result.IsError})
+			appendBlocks("user", anthropicBlock{Type: "tool_result", ToolUseID: node.Result.CallID, Content: anthropicResultContent(node.Result), IsError: node.Result.IsError})
 		}
 	}
 	tools := make([]anthropicTool, len(request.Tools))
@@ -127,6 +129,21 @@ func (provider *Provider) anthropicRequest(model llm.ModelInfo, request llm.Requ
 		payload.OutputConfig = &anthropicOutputConfig{Effort: model.Effort}
 	}
 	return payload, nil
+}
+
+// anthropicResultContent places a tool-result image inside tool_result, after
+// its text, as upstream's Messages adapter does.
+func anthropicResultContent(result *session.ToolResult) any {
+	if result.Image == nil {
+		if result.Output == "" {
+			return nil
+		}
+		return result.Output
+	}
+	return []anthropicBlock{
+		{Type: "text", Text: resultText(result)},
+		{Type: "image", Source: &anthropicSource{Type: "base64", MediaType: result.Image.MediaType, Data: result.Image.Data}},
+	}
 }
 
 type anthropicEvent struct {

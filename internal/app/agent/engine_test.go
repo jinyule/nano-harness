@@ -336,6 +336,10 @@ func TestEngine_ExecutesToolsSteersAndNextTurn(t *testing.T) {
 	if seen := candidate.seen[0]; seen.Journal != appTool.Journal(journal) || seen.Turn != 1 || seen.Step != 1 || seen.CallID != "call-1" {
 		t.Fatalf("tool execution lost its session identity: %+v", seen)
 	}
+	// Tools see the route that requested them, including its image capability.
+	if route := candidate.seen[0].Route; route != (appTool.Route{Provider: "openai", Model: "gpt-5.6-luna", ImageInput: true}) {
+		t.Fatalf("tool execution route = %+v", route)
+	}
 	types := recordTypes(log.events)
 	for _, required := range []session.RecordType{session.RecordToolCall, session.RecordToolResult} {
 		if !slices.Contains(types, required) {

@@ -1,4 +1,4 @@
-// Package file provides the model-facing read, write, and edit tools for one
+// Package file provides the model-facing read, read_image, write, and edit tools for one
 // workspace. Definitions match the upstream Base file tools; paths stay
 // confined to the workspace and mutations never cross symbolic links.
 package file
@@ -51,18 +51,19 @@ var (
 type Provider struct {
 	runtime  *appTool.Runtime
 	root     workspace.Root
+	images   ImageNormalizer
 	observed observations
 	mutate   sync.Mutex
 }
 
 // New constructs an inert provider over a resolved workspace. A root widened
-// with WithReadOnly lets read open the spill partition; write and edit stay
-// inside the workspace.
-func New(runtime *appTool.Runtime, root workspace.Root) (*Provider, error) {
-	if runtime == nil || root.Path() == "" {
+// with WithReadOnly lets read and read_image open the spill partition; write
+// and edit stay inside the workspace. images normalizes read_image sources.
+func New(runtime *appTool.Runtime, root workspace.Root, images ImageNormalizer) (*Provider, error) {
+	if runtime == nil || root.Path() == "" || images == nil {
 		return nil, ErrInvalidConfig
 	}
-	return &Provider{runtime: runtime, root: root}, nil
+	return &Provider{runtime: runtime, root: root, images: images}, nil
 }
 
 // ID returns the stable plugin identity.
@@ -77,7 +78,7 @@ func (provider *Provider) Start(_ context.Context, scope *plugin.Scope) error {
 	}); err != nil {
 		return err
 	}
-	for _, candidate := range []*appTool.Tool{provider.readTool(), provider.writeTool(), provider.editTool()} {
+	for _, candidate := range []*appTool.Tool{provider.readTool(), provider.readImageTool(), provider.writeTool(), provider.editTool()} {
 		if err := provider.runtime.Register(candidate, scope); err != nil {
 			return err
 		}

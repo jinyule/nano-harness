@@ -59,6 +59,10 @@ func TestRecordValidate_AllKinds(t *testing.T) {
 	if err := (Record{Type: RecordUserMessage, Turn: 1, Message: imageMessage}).Validate(); err != nil {
 		t.Fatal(err)
 	}
+	imageResult := &ToolResult{CallID: "call", Output: "<type>image</type>", Image: testImage()}
+	if err := (Record{Type: RecordToolResult, Turn: 1, Step: 1, Result: imageResult}).Validate(); err != nil {
+		t.Fatal(err)
+	}
 	for _, outcome := range []TurnOutcome{OutcomeCanceled, OutcomeError, OutcomeStepLimit, OutcomeInterrupted} {
 		if err := (Record{Type: RecordTurnEnd, Turn: 1, Outcome: outcome}).Validate(); err != nil {
 			t.Fatal(err)
@@ -73,7 +77,7 @@ func TestRecordValidate_AllKinds(t *testing.T) {
 
 func TestSurfaceCloneAndText(t *testing.T) {
 	call := &ToolCall{ID: "call", Name: "tool", Arguments: json.RawMessage(`{}`)}
-	result := &ToolResult{CallID: "call", Output: "result"}
+	result := &ToolResult{CallID: "call", Output: "result", Image: testImage()}
 	events := []Event{
 		{Sequence: 1, Record: Record{Type: RecordUserMessage, Turn: 1, Message: textMessage(RoleUser, "old")}},
 		{Sequence: 2, Record: Record{Type: RecordAssistantMessage, Turn: 1, Step: 1, Message: textMessage(RoleAssistant, "answer")}},
@@ -92,13 +96,18 @@ func TestSurfaceCloneAndText(t *testing.T) {
 	}
 	copySurface := cloneSurface(surface)
 	copySurface[0].Message.Content[0].Text = "changed"
-	if Text(*surface[0].Message) != "summary" {
+	copySurface[2].Result.Image.Name = "changed"
+	if Text(*surface[0].Message) != "summary" || surface[2].Result.Image.Name != "x.jpg" {
 		t.Fatal("cloneSurface aliases source")
+	}
+	surface[2].Result.Image.Name = "folded"
+	if result.Image.Name != "x.jpg" {
+		t.Fatal("Surface aliases the committed result image")
 	}
 	if _, err := Surface([]Event{{Sequence: 1, Record: events[4].Record}}); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("missing shadow error=%v", err)
 	}
-	if !slices.Equal(cloneContent(nil), []ContentBlock(nil)) || cloneMessage(nil) != nil {
+	if !slices.Equal(cloneContent(nil), []ContentBlock(nil)) || cloneMessage(nil) != nil || cloneResult(nil) != nil {
 		t.Fatal("nil clones changed")
 	}
 }
@@ -142,6 +151,8 @@ func TestRecordValidateRejectsEveryInvalidShape(t *testing.T) {
 		"result shape":              {Type: RecordToolResult, Turn: 1, Step: 1},
 		"result call ID":            {Type: RecordToolResult, Turn: 1, Step: 1, Result: &ToolResult{}},
 		"result output":             {Type: RecordToolResult, Turn: 1, Step: 1, Result: &ToolResult{CallID: "call", Output: strings.Repeat("x", MaxTextBytes+1)}},
+		"result error image":        {Type: RecordToolResult, Turn: 1, Step: 1, Result: &ToolResult{CallID: "call", Output: "Error: x", IsError: true, Image: testImage()}},
+		"result image digest":       {Type: RecordToolResult, Turn: 1, Step: 1, Result: &ToolResult{CallID: "call", Output: "ok", Image: &Image{ID: "img", Name: "x.jpg", MediaType: "image/jpeg", Width: 1, Height: 1, SHA256: strings.Repeat("0", 64), Data: "eA=="}}},
 		"approval shape":            {Type: RecordApprovalAsked, Turn: 1, Step: 1},
 		"approval asked":            {Type: RecordApprovalAsked, Turn: 1, Step: 1, Approval: &ApprovalData{}},
 		"approval decided":          {Type: RecordApprovalDecided, Turn: 1, Step: 1, Approval: validApproval},
@@ -238,7 +249,7 @@ func TestCloneEventDetachesEveryMutableField(t *testing.T) {
 		Message:    &Message{Role: RoleUser, Source: MessageSource{Kind: "user"}, Content: []ContentBlock{{Type: ContentImage, Image: testImage()}}},
 		Chunk:      &AssistantChunk{Kind: ChunkText, Text: "x"},
 		Call:       &ToolCall{ID: "call", Name: "tool", Arguments: json.RawMessage(`{}`)},
-		Result:     &ToolResult{CallID: "call", Output: "ok"},
+		Result:     &ToolResult{CallID: "call", Output: "ok", Image: testImage()},
 		Header:     &RequestHeader{Provider: "p", Model: "m", Tools: []ToolDefinition{{Name: "tool", Parameters: json.RawMessage(`{}`)}}},
 		Usage:      &TokenUsage{InputTokens: 1},
 		Retry:      &RetryData{ID: "retry"},
@@ -252,6 +263,7 @@ func TestCloneEventDetachesEveryMutableField(t *testing.T) {
 	cloned.Record.Chunk.Text = "changed"
 	cloned.Record.Call.Arguments[0] = '['
 	cloned.Record.Result.Output = "changed"
+	cloned.Record.Result.Image.Name = "changed"
 	cloned.Record.Header.Tools[0].Parameters[0] = '['
 	cloned.Record.Usage.InputTokens = 2
 	cloned.Record.Retry.ID = "changed"
@@ -263,7 +275,7 @@ func TestCloneEventDetachesEveryMutableField(t *testing.T) {
 	if event.Record.Catalog.SessionID == "changed" {
 		t.Fatal("CloneEvent aliases the catalog entry")
 	}
-	if event.Record.Message.Content[0].Image.Name == "changed" || event.Record.Chunk.Text == "changed" || event.Record.Call.Arguments[0] == '[' || event.Record.Result.Output == "changed" || event.Record.Header.Tools[0].Parameters[0] == '[' || event.Record.Usage.InputTokens == 2 || event.Record.Retry.ID == "changed" || event.Record.Approval.ID == "changed" || event.Record.Compaction.ShadowedSeqs[0] == 2 || event.Record.Compaction.Summary[0].Image.Name == "changed" || event.Record.Subagent.Tools[0] == "changed" {
+	if event.Record.Message.Content[0].Image.Name == "changed" || event.Record.Chunk.Text == "changed" || event.Record.Call.Arguments[0] == '[' || event.Record.Result.Output == "changed" || event.Record.Result.Image.Name == "changed" || event.Record.Header.Tools[0].Parameters[0] == '[' || event.Record.Usage.InputTokens == 2 || event.Record.Retry.ID == "changed" || event.Record.Approval.ID == "changed" || event.Record.Compaction.ShadowedSeqs[0] == 2 || event.Record.Compaction.Summary[0].Image.Name == "changed" || event.Record.Subagent.Tools[0] == "changed" {
 		t.Fatal("CloneEvent aliases source")
 	}
 }

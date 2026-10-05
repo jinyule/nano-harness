@@ -82,7 +82,20 @@ func (provider *Provider) chatRequest(model llm.ModelInfo, request llm.Request) 
 	if request.System != "" {
 		messages = append(messages, chatMessage{Role: "system", Content: request.System})
 	}
+	// Chat Completions tool messages carry text only. Images from a run of
+	// consecutive results follow the run in one user message, as upstream's
+	// adapter sends them.
+	var resultImages []chatPart
+	flushImages := func() {
+		if len(resultImages) > 0 {
+			messages = append(messages, chatMessage{Role: "user", Content: append([]chatPart{{Type: "text", Text: toolImagesText}}, resultImages...)})
+			resultImages = nil
+		}
+	}
 	for _, node := range request.Surface {
+		if node.Result == nil {
+			flushImages()
+		}
 		switch {
 		case node.Message != nil:
 			parts := make([]chatPart, 0, len(node.Message.Content))
@@ -112,9 +125,13 @@ func (provider *Provider) chatRequest(model llm.ModelInfo, request llm.Request) 
 				messages = append(messages, chatMessage{Role: "assistant", ToolCalls: []chatToolCall{call}})
 			}
 		case node.Result != nil:
-			messages = append(messages, chatMessage{Role: "tool", Content: node.Result.Output, ToolCallID: node.Result.CallID})
+			messages = append(messages, chatMessage{Role: "tool", Content: resultText(node.Result), ToolCallID: node.Result.CallID})
+			if node.Result.Image != nil {
+				resultImages = append(resultImages, chatPart{Type: "image_url", ImageURL: &chatImageURL{URL: imageDataURL(node.Result.Image)}})
+			}
 		}
 	}
+	flushImages()
 	tools := make([]chatTool, len(request.Tools))
 	for index, tool := range request.Tools {
 		tools[index].Type = "function"

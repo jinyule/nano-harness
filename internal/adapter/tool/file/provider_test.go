@@ -66,6 +66,7 @@ type harness struct {
 	runtime  *appTool.Runtime
 	approver *recordingApprover
 	provider *Provider
+	images   *fakeImages
 }
 
 func newHarness(t *testing.T) *harness {
@@ -81,7 +82,8 @@ func newHarnessOver(t *testing.T, root workspace.Root) *harness {
 	if err := runtime.Start(context.Background(), runtimeScope); err != nil {
 		t.Fatal(err)
 	}
-	provider, err := New(runtime, root)
+	images := &fakeImages{}
+	provider, err := New(runtime, root, images)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +94,7 @@ func newHarnessOver(t *testing.T, root workspace.Root) *harness {
 		_ = providerScope.Close(context.Background())
 		_ = runtimeScope.Close(context.Background())
 	})
-	return &harness{root: root, runtime: runtime, approver: approver, provider: provider}
+	return &harness{root: root, runtime: runtime, approver: approver, provider: provider, images: images}
 }
 
 func (h *harness) call(t *testing.T, name string, arguments any) session.ToolResult {
@@ -141,13 +143,16 @@ func readFixture(t *testing.T, path string) string {
 func TestProvider_ValidatesRegistersAndCleansTools(t *testing.T) {
 	runtime, _ := appTool.New(&recordingApprover{})
 	root := testRoot(t)
-	if _, err := New(nil, root); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(nil, root, &fakeImages{}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("nil runtime = %v", err)
 	}
-	if _, err := New(runtime, workspace.Root{}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(runtime, workspace.Root{}, &fakeImages{}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("zero root = %v", err)
 	}
-	provider, err := New(runtime, root)
+	if _, err := New(runtime, root, nil); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("nil images = %v", err)
+	}
+	provider, err := New(runtime, root, &fakeImages{})
 	if err != nil || provider.ID() != "fs-tools" {
 		t.Fatalf("provider = %+v, %v", provider, err)
 	}
@@ -164,7 +169,7 @@ func TestProvider_ValidatesRegistersAndCleansTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog, _ := runtime.Catalog(nil)
-	if len(catalog.Definitions) != 3 || catalog.Definitions[0].Name != "edit" || catalog.Definitions[1].Name != "read" || catalog.Definitions[2].Name != "write" {
+	if len(catalog.Definitions) != 4 || catalog.Definitions[0].Name != "edit" || catalog.Definitions[1].Name != "read" || catalog.Definitions[2].Name != "read_image" || catalog.Definitions[3].Name != "write" {
 		t.Fatalf("definitions = %#v", catalog.Definitions)
 	}
 	wantGuidance := []string{

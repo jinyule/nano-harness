@@ -62,7 +62,7 @@ make build
 
 以 `/name` 开头、但不是上面命令的输入按普通消息发送；`name` 是允许用户调用的 skill 时，它的完整说明随这条消息注入。
 
-`/attach` 接受 JPEG 或 PNG；图片会缩放、规范化并随下一条消息持久化。`/permission ask` 是默认策略：`write`、`edit` 和 `bash` 在实际执行前请求一次性授权。`bash` 默认在 workspace sandbox 中运行；模型可以用 `sandbox_permissions: danger-full-access` 和理由请求让单条命令离开 sandbox，这仍需一次性授权，subagent 不能请求。
+`/attach` 接受 PNG、JPEG、WebP 或 GIF；图片会缩放、规范化并随下一条消息持久化。模型使用支持图片输入的模型时，也可以用 `read_image` 读取 workspace 中的图片。`/permission ask` 是默认策略：`write`、`edit` 和 `bash` 在实际执行前请求一次性授权。`bash` 默认在 workspace sandbox 中运行；模型可以用 `sandbox_permissions: danger-full-access` 和理由请求让单条命令离开 sandbox，这仍需一次性授权，subagent 不能请求。
 
 `/plan` 进入规划模式，`/plan TEXT` 进入后把文本作为下一条输入，`/plan off` 离开。规划模式期间请求带上游 Base 的规划指引，模型用 `exit_plan_mode` 提交计划，由你批准或带反馈继续规划；它只是指引，写入与 shell 仍需一次性授权。模型用 `ask_user_question` 提问时，输入选项编号（多选用逗号分隔）、直接输入文字作答，或留空跳过；推荐选项会预先填入，Ctrl+C 取消。
 

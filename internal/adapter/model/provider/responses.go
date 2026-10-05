@@ -16,6 +16,7 @@ type responsesContent struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	ImageURL string `json:"image_url,omitempty"`
+	Detail   string `json:"detail,omitempty"`
 }
 
 type responsesInput struct {
@@ -25,7 +26,9 @@ type responsesInput struct {
 	CallID    string             `json:"call_id,omitempty"`
 	Name      string             `json:"name,omitempty"`
 	Arguments string             `json:"arguments,omitempty"`
-	Output    string             `json:"output,omitempty"`
+	// Output is a string, or input_text/input_image items for a tool
+	// result that carries an image.
+	Output any `json:"output,omitempty"`
 }
 
 type responsesTool struct {
@@ -115,7 +118,7 @@ func (provider *Provider) responsesRequest(model llm.ModelInfo, request llm.Requ
 		case node.Call != nil:
 			input = append(input, responsesInput{Type: "function_call", CallID: node.Call.ID, Name: node.Call.Name, Arguments: string(node.Call.Arguments)})
 		case node.Result != nil:
-			input = append(input, responsesInput{Type: "function_call_output", CallID: node.Result.CallID, Output: node.Result.Output})
+			input = append(input, responsesInput{Type: "function_call_output", CallID: node.Result.CallID, Output: responsesOutput(node.Result)})
 		}
 	}
 	tools := make([]responsesTool, len(request.Tools))
@@ -133,6 +136,22 @@ func (provider *Provider) responsesRequest(model llm.ModelInfo, request llm.Requ
 		payload.ToolChoice = "auto"
 	}
 	return payload, nil
+}
+
+// responsesOutput sends a tool-result image natively in function_call_output,
+// as upstream's Responses adapter does for both endpoints.
+func responsesOutput(result *session.ToolResult) any {
+	if result.Image == nil {
+		if result.Output == "" {
+			return nil
+		}
+		return result.Output
+	}
+	items := make([]responsesContent, 0, 2)
+	if result.Output != "" {
+		items = append(items, responsesContent{Type: "input_text", Text: result.Output})
+	}
+	return append(items, responsesContent{Type: "input_image", ImageURL: imageDataURL(result.Image), Detail: "auto"})
 }
 
 type responsesEvent struct {

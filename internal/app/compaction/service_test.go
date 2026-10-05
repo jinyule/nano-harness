@@ -324,6 +324,10 @@ func TestFailureClassificationEstimationSelectionAndWait(t *testing.T) {
 	if estimateSurface(surface) <= 1024 {
 		t.Fatal("surface estimate omitted nodes")
 	}
+	withImage := []session.SurfaceNode{{Result: &session.ToolResult{CallID: "call", Output: "12345678", Image: &session.Image{}}}}
+	if got := estimateSurface(withImage); got != 2+1024 {
+		t.Fatalf("result image estimate = %d", got)
+	}
 	if prefix, _ := selectPrefix(surface[:2], 1, true); prefix != nil {
 		t.Fatal("short surface selected")
 	}

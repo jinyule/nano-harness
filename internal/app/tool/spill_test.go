@@ -287,3 +287,37 @@ func TestInvocation_SpillRequiresStoreAndSessionAndDiscardsFailedWrites(t *testi
 		t.Fatalf("saved = %+v, %v", ref, err)
 	}
 }
+
+func TestRuntime_ImageResultsStayInlineAndCarryTheRoute(t *testing.T) {
+	runtime, _ := startRuntime(t, &fakeApprover{outcome: session.ApprovalAllowedOnce})
+	store := &memorySpill{}
+	if err := runtime.UseSpill(store, &plugin.Scope{}); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("jpeg")
+	digest := sha256.Sum256(data)
+	image := &session.Image{ID: "img", Name: "x.png", MediaType: "image/jpeg", Data: "anBlZw==", SHA256: hex.EncodeToString(digest[:]), Width: 1, Height: 1}
+	large := strings.Repeat("y", 60000)
+	var seen Route
+	scope := &plugin.Scope{}
+	if err := runtime.Register(simpleTool("look", false, "", func(_ context.Context, invocation Invocation) (Result, error) {
+		seen = invocation.Route
+		return Result{Text: large + "\xff", Image: image}, nil
+	}), scope); err != nil {
+		t.Fatal(err)
+	}
+	route := Route{Provider: "openai", Model: "vision", ImageInput: true}
+	results := runtime.ExecuteBatch(context.Background(), BatchRequest{
+		SessionID: "s", Route: route, Turn: 1, Step: 1, Journal: fakeJournal{},
+		Calls: []session.ToolCall{{ID: "call", Name: "look", Arguments: json.RawMessage(`{}`)}},
+	})
+	if seen != route {
+		t.Fatalf("route = %+v", seen)
+	}
+	if len(store.saved) != 0 || results[0].Output != large+"�" || results[0].Image != image || results[0].IsError {
+		t.Fatalf("result = %d bytes image=%v saved=%d", len(results[0].Output), results[0].Image, len(store.saved))
+	}
+	if err := (session.Record{Type: session.RecordToolResult, Turn: 1, Step: 1, Result: &results[0]}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

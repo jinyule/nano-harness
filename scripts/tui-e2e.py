@@ -21,6 +21,7 @@ import tempfile
 import termios
 import threading
 import time
+import zlib
 
 
 class LoopbackServer(http.server.ThreadingHTTPServer):
@@ -54,7 +55,11 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         if "switched this session" in task and len(users) > 1:
             # A plan-mode notice follows the user's own message in the same turn.
             task = user_text(users[-2]) + " " + task
-        outputs = [item["output"] for item in inputs[last_user + 1:] if item.get("type") == "function_call_output"]
+        raw_outputs = [item["output"] for item in inputs[last_user + 1:] if item.get("type") == "function_call_output"]
+        # An image result arrives as input_text/input_image items instead of a string.
+        self.server.image_urls.extend(part["image_url"] for output in raw_outputs if isinstance(output, list)
+                                      for part in output if part.get("type") == "input_image")
+        outputs = [output if isinstance(output, str) else json.dumps(output) for output in raw_outputs]
         self.server.instructions.append((task, len(outputs), body.get("instructions", "")))
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -91,6 +96,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
                     ("glob", {"pattern": "*.txt"}),
                     ("grep", {"pattern": "PTY_PROOF"}),
                     ("read", {"file_path": "proof.txt"}),
+                    ("read_image", {"file_path": "pixel.png"}),
                     ("subagent", {"description": "reader", "prompt": "CHILD_READ", "run_in_background": False}),
                     ("subagent_fork", {"description": "reviewer", "prompt": "CHILD_FORK"}),
                     ("list_agents", {"scope": "descendants"}),
@@ -121,15 +127,26 @@ class Fixture(http.server.BaseHTTPRequestHandler):
             pass
 
 
+def png(width, height):
+    """Encode an opaque red RGB PNG without third-party modules."""
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    rows = b"".join(b"\x00" + b"\xc8\x1e\x1e" * width for _ in range(height))
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+
+
 @contextlib.contextmanager
 def fixture(directory):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     workspace = directory / "workspace"
     workspace.mkdir(exist_ok=True, mode=0o700)
     (workspace / "proof.txt").write_text("PTY_PROOF\n")
+    (workspace / "pixel.png").write_bytes(png(2, 2))
     server = LoopbackServer(("127.0.0.1", 0), Fixture)
     server.stopping = threading.Event()
     server.instructions = []
+    server.image_urls = []
     worker = threading.Thread(target=server.serve_forever)
     worker.start()
     settings = directory / "settings.yaml"
@@ -234,6 +251,7 @@ def verify(binary):
                 terminal.send("\x1b[200~verify tools\x1b[201~\r")
                 terminal.expect("plan> 1 in progress · 1 pending")
                 terminal.expect("[>] inspect workspace")
+                terminal.expect("[image pixel.png 2x2 sha256:")
                 for _ in range(4):
                     terminal.expect("Approval required:")
                     terminal.send("y\r")
@@ -284,30 +302,34 @@ def verify(binary):
             assert len(logs) == 2, "expected independent spawn and fork child sessions"
             root_records = [entry["record"] for entry in root[1:]]
             calls = [entry["call"]["name"] for entry in root_records if entry["type"] == "tool/call"]
-            assert calls == ["todo_write", "glob", "grep", "read", "subagent", "subagent_fork", "list_agents",
+            assert calls == ["todo_write", "glob", "grep", "read", "read_image", "subagent", "subagent_fork", "list_agents",
                              "send_message", "interrupt_agent", "write", "edit", "bash", "bash", "ask_user_question",
                              "job_output", "exit_plan_mode", "get_goal", "update_goal"], calls
             results = [entry["result"] for entry in root_records if entry["type"] == "tool/result"]
             failed = [index for index, entry in enumerate(results) if entry.get("is_error", False)]
-            assert len(results) == 18 and failed == [7], results
+            assert len(results) == 19 and failed == [8], results
             assert results[0]["output"] == "Updated todo list: 1 pending, 1 in progress, 0 completed.", results[0]
             assert results[1]["output"] == "proof.txt", results[1]
             assert results[2]["output"] == "Found 1 match\n\nproof.txt\nLine 1: PTY_PROOF", results[2]
             assert "1: PTY_PROOF" in results[3]["output"], results[3]
-            assert results[4]["output"] == "CHILD_READ_OK", results[4]
-            assert results[5]["output"] == "CHILD_FORK_OK", results[5]
-            assert results[6]["output"] == "(no subagents)", results[6]
-            assert results[7]["output"] == 'Error: subagent "missing-child" is unavailable', results[7]
-            assert results[8]["output"] == "interrupt requested for agent missing-child", results[8]
+            image = results[4].get("image")
+            assert image and image["name"] == "pixel.png" and image["media_type"] == "image/jpeg", results[4]
+            assert (image["width"], image["height"]) == (2, 2) and "<type>image</type>" in results[4]["output"], results[4]
+            assert "data:image/jpeg;base64," + image["data"] in server.image_urls, "the next request lacked the image"
+            assert results[5]["output"] == "CHILD_READ_OK", results[5]
+            assert results[6]["output"] == "CHILD_FORK_OK", results[6]
+            assert results[7]["output"] == "(no subagents)", results[7]
+            assert results[8]["output"] == 'Error: subagent "missing-child" is unavailable', results[8]
+            assert results[9]["output"] == "interrupt requested for agent missing-child", results[9]
             catalog = [entry["catalog"] for entry in root_records if entry["type"] == "subagent/catalog"]
             assert [(entry["label"], entry["mode"]) for entry in catalog] == [("reader", "one-shot"), ("reviewer", "one-shot")], catalog
-            assert results[12]["output"] == "started background job bash-2", results[12]
-            assert results[13]["output"] == ('{"answers":[{"id":"mode","selected":["Fast (Recommended)"]},'
-                                             '{"id":"note","selected":[],"custom":"PTY_ANSWER"}]}'), results[13]
-            assert results[14]["output"] == "JOB_PROOF\n[status: completed, exit code: 0]", results[14]
-            assert results[15]["output"].startswith("Plan approved"), results[15]
-            assert '"objective":"PTY_GOAL ship it","phase":"active","roundsStarted":1' in results[16]["output"], results[16]
-            assert '"phase":"complete","roundsStarted":1,"maxGoalRounds":256},"activation":"disarmed"' in results[17]["output"], results[17]
+            assert results[13]["output"] == "started background job bash-2", results[13]
+            assert results[14]["output"] == ('{"answers":[{"id":"mode","selected":["Fast (Recommended)"]},'
+                                             '{"id":"note","selected":[],"custom":"PTY_ANSWER"}]}'), results[14]
+            assert results[15]["output"] == "JOB_PROOF\n[status: completed, exit code: 0]", results[15]
+            assert results[16]["output"].startswith("Plan approved"), results[16]
+            assert '"objective":"PTY_GOAL ship it","phase":"active","roundsStarted":1' in results[17]["output"], results[17]
+            assert '"phase":"complete","roundsStarted":1,"maxGoalRounds":256},"activation":"disarmed"' in results[18]["output"], results[18]
             goals = [(entry["goal"]["operation"], entry.get("turn", 0)) for entry in root_records if entry["type"] == "goal/change"]
             assert goals == [("create", 0), ("complete", 0)], goals
             sources = [entry["message"]["source"] for entry in root_records if entry["type"] == "user/message"]
@@ -357,7 +379,7 @@ def verify(binary):
                 assert terminal.process.wait(timeout=10) == 0
             finally:
                 terminal.close()
-            print("PASS: real binary/PTY, 18 root tool calls, todo plan, background job notice, question answers, plan review, /goal round completion, spawn/fork children, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
+            print("PASS: real binary/PTY, 19 root tool calls, read_image result image, todo plan, background job notice, question answers, plan review, /goal round completion, spawn/fork children, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
 
 
 def main():

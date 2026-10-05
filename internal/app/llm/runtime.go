@@ -511,6 +511,10 @@ func cloneRequest(request Request) Request {
 		}
 		if node.Result != nil {
 			result := *node.Result
+			if result.Image != nil {
+				image := *result.Image
+				result.Image = &image
+			}
 			node.Result = &result
 		}
 	}

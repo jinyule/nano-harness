@@ -236,7 +236,7 @@ func TestComposition_MatchesUpstreamBaseTools(t *testing.T) {
 		frozen[definition.Name] = definition
 	}
 	upstream := loadCatalog(t, filepath.Join("testdata", "upstream-base-tools.json"))
-	if len(upstream) != 23 {
+	if len(upstream) != 24 {
 		t.Fatalf("upstream fixture lists %d tools", len(upstream))
 	}
 	for _, want := range upstream {
@@ -554,7 +554,9 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 			newWorkspace = func(string) (workspace.Root, error) { return workspace.Root{}, failure }
 		}},
 		{name: "file tools", set: func() {
-			newFileTools = func(*appTool.Runtime, workspace.Root) (*filetool.Provider, error) { return nil, failure }
+			newFileTools = func(*appTool.Runtime, workspace.Root, filetool.ImageNormalizer) (*filetool.Provider, error) {
+				return nil, failure
+			}
 		}},
 		{name: "search tools", set: func() {
 			newSearchTools = func(*appTool.Runtime, searchtool.Runner, workspace.Root) (*searchtool.Provider, error) {

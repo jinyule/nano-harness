@@ -356,6 +356,7 @@ func TestApplyEvent_ProjectsAllDurablePresentationFacts(t *testing.T) {
 		{Record: session.Record{Type: session.RecordApprovalAsked, Approval: &session.ApprovalData{Reason: "write"}}},
 		{Record: session.Record{Type: session.RecordToolResult, Result: &session.ToolResult{Output: "ok"}}},
 		{Record: session.Record{Type: session.RecordToolResult, Result: &session.ToolResult{Output: "bad", IsError: true}}},
+		{Record: session.Record{Type: session.RecordToolResult, Result: &session.ToolResult{Output: "<type>image</type>", Image: &session.Image{Name: "shot.png", Width: 640, Height: 480, SHA256: "0123456789abcdef0123"}}}},
 		{Record: session.Record{Type: session.RecordRetry, Retry: &session.RetryData{Attempt: 2, DelayMS: 10, Failure: "server"}}},
 		{Record: session.Record{Type: session.RecordCompactionStart, Compaction: &session.CompactionData{ID: "one"}}},
 		{Record: session.Record{Type: session.RecordCompactionEnd, Compaction: &session.CompactionData{ID: "one"}}},
@@ -366,7 +367,7 @@ func TestApplyEvent_ProjectsAllDurablePresentationFacts(t *testing.T) {
 		current.applyEvent(event, true)
 	}
 	joined := strings.Join(current.lines, "\n")
-	for _, expected := range []string{"you> hello [images=1]", "job> background job bash-1 finished", "agent> Agent child sent a message: done", "agent> Background subagent child finished", "route> openai/model effort=max", "assistant> one two", "reasoning> think", "tool> read", "approval> write", "result> ok", "tool-error> bad", "retry> attempt=2", "compact> started", "compact> completed", "compact> failed", "turn> completed"} {
+	for _, expected := range []string{"you> hello [images=1]", "job> background job bash-1 finished", "agent> Agent child sent a message: done", "agent> Background subagent child finished", "route> openai/model effort=max", "assistant> one two", "reasoning> think", "tool> read", "approval> write", "result> ok", "tool-error> bad", "result> <type>image</type> [image shot.png 640x480 sha256:0123456789ab]", "retry> attempt=2", "compact> started", "compact> completed", "compact> failed", "turn> completed"} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("projection missing %q in %s", expected, joined)
 		}

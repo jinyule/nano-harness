@@ -158,10 +158,13 @@ type ToolCall struct {
 }
 
 // ToolResult is the single model-visible outcome of a committed tool call.
+// Image is an optional normalized image the model sees after Output; only a
+// successful result may carry one.
 type ToolResult struct {
 	CallID  string `json:"call_id"`
 	Output  string `json:"output"`
 	IsError bool   `json:"is_error"`
+	Image   *Image `json:"image,omitempty"`
 }
 
 // ToolDefinition is the exact schema frozen into one request header.

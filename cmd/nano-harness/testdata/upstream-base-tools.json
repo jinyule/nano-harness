@@ -383,6 +383,24 @@
       }
     },
     {
+      "name": "read_image",
+      "source": "docs/tool-catalog.md (packages/fs/tool-fs/src/read-image.ts)",
+      "composition": "identical to the catalog; Base mounts @deepseek-ai/dsh-attachment-local, so tool-fs registers read_image",
+      "description": "Read a PNG/JPEG/WebP/GIF file and return the image itself. Large images are downscaled automatically; do not install image libraries or create thumbnails to inspect an image.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "Path to the image file, resolved by the filesystem backend."
+          }
+        },
+        "required": [
+          "file_path"
+        ]
+      }
+    },
+    {
       "name": "send_message",
       "source": "docs/tool-catalog.md with packages/subagent/tool-subagent-control/src/index.ts",
       "composition": "Base mounts @deepseek-ai/dsh-tool-subagent-control without configuration",

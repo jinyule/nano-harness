@@ -1,4 +1,5 @@
-// Package image normalizes explicit local image attachments for replay and vision APIs.
+// Package image normalizes PNG, JPEG, WebP, and GIF images for replay and
+// vision APIs: explicit local attachments and bytes read by image tools.
 package image
 
 import (
@@ -10,8 +11,9 @@ import (
 	"errors"
 	"fmt"
 	stdimage "image"
+	_ "image/gif" // Register the GIF decoder; decoding keeps the first frame.
 	"image/jpeg"
-	_ "image/png" // Register the standard PNG decoder used by explicit attachments.
+	_ "image/png" // Register the standard PNG decoder.
 	"io"
 	"os"
 	"path/filepath"
@@ -19,16 +21,20 @@ import (
 	"sync"
 
 	"golang.org/x/image/draw"
+	_ "golang.org/x/image/webp" // Register the still-image WebP decoder.
 
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
 const (
-	maxSourceBytes  = 20 << 20
-	maxSourcePixels = 16_000_000
+	maxSourceBytes  = session.MaxImageSourceBytes
+	maxSourcePixels = session.MaxImageSourcePixels
 	maxDimension    = 2048
 )
+
+// formats are the decoder names admitted as sources.
+var formats = map[string]bool{"jpeg": true, "png": true, "gif": true, "webp": true}
 
 var (
 	// ErrInvalidImage identifies an attachment that cannot satisfy the normalized image contract.
@@ -76,16 +82,10 @@ func (normalizer *Normalizer) Start(_ context.Context, scope *plugin.Scope) erro
 	return nil
 }
 
-// Normalize reads an explicitly selected JPEG or PNG and returns bounded inline data.
+// Normalize reads an explicitly selected image file and returns bounded inline data.
 func (normalizer *Normalizer) Normalize(ctx context.Context, path string) (session.Image, error) {
-	if err := ctx.Err(); err != nil {
+	if err := normalizer.ready(ctx); err != nil {
 		return session.Image{}, err
-	}
-	normalizer.mu.RLock()
-	active := normalizer.active
-	normalizer.mu.RUnlock()
-	if !active {
-		return session.Image{}, ErrNotRunning
 	}
 	absolute, err := imageAbs(strings.TrimSpace(path))
 	if err != nil || path == "" {
@@ -104,30 +104,62 @@ func (normalizer *Normalizer) Normalize(ctx context.Context, path string) (sessi
 	if err != nil || len(encoded) > maxSourceBytes {
 		return session.Image{}, fmt.Errorf("%w: read source", ErrInvalidImage)
 	}
-	return normalizeBytes(ctx, filepath.Base(absolute), encoded)
+	normalized, _, err := normalizeBytes(ctx, filepath.Base(absolute), encoded)
+	return normalized, err
 }
 
-func normalizeBytes(ctx context.Context, name string, encoded []byte) (session.Image, error) {
+// NormalizeBytes normalizes source bytes that the caller read under its own
+// path policy. It returns the normalized image and the decoded source size;
+// refusals wrap ErrInvalidImage and, where a limit or format applies,
+// session.ErrImageFormat, session.ErrImagePixels, or session.ErrImageBytes.
+func (normalizer *Normalizer) NormalizeBytes(ctx context.Context, name string, encoded []byte) (session.Image, stdimage.Point, error) {
+	if err := normalizer.ready(ctx); err != nil {
+		return session.Image{}, stdimage.Point{}, err
+	}
+	if len(encoded) == 0 || len(encoded) > maxSourceBytes {
+		return session.Image{}, stdimage.Point{}, fmt.Errorf("%w: source must be 1-%d bytes", ErrInvalidImage, maxSourceBytes)
+	}
+	return normalizeBytes(ctx, name, encoded)
+}
+
+func (normalizer *Normalizer) ready(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	normalizer.mu.RLock()
+	active := normalizer.active
+	normalizer.mu.RUnlock()
+	if !active {
+		return ErrNotRunning
+	}
+	return nil
+}
+
+func normalizeBytes(ctx context.Context, name string, encoded []byte) (session.Image, stdimage.Point, error) {
 	config, format, err := stdimage.DecodeConfig(bytes.NewReader(encoded))
-	if err != nil || format != "jpeg" && format != "png" || config.Width < 1 || config.Height < 1 || int64(config.Width)*int64(config.Height) > maxSourcePixels {
-		return session.Image{}, fmt.Errorf("%w: unsupported format or dimensions", ErrInvalidImage)
+	if err != nil || !formats[format] || config.Width < 1 || config.Height < 1 {
+		return session.Image{}, stdimage.Point{}, fmt.Errorf("%w: %w", ErrInvalidImage, session.ErrImageFormat)
+	}
+	source := stdimage.Pt(config.Width, config.Height)
+	if int64(config.Width)*int64(config.Height) > maxSourcePixels {
+		return session.Image{}, source, fmt.Errorf("%w: %w", ErrInvalidImage, session.ErrImagePixels)
 	}
 	decoded, _, err := stdimage.Decode(bytes.NewReader(encoded))
 	if err != nil {
-		return session.Image{}, fmt.Errorf("%w: decode pixels", ErrInvalidImage)
+		return session.Image{}, source, fmt.Errorf("%w: %w", ErrInvalidImage, session.ErrImageFormat)
 	}
 	if err := ctx.Err(); err != nil {
-		return session.Image{}, err
+		return session.Image{}, source, err
 	}
 	width, height := fit(config.Width, config.Height, maxDimension)
-	current := decoded
+	current := flatten(decoded)
 	if width != config.Width || height != config.Height {
 		current = resize(decoded, width, height)
 	}
 	mediaType := "image/jpeg"
 	output, err := encodeImage(current, 88)
 	if err != nil {
-		return session.Image{}, fmt.Errorf("%w: encode pixels", ErrInvalidImage)
+		return session.Image{}, source, fmt.Errorf("%w: encode pixels", ErrInvalidImage)
 	}
 	for len(output) > session.MaxImageBytes && width > 256 && height > 256 {
 		width = max(width*3/4, 1)
@@ -135,11 +167,11 @@ func normalizeBytes(ctx context.Context, name string, encoded []byte) (session.I
 		current = resize(current, width, height)
 		output, err = encodeImage(current, 82)
 		if err != nil {
-			return session.Image{}, fmt.Errorf("%w: encode scaled pixels", ErrInvalidImage)
+			return session.Image{}, source, fmt.Errorf("%w: encode scaled pixels", ErrInvalidImage)
 		}
 	}
 	if len(output) > session.MaxImageBytes {
-		return session.Image{}, fmt.Errorf("%w: normalized data exceeds %d bytes", ErrInvalidImage, session.MaxImageBytes)
+		return session.Image{}, source, fmt.Errorf("%w: %w", ErrInvalidImage, session.ErrImageBytes)
 	}
 	digest := sha256.Sum256(output)
 	sha := hex.EncodeToString(digest[:])
@@ -151,9 +183,9 @@ func normalizeBytes(ctx context.Context, name string, encoded []byte) (session.I
 		Role: session.RoleUser, Source: session.MessageSource{Kind: "user"},
 		Content: []session.ContentBlock{{Type: session.ContentImage, Image: &attachment}},
 	}}).Validate(); err != nil {
-		return session.Image{}, fmt.Errorf("%w: validate normalized record: %w", ErrInvalidImage, err)
+		return session.Image{}, source, fmt.Errorf("%w: validate normalized record: %w", ErrInvalidImage, err)
 	}
-	return attachment, nil
+	return attachment, source, nil
 }
 
 func fit(width, height, limit int) (int, int) {
@@ -164,6 +196,19 @@ func fit(width, height, limit int) (int, int) {
 		return limit, max(1, height*limit/width)
 	}
 	return max(1, width*limit/height), limit
+}
+
+// flatten composites transparent pixels onto white: JPEG has no alpha, and
+// encoding premultiplied pixels directly would turn transparency black.
+func flatten(source stdimage.Image) stdimage.Image {
+	if opaque, ok := source.(interface{ Opaque() bool }); ok && opaque.Opaque() {
+		return source
+	}
+	bounds := source.Bounds()
+	target := stdimage.NewRGBA(stdimage.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	draw.Draw(target, target.Bounds(), stdimage.White, stdimage.Point{}, draw.Src)
+	draw.Draw(target, target.Bounds(), source, bounds.Min, draw.Over)
+	return target
 }
 
 func resize(source stdimage.Image, width, height int) stdimage.Image {

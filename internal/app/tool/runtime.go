@@ -50,6 +50,7 @@ type Journal interface {
 type BatchRequest struct {
 	SessionID string
 	Cwd       string
+	Route     Route
 	Turn      uint64
 	Step      uint64
 	Calls     []session.ToolCall
@@ -257,7 +258,7 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 	store := runtime.spill
 	runtime.mu.RUnlock()
 	invocation := Invocation{
-		SessionID: request.SessionID, Cwd: request.Cwd, Turn: request.Turn, Step: request.Step, CallID: candidate.ID,
+		SessionID: request.SessionID, Cwd: request.Cwd, Route: request.Route, Turn: request.Turn, Step: request.Step, CallID: candidate.ID,
 		Journal: request.Journal, Delegated: request.Delegated, spill: store,
 	}
 	if err := validated.call.check(invocation); err != nil {
@@ -285,10 +286,12 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 		return result
 	}
 	text := strings.ToValidUTF8(output.Text, "�")
-	if !validated.call.keepInline {
+	// The spill store holds text only; an image result stays inline whole.
+	if !validated.call.keepInline && output.Image == nil {
 		text = retainInline(ctx, invocation, candidate.Name, text)
 	}
 	result.Output = finishText(text)
+	result.Image = output.Image
 	return result
 }
 

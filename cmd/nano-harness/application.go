@@ -160,9 +160,9 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
-	// read and grep may open spilled artifacts; nothing else leaves the workspace.
+	// read, read_image, and grep may open spilled artifacts; nothing else leaves the workspace.
 	readableRoot := workspaceRoot.WithReadOnly(spillStore.Dir())
-	fileTools, err := newFileTools(toolRuntime, readableRoot)
+	fileTools, err := newFileTools(toolRuntime, readableRoot, images)
 	if err != nil {
 		return nil, err
 	}

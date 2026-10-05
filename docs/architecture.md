@@ -102,6 +102,7 @@ OpenAI Responses | Anthropic Messages | OpenRouter Chat Completions
 - provider 拥有自己的 model catalog、认证方法、OAuth 刷新和 wire/SSE 解析；agent 不判断 provider 类型。
 - `PrepareCall` 先冻结 provider/model/settings，再解析账户，并在 OAuth 即将过期时通过 credential store 的跨进程互斥事务刷新。一次 call 不会在流中途切换 route、endpoint 或 credential。
 - 请求由 system、replay surface、tool schema 和可选 max tokens 组成；模型目录还可冻结 provider-neutral `effort`。输出归一为按序 text/reasoning/tool chunk、assistant message、tool calls、usage 和 stop reason。
+- 发送前 provider 对 surface 做确定性的图片预算投影：每个请求最多 20 个图片、base64 合计 10 MiB，从最新的图片向前保留，更早的图片换成上游 offload 占位文本。工具结果图片的三种 wire 形态与预算规则见 [ADR-0015](decisions/0015-multimodal-tool-results.md)。
 - OpenAI API key 使用 Responses；导入或自有 ChatGPT OAuth 使用 Codex Responses 边界，两者把 `effort` 写入 `reasoning.effort`。Anthropic Messages 写入 `output_config.effort`，OpenRouter 的 OpenAI compatible Chat Completions 写入 `reasoning_effort`。未配置时省略字段；配置的取值无法由目标协议表达时，settings 校验失败，不降级或丢弃。
 - provider 只暴露稳定错误类别：认证、限流、服务端、超时、transport、protocol、非法请求、context window 和空响应。远端正文不进入安全错误。
 - `PreparedModel.Search` 用同一冻结的 endpoint、模型目录项（含 `effort`）和账户发起一次服务端 web 检索，归一为可选回答文本与按 provider 顺序去重的来源。三种 wire 见 [Web 检索与抓取](#web-检索与抓取)。
@@ -148,18 +149,18 @@ Submit user message
 - 批次开始前，runtime 按 schema 校验并解码每个调用，再用 `Concurrent(A)` 分类。缺少必填、类型不符、null、非有限数、`-0`、重复键和未声明成员（包括根对象）都成为 `invalid arguments: ...` 结果，并按上游遍历顺序列出全部违规。上游根对象对未知成员开放，本仓更严格，模型可见 schema 不变。
 - `Concurrent(A)` 为 true 的相邻调用并行；其余调用、未知工具和无效参数形成独占 barrier。结果顺序始终与原始 call 顺序一致。
 - 每个调用轮到执行时依次运行 `Check(Invocation, A)`、`Approval(A)` 和 `Execute`。`Check` 因此能观察同一批次前序调用的效果和会话范围的状态，并在提问前拒绝语义错误、不安全路径或未读的写入目标。`Check` 收到的 `Invocation.Approved` 恒为 false，且不得产生副作用：之后可能不执行，approval 期间状态也可能变化，所以 `Execute` 必须重新检查它依赖的条件；`Approval` 返回非空原因时请求一次性 approval，原因截断到 1 KiB。执行函数仍须在执行点确认 `Invocation.Approved`。
-- `tool.Result` 目前只有文本。runtime 统一替换非法 UTF-8，对成功结果应用 spill 策略，再把完整结果截断到 256 KiB；多模态结果扩展这个类型，不改变只返回文本的工具。
-- spill 策略与上游 Base 相同：估算超过 12,500 token（`ceil(UTF-16 单元/4)+4`）的结果保存到 spill store，模型看到首尾预览和 `(Omitted N bytes. Full formatted result stored at: <locator>. <hint>)`。错误结果和声明 `KeepInline` 的工具（`read`）不进入策略；没有 store、没有会话或保存失败时保留原结果。
+- `tool.Result` 由文本和可选的一张规范化图片组成。runtime 统一替换非法 UTF-8，对只含文本的成功结果应用 spill 策略，再把完整文本截断到 256 KiB；图片原样进入 `session.ToolResult`。
+- spill 策略与上游 Base 相同：估算超过 12,500 token（`ceil(UTF-16 单元/4)+4`）的结果保存到 spill store，模型看到首尾预览和 `(Omitted N bytes. Full formatted result stored at: <locator>. <hint>)`。错误结果、携带图片的结果和声明 `KeepInline` 的工具（`read`）不进入策略；没有 store、没有会话或保存失败时保留原结果。
 - `Runtime.Catalog(allow)` 一次冻结按名称排序的 schema 和可见工具贡献的 guidance。guidance 按上游 section order 排序，engine 把它追加在 system prompt 的工具列表之后，与 schema 一起写入 `request/header`。
-- `Invocation` 携带 session、cwd、delegation、approval 结果，以及当前 tool/call 的 call ID、turn、step 和调用方 durable journal。需要记录会话事实的工具在 tool/result 之前向该 journal 追加；没有 journal 的调用方必须失败关闭。
+- `Invocation` 携带 session、cwd、delegation、approval 结果、本 step 的 route（provider、model 与模型是否声明图片输入），以及当前 tool/call 的 call ID、turn、step 和调用方 durable journal。需要记录会话事实的工具在 tool/result 之前向该 journal 追加；没有 journal 的调用方必须失败关闭。
 - `Runtime.UseSpill` 在插件 Scope 内发布唯一的 `SpillStore`。`Invocation.CreateSpill`/`SaveText` 按调用方会话打开或保存 spill 文件，没有 store 或会话时返回 `ErrSpillUnavailable`，工具据此使用上游的降级文案。
 - 未知工具、panic、拒绝、执行错误和取消都成为有界 tool result，文本使用上游的 `Error: <message>` 格式；resume 为未决调用补写的结果同样使用这一格式。
 
-内置工具与上游 Base 组合同名同定义（`ask_user_question` 取 Web preset 的默认阻塞定义），映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)，后台任务与 `bash` 后台变体见 [ADR-0009](decisions/0009-background-jobs.md)，提问与规划模式见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)，长期目标见 [ADR-0016](decisions/0016-long-running-goals.md)：
+内置工具与上游 Base 组合同名同定义（`ask_user_question` 取 Web preset 的默认阻塞定义），映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)，后台任务与 `bash` 后台变体见 [ADR-0009](decisions/0009-background-jobs.md)，提问与规划模式见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)，`read_image` 见 [ADR-0015](decisions/0015-multimodal-tool-results.md)，长期目标见 [ADR-0016](decisions/0016-long-running-goals.md)：
 
 | 包 | 插件 ID | 工具 |
 |---|---|---|
-| `internal/adapter/tool/file` | `fs-tools` | `read`、`write`、`edit` |
+| `internal/adapter/tool/file` | `fs-tools` | `read`、`read_image`、`write`、`edit` |
 | `internal/adapter/tool/search` | `search-tools` | `glob`、`grep` |
 | `internal/adapter/tool/shell` | `shell-tools` | `bash`（含后台运行与超时转后台） |
 | `internal/adapter/tool/job` | `job-tools` | `job_output`、`job_list`、`job_kill` |
@@ -171,13 +172,13 @@ Submit user message
 | `internal/adapter/tool/skill` | `skill-tools` | `skill`，以及 step 前的 skill 目录与 `/name` 注入 |
 | `internal/adapter/tool/goal` | `goal-tools` | `get_goal`、`create_goal`、`update_goal` |
 
-`internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。`cmd` 用 `WithReadOnly` 把 spill 分区只读地交给 `read` 与 `grep`；`shell-tools` 收到不含该分区的 root。
+`internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。`cmd` 用 `WithReadOnly` 把 spill 分区只读地交给 `read`、`read_image` 与 `grep`；`shell-tools` 收到不含该分区的 root。
 
-`internal/adapter/spill` 是 `spill-local` 插件：在 `--spill-root` 下按 workspace 分区、按会话分组保存 owner-only 文件，启动时清理 30 天前的文件，关闭时等待已打开的文件。`fs-tools` 持有按会话记录的读取观察，`write` 只覆盖读过且内容未变的文件，`edit` 必须先读；观察状态只在内存中。存储布局、读回边界、观察语义和降级见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md)。
+`internal/adapter/spill` 是 `spill-local` 插件：在 `--spill-root` 下按 workspace 分区、按会话分组保存 owner-only 文件，启动时清理 30 天前的文件，关闭时等待已打开的文件。`fs-tools` 持有按会话记录的读取观察（`read` 与 `read_image` 都会记录），`write` 只覆盖读过且内容未变的文件，`edit` 必须先读；观察状态只在内存中。存储布局、读回边界、观察语义和降级见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md)。
 
 `search-tools` 与 `shell-tools` 共用 `cmd` 构造的同一个 platform process runner。search provider 在构造时从 PATH 解析 `rg`，找不到时组装失败；`Start` 运行 `rg --version`，低于 15.0.0 时启动失败，不注册降级工具。`glob` 与 `grep` 按上游参数调用 ripgrep，并解析它的路径列表或 `--json` 输出；进程边界见[安全工程规则](security.md#approvalshell-与进程)，版本前提见[开发规范](development.md#ripgrep)。
 
-`read`、`glob`、`grep`、`web_search`、`web_fetch`、`skill`、`subagent`、`subagent_fork` 可并行；`write`、`edit`、`bash` 和 `job_*` 是 exclusive；`write`、`edit`、`bash` 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。`bash` 的 `sandbox_permissions: danger-full-access` 是唯一离开 workspace sandbox 的方式，规则见[安全工程规则](security.md#approvalshell-与进程)。
+`read`、`read_image`、`glob`、`grep`、`web_search`、`web_fetch`、`skill`、`subagent`、`subagent_fork` 可并行；`write`、`edit`、`bash` 和 `job_*` 是 exclusive；`write`、`edit`、`bash` 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。`bash` 的 `sandbox_permissions: danger-full-access` 是唯一离开 workspace sandbox 的方式，规则见[安全工程规则](security.md#approvalshell-与进程)。
 
 subagent 工具的名称、描述和参数 schema 与参考 Base 组合逐字节一致，调用进程内 `app/subagent`，不启动 Codex、Claude 或另一个 harness 进程；`subagent` 以 guidance order 2800 贡献上游 `tool:subagent` 段落。行为见 [Subagent](#subagent)。
 
@@ -290,7 +291,12 @@ goal driver ──Followup(<goal_round>)──► agent worker ──► engine.
 
 ## 图片输入
 
-TUI 的 `/attach` 显式读取本地 JPEG/PNG。image plugin 限制源文件大小和像素数，最长边缩放到 2048，重新编码为有界 JPEG，记录尺寸、SHA-256 和标准 base64。规范化图片作为 `user/message` content block 持久化，因而 resume、fork、compaction 和 vision provider 请求都从同一事实构建。模型不支持 vision 时 provider 在 wire 调用前拒绝。
+图片从两个入口进入会话，二者共用 `images` 插件（`internal/adapter/media/image`）的规范化：接受 PNG、JPEG、WebP 和 GIF（取第一帧），源文件最多 20 MiB、1600 万像素，最长边缩放到 2048，透明像素合成到白色，重新编码为不超过 4 MiB 的 JPEG，记录尺寸、SHA-256 和标准 base64。
+
+- TUI 的 `/attach` 显式读取用户选择的本地文件，图片作为 `user/message` content block 持久化。
+- 模型调用 `read_image` 读取 workspace 图片。工具在执行点要求本 step 的模型声明图片输入，路径约束与 `read` 相同；规范化图片作为 `tool/result` 的 `image` 字段持久化，结果文本是上游信封（路径、尺寸、字节数和缩放倍数）。`fs-tools` 消费自己定义的 `ImageNormalizer` 接口，由 `cmd` 注入 `images` 插件。
+
+因而 resume、fork、compaction 和 vision provider 请求都从同一事实构建。模型不支持 vision 时 provider 在 wire 调用前拒绝含有任何图片的请求。格式、门禁、错误文案、provider wire 和与上游的差异见 [ADR-0015](decisions/0015-multimodal-tool-results.md)。
 
 ## 事件、持久化与 replay
 
@@ -312,6 +318,7 @@ subagent/descriptor, subagent/catalog, todo/write, plan/mode, goal/change, step/
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。
 - resume 会补写未决 approval 的 cancelled、未决 call 的 interrupted error、未结束 compaction/step/turn 的结束事实；不会截断 torn JSON、猜测未知格式或自动接受旧版本。
 - `session.Surface` 从 raw events 折叠消息、tool call/result 与 compaction replacements。TUI subscriber 只是可丢更新提示；磁盘 replay 仍是恢复来源。
+- `tool/result` 可以携带一张规范化图片（`image` 字段），校验与 user 图片相同；错误结果不能携带图片。图片随结果进入 surface。
 - `todo/write` 必须位于活动 step，引用尚未得到 result 的 call，且每个 call 最多一条。它不进入 surface；模型只从自己的 tool call 参数和 tool result 看到列表。`session.StandingTodos` 把最新一条之后没有更晚 `turn/start` 的 `todo/write` 投影为当前计划。
 - `goal/change` 的 `turn` 与 `step` 都缺省，可出现在日志任意位置（人类命令可在 turn 进行中提交）。`session.GoalState.Apply` 校验 revision 连续、阶段迁移合法、时间戳不倒退、计数保持和目标 ID 不复用；`source.kind = "goal"` 的 `user/message` 必须携带 `goal_id`/`goal_revision`/`goal_round`，且恰为当前 active 目标当前 revision 的下一轮、不超过上限，其他来源不得携带这些字段。JSONL 在每次追加与读取时执行同一折叠，非法事实被拒绝且不写入。
 - 后台任务完成通知是 source kind 为 `tool-jobs` 的 `user/message`，agent 消息与子代理结算通知分别为 `agent-message` 和 `subagent-settled`，都没有专用记录类型；无工具调用的 step 之后可以出现 `user/message` 并继续 step。

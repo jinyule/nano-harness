@@ -19,8 +19,7 @@ func Surface(events []Event) ([]SurfaceNode, error) {
 			call.Arguments = slices.Clone(call.Arguments)
 			nodes = append(nodes, SurfaceNode{Sequence: event.Sequence, Call: &call})
 		case RecordToolResult:
-			result := *record.Result
-			nodes = append(nodes, SurfaceNode{Sequence: event.Sequence, Result: &result})
+			nodes = append(nodes, SurfaceNode{Sequence: event.Sequence, Result: cloneResult(record.Result)})
 		case RecordCompactionSummary:
 			var err error
 			nodes, err = replaceWithSummary(nodes, event)
@@ -98,12 +97,22 @@ func cloneSurface(nodes []SurfaceNode) []SurfaceNode {
 			call.Arguments = slices.Clone(call.Arguments)
 			cloned[index].Call = &call
 		}
-		if node.Result != nil {
-			result := *node.Result
-			cloned[index].Result = &result
-		}
+		cloned[index].Result = cloneResult(node.Result)
 	}
 	return cloned
+}
+
+// cloneResult detaches a tool result, including its optional image.
+func cloneResult(result *ToolResult) *ToolResult {
+	if result == nil {
+		return nil
+	}
+	copyResult := *result
+	if result.Image != nil {
+		image := *result.Image
+		copyResult.Image = &image
+	}
+	return &copyResult
 }
 
 // CloneEvent detaches all mutable slices and pointers in one event.
@@ -119,10 +128,7 @@ func CloneEvent(event Event) Event {
 		call.Arguments = slices.Clone(call.Arguments)
 		cloned.Record.Call = &call
 	}
-	if event.Record.Result != nil {
-		result := *event.Record.Result
-		cloned.Record.Result = &result
-	}
+	cloned.Record.Result = cloneResult(event.Record.Result)
 	if event.Record.Header != nil {
 		header := *event.Record.Header
 		header.Tools = slices.Clone(header.Tools)

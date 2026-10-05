@@ -1,0 +1,14 @@
+{"type":"session","version":2,"header":{"session_id":"fixture","composition_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","created_at_unix_ms":1,"cwd":"/synthetic/workspace"}}
+{"seq":1,"record":{"type":"turn/start","turn":1}}
+{"seq":2,"record":{"type":"user/message","turn":1,"message":{"role":"user","content":[{"type":"text","text":"look at red.png"}],"source":{"kind":"test"}}}}
+{"seq":3,"record":{"type":"step/start","turn":1,"step":1}}
+{"seq":4,"record":{"type":"request/header","turn":1,"step":1,"header":{"provider":"openai","model":"model","system":""}}}
+{"seq":5,"record":{"type":"assistant/message","turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"reading"}],"source":{"kind":"provider"}}}}
+{"seq":6,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-image","name":"read_image","arguments":{"file_path":"red.png"}}}}
+{"seq":7,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-image","output":"\u003cpath\u003e/synthetic/workspace/red.png\u003c/path\u003e\n\u003ctype\u003eimage\u003c/type\u003e\n\u003ccontent\u003e\nimage/jpeg image, 1x1 px, 600 bytes\n\u003c/content\u003e","is_error":false,"image":{"id":"img-d0eea4b962c16b0f","name":"red.png","media_type":"image/jpeg","data":"/9j/2wCEAAQDAwMDAgQDAwMEBAQFBgoGBgUFBgwICQcKDgwPDg4MDQ0PERYTDxAVEQ0NExoTFRcYGRkZDxIbHRsYHRYYGRgBBAQEBgUGCwYGCxgQDRAYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGP/AABEIAAEAAQMBIgACEQEDEQH/xAGiAAABBQEBAQEBAQAAAAAAAAAAAQIDBAUGBwgJCgsQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+gEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoLEQACAQIEBAMEBwUEBAABAncAAQIDEQQFITEGEkFRB2FxEyIygQgUQpGhscEJIzNS8BVictEKFiQ04SXxFxgZGiYnKCkqNTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqCg4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2dri4+Tl5ufo6ery8/T19vf4+fr/2gAMAwEAAhEDEQA/APF6KKK/KT+/j//Z","sha256":"d0eea4b962c16b0f039d6e746d9bb8e78d355cb5e7b5f95fbdc20d774f4a4ff0","width":1,"height":1}}}}
+{"seq":8,"record":{"type":"step/end","turn":1,"step":1}}
+{"seq":9,"record":{"type":"step/start","turn":1,"step":2}}
+{"seq":10,"record":{"type":"request/header","turn":1,"step":2,"header":{"provider":"openai","model":"model","system":""}}}
+{"seq":11,"record":{"type":"assistant/message","turn":1,"step":2,"message":{"role":"assistant","content":[{"type":"text","text":"a red pixel"}],"source":{"kind":"provider"}}}}
+{"seq":12,"record":{"type":"step/end","turn":1,"step":2}}
+{"seq":13,"record":{"type":"turn/end","turn":1,"outcome":"completed"}}

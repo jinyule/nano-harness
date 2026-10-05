@@ -259,6 +259,14 @@ func (record Record) requireResult() error {
 	if len(record.Result.Output) > MaxTextBytes {
 		return invalid("tool output exceeds %d bytes", MaxTextBytes)
 	}
+	if image := record.Result.Image; image != nil {
+		if record.Result.IsError {
+			return invalid("tool error result carries an image")
+		}
+		if err := validateImage(*image); err != nil {
+			return invalid("tool result image: %v", err)
+		}
+	}
 	return nil
 }
 

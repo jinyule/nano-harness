@@ -201,6 +201,9 @@ func estimateSurface(surface []session.SurfaceNode) int {
 			total += max(1, (len(node.Call.Name)+len(node.Call.Arguments))/4)
 		case node.Result != nil:
 			total += max(1, len(node.Result.Output)/4)
+			if node.Result.Image != nil {
+				total += 1024
+			}
 		}
 	}
 	return total

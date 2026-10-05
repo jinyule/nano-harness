@@ -198,6 +198,7 @@ func (prepared *prepared) Stream(ctx context.Context, credential llm.Credential,
 	if request.MaxTokens < 0 || !prepared.info.Vision && surfaceHasImage(request.Surface) || !prepared.info.Tools && len(request.Tools) != 0 {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorInvalid, Provider: prepared.owner.id}
 	}
+	request.Surface = fitImages(request.Surface)
 	switch prepared.owner.id {
 	case "openai":
 		return prepared.owner.streamResponses(ctx, prepared.snapshot, prepared.info, credential, request, emit)
@@ -210,9 +211,14 @@ func (prepared *prepared) Stream(ctx context.Context, credential llm.Credential,
 	}
 }
 
+// surfaceHasImage reports any user or tool-result image, so a model without
+// vision is refused before the network call.
 func surfaceHasImage(surface []session.SurfaceNode) bool {
 	for _, node := range surface {
 		if node.Message != nil && slices.ContainsFunc(node.Message.Content, func(block session.ContentBlock) bool { return block.Type == session.ContentImage }) {
+			return true
+		}
+		if node.Result != nil && node.Result.Image != nil {
 			return true
 		}
 	}

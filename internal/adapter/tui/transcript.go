@@ -83,7 +83,13 @@ func (model *model) applyEvent(event session.Event, live bool) {
 		if record.Result.IsError {
 			prefix = "tool-error"
 		}
-		model.addLine(prefix + "> " + record.Result.Output)
+		line := prefix + "> " + record.Result.Output
+		if image := record.Result.Image; image != nil {
+			// The image itself stays out of the terminal; its identity lets
+			// the user match it to the file and the durable record.
+			line += fmt.Sprintf(" [image %s %dx%d sha256:%.12s]", image.Name, image.Width, image.Height, image.SHA256)
+		}
+		model.addLine(line)
 	case session.RecordRetry:
 		model.addLine(fmt.Sprintf("retry> attempt=%d delay=%dms reason=%s", record.Retry.Attempt, record.Retry.DelayMS, record.Retry.Failure))
 	case session.RecordCompactionStart:

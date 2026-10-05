@@ -283,8 +283,9 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			result.Outcome = session.OutcomeCompleted
 			return result
 		}
+		route := appTool.Route{Provider: document.Route.Provider, Model: document.Route.Model, ImageInput: call.Info().Vision}
 		toolResults := engine.tools.ExecuteBatch(ctx, appTool.BatchRequest{
-			SessionID: result.SessionID, Cwd: input.journal.Header().Cwd, Turn: turn, Step: step,
+			SessionID: result.SessionID, Cwd: input.journal.Header().Cwd, Route: route, Turn: turn, Step: step,
 			Calls: completion.Calls, Delegated: input.delegated, Journal: input.journal,
 		})
 		for index := range toolResults {

@@ -351,13 +351,15 @@ func TestCloneRequestDetachesImagesCallsAndResults(t *testing.T) {
 	request := Request{Surface: []session.SurfaceNode{
 		{Message: &session.Message{Content: []session.ContentBlock{{Type: session.ContentImage, Image: image}}}},
 		{Call: &session.ToolCall{ID: "call", Arguments: json.RawMessage(`{}`)}},
-		{Result: &session.ToolResult{CallID: "call", Output: "ok"}},
+		{Result: &session.ToolResult{CallID: "call", Output: "ok", Image: &session.Image{ID: "result-image", Name: "shot.png"}}},
+		{Result: &session.ToolResult{CallID: "plain", Output: "ok"}},
 	}}
 	cloned := cloneRequest(request)
 	cloned.Surface[0].Message.Content[0].Image.Name = "changed"
 	cloned.Surface[1].Call.Arguments[0] = '['
 	cloned.Surface[2].Result.Output = "changed"
-	if request.Surface[0].Message.Content[0].Image.Name == "changed" || request.Surface[1].Call.Arguments[0] == '[' || request.Surface[2].Result.Output == "changed" {
+	cloned.Surface[2].Result.Image.Name = "changed"
+	if request.Surface[0].Message.Content[0].Image.Name == "changed" || request.Surface[1].Call.Arguments[0] == '[' || request.Surface[2].Result.Output == "changed" || request.Surface[2].Result.Image.Name == "changed" || cloned.Surface[3].Result.Image != nil {
 		t.Fatal("cloneRequest aliases source")
 	}
 }
