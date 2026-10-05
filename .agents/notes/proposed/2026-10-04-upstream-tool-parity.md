@@ -12,6 +12,7 @@
 - 同类工具对齐上游能力，模型可见定义（名称、描述、参数 schema、必填项、枚举、属性顺序）与上游默认组合一致；允许在 `internal/app/tool` 建立定义抽象，可参考上游实现，但不复制代码。
 - 范围是上游 Base 内置集，外加 `ask_user_question`。
 - `apply_patch`、`list_files` 在上游目录中没有对应定义，直接移除。
+- `glob`、`grep` 与上游一样依赖 ripgrep 实现，不使用纯 Go 实现；本机安装最新稳定版，CI 固定版本并校验哈希。
 - `web_search` 复用已配置 LLM provider 的服务端检索，不新增凭据。
 - 工程规范遵循本仓约束：插件化、逐文件 100% coverage、Agent Note、ADR、`make check`。
 
@@ -36,14 +37,14 @@
 
 | WP | 内容 | 依赖 | ADR | 状态 |
 |---|---|---|---|---|
-| WP1 | 工具定义抽象、schema golden、`read`/`write`/`edit`/`glob`/`grep`/`bash` 改名与定义对齐 | — | 0007 | 已合入 `a2b565d` |
-| WP2 | 文件工具完整能力：大文件窗口、glob 排序与上限、grep 分组、spill、先读后写保护 | WP1 | 0008 | 待开始 |
-| WP3 | 后台任务运行时与 `job_*`，`bash` 后台运行与超时转后台 | WP1 | 0009 | 待开始 |
-| WP4 | `todo_write`、`todo/write` 事件与 TUI 清单 | WP1 | 0010 | 待开始 |
-| WP5 | `web_search`（provider 服务端检索）与 `web_fetch`（公网 HTTP） | WP1 | 0011 | 待开始 |
-| WP6 | 运行时 skill 发现、目录注入与 `skill` 工具 | WP1 | 0012 | 待开始 |
+| WP1 | 工具定义抽象、schema golden、`read`/`write`/`edit`/`glob`/`grep`/`bash` 改名与定义对齐 | — | 0007 | 已合入 `a2b565d`…`a9f93ea`（含 glob/grep 改用 ripgrep） |
+| WP2 | 文件工具完整能力：大文件窗口、glob 排序与上限、grep 分组、spill、先读后写保护 | WP1 | 0008 | 进行中 |
+| WP3 | 后台任务运行时与 `job_*`，`bash` 后台运行与超时转后台 | WP1 | 0009 | 进行中 |
+| WP4 | `todo_write`、`todo/write` 事件与 TUI 清单 | WP1 | 0010 | 完成，待合入 |
+| WP5 | `web_search`（provider 服务端检索）与 `web_fetch`（公网 HTTP） | WP1 | 0011 | 完成，待合入 |
+| WP6 | 运行时 skill 发现、目录注入与 `skill` 工具 | WP1 | 0012 | 进行中 |
 | WP7 | subagent 工具族对齐上游，后台可继续子代理与双向消息 | WP3 | 0013 | 待开始 |
-| WP8 | `ask_user_question` 与规划模式 `exit_plan_mode` | WP1 | 0014 | 待开始 |
+| WP8 | `ask_user_question` 与规划模式 `exit_plan_mode` | WP1 | 0014 | 进行中 |
 | WP9 | `read_image` 与多模态工具结果 | WP2 | 0015 | 待开始 |
 | WP10 | 长期目标 `create_goal`/`get_goal`/`update_goal` 与 round driver | WP3、WP8 | 0016 | 待开始 |
 
