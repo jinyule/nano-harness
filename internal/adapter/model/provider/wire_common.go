@@ -24,9 +24,23 @@ func (provider *Provider) streamRequest(ctx context.Context, endpoint string, pa
 	return send(ctx, provider, endpoint, "text/event-stream", payload, headers, consume)
 }
 
-// send posts one bounded JSON request and hands the bounded success body to
-// consume. Every provider request carries credentials, so the client refuses
-// redirects instead of forwarding credentials or the request body to another URL.
+// do sends one provider request. Every provider request carries credentials
+// or OAuth secrets, so the client refuses redirects instead of forwarding them
+// or the request body to another URL; a refused redirect is a protocol error.
+func (provider *Provider) do(request *http.Request) (*http.Response, error) {
+	client := *provider.client
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return errProviderRedirect }
+	response, err := client.Do(request)
+	if errors.Is(err, errProviderRedirect) {
+		return nil, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errProviderRedirect}
+	}
+	if err != nil {
+		return nil, transportError(provider.id, err)
+	}
+	return response, nil
+}
+
+// send posts one bounded JSON request and hands the bounded success body to consume.
 func send[T any](ctx context.Context, provider *Provider, endpoint, accept string, payload any, headers map[string]string, consume func(io.Reader) (T, error)) (T, error) {
 	var zero T
 	encoded, err := json.Marshal(payload)
@@ -46,14 +60,9 @@ func send[T any](ctx context.Context, provider *Provider, endpoint, accept strin
 	for name, value := range headers {
 		request.Header.Set(name, value)
 	}
-	client := *provider.client
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return errProviderRedirect }
-	response, err := client.Do(request)
-	if errors.Is(err, errProviderRedirect) {
-		return zero, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errProviderRedirect}
-	}
+	response, err := provider.do(request)
 	if err != nil {
-		return zero, transportError(provider.id, err)
+		return zero, err
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

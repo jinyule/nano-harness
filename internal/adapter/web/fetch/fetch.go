@@ -182,18 +182,17 @@ func (client *Client) request(ctx context.Context, target *url.URL) (*http.Respo
 	return response, transport, nil
 }
 
-// resolve validates an IP literal or every resolver answer for host. Any
-// non-public answer rejects the whole set, as does an IPv6 answer that a
-// discovered NAT64 prefix translates to a non-public IPv4 destination.
+// resolve returns the validated destination set for host: an IP literal as
+// stated, otherwise every resolver answer. Literals and answers pass the same
+// policy. Any non-public address rejects the whole set, as does an IPv6
+// address that a discovered NAT64 prefix translates to a non-public IPv4
+// destination; a literal inside a network-specific prefix reaches that IPv4
+// address just as a resolver answer would.
 func (client *Client) resolve(ctx context.Context, host string) ([]netip.Addr, error) {
+	var addresses []netip.Addr
 	if literal, err := netip.ParseAddr(host); err == nil {
-		if !publicAddress(literal) {
-			return nil, &web.Error{Code: web.CodeBlockedURL, Message: fmt.Sprintf("URL host %q is a non-public IP address", host)}
-		}
-		return []netip.Addr{literal.Unmap()}, nil
-	}
-	addresses, err := client.lookup(ctx, host)
-	if err != nil {
+		addresses = []netip.Addr{literal.Unmap()}
+	} else if addresses, err = client.lookup(ctx, host); err != nil {
 		return nil, err
 	}
 	if len(addresses) == 0 {
@@ -201,6 +200,9 @@ func (client *Client) resolve(ctx context.Context, host string) ([]netip.Addr, e
 	}
 	hasIPv6 := false
 	for _, address := range addresses {
+		if !address.IsValid() {
+			return nil, &web.Error{Code: web.CodeProviderError, Message: fmt.Sprintf("hostname %q resolved to an invalid IP address", host)}
+		}
 		if !publicAddress(address) {
 			return nil, &web.Error{Code: web.CodeBlockedURL, Message: fmt.Sprintf("URL hostname %q resolves to a non-public IP address", host)}
 		}
@@ -222,8 +224,9 @@ func (client *Client) resolve(ctx context.Context, host string) ([]netip.Addr, e
 	return addresses, nil
 }
 
-// lookup returns resolver answers with IPv4-mapped forms unmapped. Answers that
-// are not IP addresses are invalid and therefore never public.
+// lookup returns resolver answers with IPv4-mapped forms unmapped. An answer
+// that is not an IP address becomes the invalid zero Addr, which resolve
+// rejects and NAT64 discovery skips.
 func (client *Client) lookup(ctx context.Context, host string) ([]netip.Addr, error) {
 	answers, err := client.resolver.LookupIPAddr(ctx, host)
 	if err != nil {

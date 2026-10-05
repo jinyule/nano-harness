@@ -49,7 +49,7 @@ provider 协议测试使用 loopback HTTP server 发出真实 JSON/SSE 字节：
 - 同一个 provider-neutral `effort` 分别映射为 Responses `reasoning.effort`、Chat Completions `reasoning_effort` 和 Messages `output_config.effort`，未设置时三种格式都省略；
 - 三者的 text、reasoning、image、tool、usage、错误、truncation 和 malformed/incomplete stream；
 - 服务端 web 检索：Responses/Codex Responses、Messages 与 Chat Completions 的精确请求体和认证头，回答与来源归一、去重和上限，缺少检索证据、工具错误码、错误对象、超大回答/响应、畸形流、HTTP 状态、取消，以及对话与检索请求都拒绝重定向且不联系目标；
-- browser/device OAuth、PKCE callback、refresh、API key 与只读 Codex import。
+- browser/device OAuth、PKCE callback、refresh、API key 与只读 Codex import；OAuth 的表单与 JSON 请求遇到 308 时失败且不联系重定向目标。
 
 loopback HTTP 证明协议实现，不声称证明远端服务部署。真实 provider smoke 仍单独执行。
 
@@ -76,7 +76,7 @@ loopback HTTP 证明协议实现，不声称证明远端服务部署。真实 pr
 
 `todo_write` 的定义由下文的上游 Base 固定样本约束。工具测试经真实 tool runtime 验证 schema 违规、去空白、空项、重复、数量与长度上限、无所有者调用、取消和追加失败都不写日志；成功调用按 call 顺序写入完整快照并返回固定计数文案。engine 测试证明执行上下文携带调用方自己的 journal、turn、step 和 call ID。
 
-web 工具在 `app/web` 用真实 LLM runtime 与 settings 只替换远端模型，验证查询校验、未配置 route、单次账户准备、并发查询（barrier 证明重叠）、首个失败取消其余、轮转合并与截断、60 s 时限、调用方取消、缺账户和 shutdown 取消并等待在途操作。`adapter/web/fetch` 用 loopback HTTP/TLS server、注入的 resolver 和只接收已校验 IP:端口的 dialer 验证地址允许/拒绝矩阵（含 IPv4-mapped、zone、NAT64 发现）、重绑定、同源/跨源与超限重定向、charset 与压缩解码、字节/解压/字符截断、超时、取消、断开的正文和 TLS 主机名校验；生产默认配置用真实系统 resolver 证明 loopback 被拒且 server 未被联系。工具层用真实 tool runtime 验证 schema 与 guidance 文本、顺序及可见性条件与参考一致，并验证并发分组、无 approval、未声明根参数拒绝且不触达 service、`Error: <CODE>` 结构化错误文本和 HTML 转换矩阵。
+web 工具在 `app/web` 用真实 LLM runtime 与 settings 只替换远端模型，验证查询校验、未配置 route、单次账户准备、并发查询（barrier 证明重叠）、首个失败取消其余、轮转合并与截断、60 s 时限、调用方取消、缺账户和 shutdown 取消并等待在途操作。`adapter/web/fetch` 用 loopback HTTP/TLS server、注入的 resolver 和只接收已校验 IP:端口的 dialer 验证地址允许/拒绝矩阵（含 IPv4-mapped、zone、非 IP 解析答案、NAT64 发现，以及六种 RFC 6052 布局下嵌入私网 IPv4 的 IPv6 字面量）、重绑定、同源/跨源与超限重定向、charset 与压缩解码、字节/解压/字符截断、超时、取消、断开的正文和 TLS 主机名校验；生产默认配置用真实系统 resolver 证明 loopback 被拒且 server 未被联系。工具层用真实 tool runtime 验证 schema 与 guidance 文本、顺序及可见性条件与参考一致，并验证并发分组、无 approval、未声明根参数拒绝且不触达 service、`Error: <CODE>` 结构化错误文本和 HTML 转换矩阵。
 
 提问接缝用真实 service 与脚本 broker 覆盖请求上限、intent 校验、delegated 拒绝、取消（等待前与等待中）、broker 失败、全部非法答案形态、答案排序与切片解耦，以及 broker 注册与 scope 撤回。`ask_user_question` 与 `exit_plan_mode` 通过真实 tool runtime、提问服务和规划模式服务调用，覆盖逐字节 schema、结果 JSON、错误文本、规划模式外拒绝、标题规则、批准、继续规划、反馈、取消和服务停止。
 
@@ -151,7 +151,7 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 
 ## 定向 mutation 与断言有效性
 
-`make mutation` 执行 `scripts/mutation-cases.json` 中二十二个已审查回归：Scope cleanup 顺序、approval never、会话序号、事件因果、read 字节上限、路径逃逸、写入跨 symlink、已提交输出后的 retry、web 抓取公网地址校验、同源重定向限制、后台 job 的 owner 隔离、delegated 提问拒绝、`plan/mode` 只在 step 边界、未读文件被 `write` 覆盖、spill 分区内预置链接、`send_message` 的直接父子授权、`interrupt_agent` 的后代授权、目标的人类权限排除 delegated agent、目标轮次必须属于当前 revision、`read_image` 的图片输入门禁、provider 对工具结果图片的 vision 拒绝，以及图片不得占用会话保留容量。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
+`make mutation` 执行 `scripts/mutation-cases.json` 中二十四个已审查回归：Scope cleanup 顺序、approval never、会话序号、事件因果、read 字节上限、路径逃逸、写入跨 symlink、已提交输出后的 retry、web 抓取公网地址校验、IP 字面量经过同一地址策略、NAT64 翻译校验、同源重定向限制、后台 job 的 owner 隔离、delegated 提问拒绝、`plan/mode` 只在 step 边界、未读文件被 `write` 覆盖、spill 分区内预置链接、`send_message` 的直接父子授权、`interrupt_agent` 的后代授权、目标的人类权限排除 delegated agent、目标轮次必须属于当前 revision、`read_image` 的图片输入门禁、provider 对工具结果图片的 vision 拒绝，以及图片不得占用会话保留容量。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
 
 执行器使用 Python 3 标准库，在 Unix 私有临时目录复制当前 cmd/internal、go.mod/go.sum（包含未提交源码与测试），拒绝源 symlink；不在工作树变异，不运行用户数据，不复用历史结果。每项先运行明确选择的真实测试且至少一个测试通过，再变异、独立编译、以 `-count=1` 重跑。只有 Go JSON 输出中的具名测试失败可认定 killed；build-error、timeout、infrastructure-error、no-tests、baseline failure、stale-site 和 survived 全部失败。当前列举的每个 site 都执行，不依赖 coverage 筛选，因此没有“缺失 coverage 就跳过”的成功路径。空集合、重复 ID 或找不到唯一替换位置均拒绝。超时终止并等待整个测试进程组；临时树最终清理。
 

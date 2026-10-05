@@ -60,7 +60,21 @@
     "file": "internal/adapter/web/fetch/fetch.go",
     "before": "if !publicAddress(address) {",
     "after": "if false && !publicAddress(address) {",
-    "test": "^TestFetch_AddressPolicyMatrix$"
+    "test": "^TestFetch_(AddressPolicyMatrix|RejectsNAT64TranslatedLiterals)$"
+  },
+  {
+    "id": "web-fetch-literal-policy",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "addresses = []netip.Addr{literal.Unmap()}",
+    "after": "return []netip.Addr{literal.Unmap()}, nil",
+    "test": "^TestFetch_RejectsNAT64TranslatedLiterals$"
+  },
+  {
+    "id": "web-fetch-nat64-translation",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "ok && !publicAddress(embedded)",
+    "after": "false && ok && !publicAddress(embedded)",
+    "test": "^TestFetch_(AddressPolicyMatrix|RejectsNAT64TranslatedLiterals)$"
   },
   {
     "id": "web-fetch-redirect-origin",

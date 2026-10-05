@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -404,7 +405,7 @@ func TestFetch_AddressPolicyMatrix(t *testing.T) {
 		"http://private.example.test/":  web.CodeBlockedURL,
 		"http://metadata.example.test/": web.CodeBlockedURL,
 		"http://mapped.example.test/":   web.CodeBlockedURL,
-		"http://invalid.example.test/":  web.CodeBlockedURL,
+		"http://invalid.example.test/":  web.CodeProviderError,
 		"http://nat64.example.test/":    web.CodeBlockedURL,
 		"http://empty.example.test/":    web.CodeProviderError,
 		"http://missing.example.test/":  web.CodeProviderError,
@@ -430,6 +431,69 @@ func TestFetch_AddressPolicyMatrix(t *testing.T) {
 	resolver.errs[nat64DiscoveryHost] = errors.New("discovery failed")
 	_, err := current.client.Fetch(context.Background(), "http://ipv6.example.test/")
 	expectCode(t, err, web.CodeProviderError)
+}
+
+// embedIPv4 writes ipv4 into prefix with the RFC 6052 layout of its length,
+// leaving the reserved "u" octet zero for layouts shorter than /96.
+func embedIPv4(prefix netip.Prefix, ipv4 netip.Addr) netip.Addr {
+	raw := prefix.Masked().Addr().As16()
+	embedded := ipv4.As4()
+	if prefix.Bits() == 96 {
+		copy(raw[12:], embedded[:])
+		return netip.AddrFrom16(raw)
+	}
+	start := prefix.Bits() / 8
+	before := 8 - start
+	copy(raw[start:8], embedded[:before])
+	copy(raw[9:], embedded[before:])
+	return netip.AddrFrom16(raw)
+}
+
+// An IPv6 literal inside a network-specific DNS64 prefix reaches the IPv4
+// address it embeds, so literals pass the same NAT64 check as resolver answers.
+func TestFetch_RejectsNAT64TranslatedLiterals(t *testing.T) {
+	current := newFixture(t, func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(writer, "ok")
+	})
+	sentinel, private, public := netip.MustParseAddr("192.0.0.170"), netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("8.8.8.8")
+	var discovery []net.IPAddr
+	prefixes := map[int]netip.Prefix{}
+	for _, bits := range nat64PrefixBits {
+		prefix := netip.PrefixFrom(netip.MustParseAddr(fmt.Sprintf("26%02x:1:122:344:5:6:7:8", bits)), bits).Masked()
+		prefixes[bits] = prefix
+		discovery = append(discovery, net.IPAddr{IP: embedIPv4(prefix, sentinel).AsSlice()})
+	}
+	current.resolver.set(nat64DiscoveryHost, discovery)
+	for bits, prefix := range prefixes {
+		literal := embedIPv4(prefix, private)
+		if embedded, ok := embeddedIPv4(literal, bits); !ok || embedded != private || !publicAddress(literal) {
+			t.Fatalf("/%d fixture %s embeds %s ok=%v", bits, literal, embedded, ok)
+		}
+		_, err := current.client.Fetch(context.Background(), "http://["+literal.String()+"]/")
+		if message := expectCode(t, err, web.CodeBlockedURL); !strings.Contains(message, "NAT64") {
+			t.Fatalf("/%d literal %s message=%q", bits, literal, message)
+		}
+	}
+	if dialed := current.dialer.destinations(); len(dialed) != 0 {
+		t.Fatalf("translated literals were dialed: %v", dialed)
+	}
+	allowed := embedIPv4(prefixes[64], public)
+	if result, err := current.client.Fetch(context.Background(), "http://["+allowed.String()+"]/"); err != nil || result.Content != "ok" {
+		t.Fatalf("public translation result=%#v err=%v", result, err)
+	}
+	if dialed := current.dialer.destinations(); len(dialed) != 1 || dialed[0] != "["+allowed.String()+"]:80" {
+		t.Fatalf("dialed=%v", dialed)
+	}
+	if lookups := current.resolver.lookups(); len(lookups) != len(prefixes)+1 || lookups[0] != nat64DiscoveryHost {
+		t.Fatalf("every IPv6 literal must discover NAT64 prefixes: %v", lookups)
+	}
+	current.resolver.errs = map[string]error{nat64DiscoveryHost: errors.New("discovery failed")}
+	_, err := current.client.Fetch(context.Background(), "http://["+allowed.String()+"]/")
+	expectCode(t, err, web.CodeProviderError)
+	if _, err := current.client.Fetch(context.Background(), "http://8.8.8.8/"); err != nil {
+		t.Fatalf("IPv4 literal needs no NAT64 discovery: %v", err)
+	}
 }
 
 func TestFetch_FailsOverAcrossValidatedAddresses(t *testing.T) {

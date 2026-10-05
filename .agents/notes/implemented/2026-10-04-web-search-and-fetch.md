@@ -16,7 +16,7 @@
 长期决定见 [ADR-0011](../../../docs/decisions/0011-provider-web-search-and-public-fetch.md)，事实归 [架构](../../../docs/architecture.md#web-检索与抓取)与[安全规则](../../../docs/security.md#网络边界)。本次实施：
 
 - **插件与 composition。** `internal/app/web.Service`（ID `web`）位于 compaction 之后、sessions 之前；cleanup 先拒绝新操作，再取消全部在途操作，并等待每个操作的 provider 调用返回、操作注销。调用方在自己的 goroutine 上收到结果，可能晚于 cleanup 返回；静止保证只覆盖 service 拥有的工作。`internal/adapter/tool/web.Provider`（ID `web-tools`）位于 subagent tools 之后，Start 依次登记两个 `tool.Define` 编译的工具，每次登记由 tool runtime 在同一 Scope 中挂 cleanup；第二次登记失败时关闭该 Scope 会回收第一项。`internal/adapter/web/fetch.Client` 没有生命周期 effect（每跳 transport 在返回前关闭），作为依赖注入 `app/web`，不是插件。`cmd` 的 `dependencies` 增加 `webResolver`/`webDial`，生产为 nil。
-- **llm 与 provider。** `llm.PreparedModel` 增加 `Search`，`llm.Call.Search` 校验非空查询和正的结果上限后委托 provider。`internal/adapter/model/provider/search.go` 实现三种 wire；`responsesTarget`、`anthropicHeaders` 从对话路径抽出供两者共用；通用 `send` 取代原 `streamRequest` 主体，对所有 provider 请求拒绝重定向（protocol 错误）。
+- **llm 与 provider。** `llm.PreparedModel` 增加 `Search`，`llm.Call.Search` 校验非空查询和正的结果上限后委托 provider。`internal/adapter/model/provider/search.go` 实现三种 wire；`responsesTarget`、`anthropicHeaders` 从对话路径抽出供两者共用；通用 `send` 取代原 `streamRequest` 主体；对话、检索和 OAuth 请求都经 `Provider.do` 发出，拒绝重定向（protocol 错误）。
 - **settings。** `Document.Web.Search{Provider,Model}` 默认为空，YAML/JSON 在为空时省略；两者必须同时给出且 model 在 provider 目录中。
 - **工具定义。** 两个工具用 `tool.Spec` 声明，`Concurrent` 恒为 true，没有 `Approval`，也没有 `Check`（语义校验只在 `app/web`）。根对象未声明参数按 ADR-0007 被拒绝且不触达 service。`internal/app/tool/define.go` 增加参考 section 表的 `OrderWebSearch = 2000`、`OrderWebFetch = 2100`；guidance 由 `Runtime.Catalog` 渲染，prompt assembler 没有 web 专用分支。
 - **证据 fixture。** `cmd/nano-harness/testdata/tool-catalog.json` 与 `upstream-base-tools.json` 收录两个工具，后者的条目已与参考 `docs/tool-catalog.md` 的 JSON 块逐项比对。
@@ -66,5 +66,15 @@ WP7 在集成分支上跑全量 race 测试时，`TestService_ShutdownCancelsAnd
 修复后的证据：同一命令下，新测试在 `-cpu 1,2,8` 各 3000 次共 9000 次运行中全部通过；在同时运行 `go test -race ./internal/...` 的负载下，另外 9000 次也全部通过，而旧测试在同一负载下仍为 17/1000 失败。在私有副本中删除 cleanup 的 `group.Wait()` 后，新测试在 `-count=200 -cpu 1,2,8` 的 600 次运行中全部失败：598 次报 “still running”，2 次报 provider 调用尚未返回。这一变异的检出依赖调度，没有加入 `make mutation`，以免产生偶发的 survived。
 
 使用私有 `GOLANGCI_LINT_CACHE` 第一次运行 `make check` 时，失败只出现在 coverage 阶段的 `TestComposition_SubagentsEndToEnd`（WP7，`subagent_test.go:270` 期望 continuable child 排在 catalog 首位）。该失败与本修复无关，在未改动的 `00803e7` 上同样出现：编译测试二进制后，`-test.count 100 -test.cpu 1,4,8` 失败 38/300，`-cpu 1` 失败 46/100。原因是模型在同一步中并发调用 `subagent` 与 `subagent_fork`，两条 `subagent/catalog` 记录写入根会话的顺序不确定，已交给 WP7 处理。第二次运行 `make check` 通过：coverage 逐文件 100%，lint `0 issues`，17 个 mutation 全部 killed，build smoke 正常。
+
+### 整体审查修复（2026-10-06）
+
+整体审查在 `d9ad07b` 上发现三个问题，修复都先用稳定失败的测试复现：
+
+- **B1：IPv6 字面量绕过 NAT64 校验。** 旧 `resolve` 对 IP 字面量只做 `publicAddress` 就返回，NAT64 发现只在主机名路径执行。网络使用 `2000::/3` 内的 network-specific DNS64 前缀时，`http://[<pref64>::0a00:0001]/` 这类字面量通过公网校验，再经 NAT64 网关到达 `10.0.0.1`。参考 `network.ts` 把字面量放入同一答案集再检查。新增的 `TestFetch_RejectsNAT64TranslatedLiterals` 为 /32、/40、/48、/56、/64、/96 六种布局各构造一个发现前缀和嵌入 `10.0.0.1` 的字面量，修复前首个被检查的字面量即返回 `err=<nil>`。现在字面量与解析答案共用同一个校验循环和 NAT64 检查：六个字面量都以 `WEB_BLOCKED_URL` 拒绝且未拨号，嵌入 `8.8.8.8` 的字面量允许，每个 IPv6 字面量都会查询 `ipv4only.arpa`，发现失败时以 `WEB_PROVIDER_ERROR` 关闭，IPv4 字面量不触发发现。
+- **S1：OAuth 令牌请求跟随重定向。** `doOAuth` 直接用 `provider.client.Do`，307/308 会把 refresh token、code verifier 或 key 交换参数重发到 Location。新增的 `TestOAuth_RefusesRedirectsWithoutContactingTarget` 修复前因目标返回空响应而得到普通 protocol 错误，证明请求被转发。现在 `send` 与 `doOAuth` 共用 `Provider.do`，表单与 JSON 两种 OAuth 请求都返回 `errProviderRedirect`，重定向目标收到 0 次请求。
+- **S3：非 IP 解析答案的错误类别。** 旧实现把非 IP 答案当作非公网地址，返回 `WEB_BLOCKED_URL`；参考返回 `WEB_PROVIDER_ERROR`（resolved to an invalid IP address）。现已对齐参考，`TestFetch_AddressPolicyMatrix` 的期望随之修改，修复前该用例失败。
+
+定向 mutation：`web-fetch-public-address` 同时运行字面量测试；新增 `web-fetch-literal-policy`（恢复字面量提前返回，即 B1 本身）和 `web-fetch-nat64-translation`（禁用 NAT64 拒绝），三者都被杀死。`docs/security.md`、`docs/architecture.md`、`docs/testing.md` 与 ADR-0011 第 4、6 条已同步。
 
 未获得的证据：没有对 OpenAI、Codex、Anthropic 或 OpenRouter 的 live 检索调用，也没有访问真实公网页面；`make tui-e2e` 与跨平台构建未在本 WP 运行。

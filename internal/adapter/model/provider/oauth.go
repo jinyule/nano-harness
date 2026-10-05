@@ -132,9 +132,9 @@ func (provider *Provider) postJSON(ctx context.Context, endpoint string, payload
 }
 
 func (provider *Provider) doOAuth(request *http.Request) ([]byte, error) {
-	response, err := provider.client.Do(request)
+	response, err := provider.do(request)
 	if err != nil {
-		return nil, transportError(provider.id, err)
+		return nil, err
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

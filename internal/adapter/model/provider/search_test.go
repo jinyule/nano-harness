@@ -440,3 +440,31 @@ func TestSearch_SourceListDeduplicatesAndBounds(t *testing.T) {
 		t.Fatalf("bounded sources=%d last=%s", len(list.sources), list.sources[len(list.sources)-1].URL)
 	}
 }
+
+// OAuth requests carry codes, verifiers, refresh tokens, and key exchanges in
+// their bodies; a 307/308 would resend that body to the redirect target.
+func TestOAuth_RefusesRedirectsWithoutContactingTarget(t *testing.T) {
+	var targetHits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { targetHits.Add(1) }))
+	t.Cleanup(target.Close)
+	var originHits atomic.Int32
+	origin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		originHits.Add(1)
+		http.Redirect(writer, request, target.URL+"/stolen", http.StatusPermanentRedirect)
+	}))
+	t.Cleanup(origin.Close)
+	provider := &Provider{id: "openai", client: origin.Client(), auth: authConfig{openAIAuthURL: origin.URL, anthropicExchangeURL: origin.URL}}
+	_, err := provider.refreshOpenAI(context.Background(), llm.Credential{Kind: llm.CredentialOAuth, AccessToken: "old", RefreshToken: "refresh-secret"})
+	expectLLMError(t, err, llm.ErrorProtocol)
+	if !errors.Is(err, errProviderRedirect) {
+		t.Fatalf("form redirect error=%v", err)
+	}
+	provider.id = "anthropic"
+	_, err = provider.refreshAnthropic(context.Background(), llm.Credential{Kind: llm.CredentialOAuth, AccessToken: "old", RefreshToken: "refresh-secret"})
+	if !errors.Is(err, errProviderRedirect) {
+		t.Fatalf("JSON redirect error=%v", err)
+	}
+	if originHits.Load() != 2 || targetHits.Load() != 0 {
+		t.Fatalf("origin hits=%d target hits=%d", originHits.Load(), targetHits.Load())
+	}
+}

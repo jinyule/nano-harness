@@ -25,7 +25,7 @@
 - 请求 body、响应 body、SSE 单行、OAuth response、streamed text/reasoning、tool call 数量和 arguments 都有完整上限。
 - provider 对非成功 HTTP、malformed SSE、未知/缺失终止、非法 tool call 和不匹配的模型能力失败；不把部分 protocol failure 当作成功 completion。
 - OAuth loopback listener 只绑定固定 loopback 地址，校验 state，并在成功、失败、取消和 scope cleanup 时关闭。
-- provider 请求（对话与 web 检索）都携带凭据，HTTP client 拒绝跟随任何重定向，不把凭据、账户头或请求体转发到另一个 URL。被拒绝的重定向是不可重试的 protocol 错误。
+- provider 请求（对话、web 检索，以及 OAuth 的 device code、授权码交换、refresh 和 OpenRouter key 交换）都携带凭据或 OAuth 秘密，HTTP client 拒绝跟随任何重定向，不把凭据、账户头或请求体转发到另一个 URL；307/308 因而不会把 refresh token、code verifier 或交换参数重发到 Location。被拒绝的重定向是不可重试的 protocol 错误。
 
 ### Web 检索
 
@@ -36,8 +36,8 @@
 `web_fetch` 是匿名公网 GET，防御 SSRF，不防止模型把数据编码进公网 URL：
 
 - URL 最长 2048 字节，只允许 `http`/`https`、必须有主机与 1–65535 端口，含 userinfo 的 URL 拒绝。
-- 每一跳都重新解析主机（IP 字面量不解析），只要任一答案不是全局单播地址就拒绝整组：IPv4 拒绝 `0/8`、`10/8`、`100.64/10`、`127/8`、`169.254/16`、`172.16/12`、`192.0.0/24`、`192.0.2/24`、`192.31.196/24`、`192.52.193/24`、`192.88.99/24`、`192.168/16`、`192.175.48/24`、`198.18/15`、`198.51.100/24`、`203.0.113/24`、`224/4`、`240/4`；IPv6 只接受 `2000::/3`，并拒绝 `2001::/23`、`2001:db8::/32`、`2002::/16`、`2620:4f:8000::/48`、`3fff::/20` 与带 zone 的地址。IPv4-mapped 地址按内嵌 IPv4 判断。
-- 答案含 IPv6 时按 RFC 7050 解析 `ipv4only.arpa` 发现 DNS64 前缀；经 NAT64 翻译到非公网 IPv4 的地址拒绝。发现查询失败时抓取失败。
+- 每一跳都确定目的地址集合：IP 字面量即其本身，主机名则重新解析；字面量与解析答案经过完全相同的校验。解析器返回非 IP 答案时抓取以 `WEB_PROVIDER_ERROR` 失败。只要任一地址不是全局单播地址就拒绝整组：IPv4 拒绝 `0/8`、`10/8`、`100.64/10`、`127/8`、`169.254/16`、`172.16/12`、`192.0.0/24`、`192.0.2/24`、`192.31.196/24`、`192.52.193/24`、`192.88.99/24`、`192.168/16`、`192.175.48/24`、`198.18/15`、`198.51.100/24`、`203.0.113/24`、`224/4`、`240/4`；IPv6 只接受 `2000::/3`，并拒绝 `2001::/23`、`2001:db8::/32`、`2002::/16`、`2620:4f:8000::/48`、`3fff::/20` 与带 zone 的地址。IPv4-mapped 地址按内嵌 IPv4 判断。
+- 地址集合含 IPv6（包括 IPv6 字面量）时按 RFC 7050 解析 `ipv4only.arpa` 发现 DNS64 前缀；按任一 RFC 6052 布局经 NAT64 翻译到非公网 IPv4 的地址拒绝，因此在 network-specific 前缀内写出的字面量也不能到达私网。发现查询失败时抓取失败。
 - 连接只拨号到已校验的 IP:端口；TLS 仍按 URL 主机名校验证书和 SNI。每跳使用独立 transport，关闭 keep-alive，结束时关闭连接，因此 DNS 重绑定不能复用旧连接或改变目的地址。
 - 最多 5 次同源（scheme、小写主机、有效端口一致）重定向，每跳重新执行以上 URL 与地址校验；跨源重定向拒绝，不联系目标。
 - 不发送 cookie、Authorization 或代理凭据，不读取 `HTTP(S)_PROXY`；User-Agent 固定为 `nano-harness (+https://github.com/jinyule/nano-harness)`。
