@@ -5,8 +5,73 @@
     "tag": "dsh-v0.2.1-alpha.1",
     "composition": "packages/bundle/base/cordis.patch.yml"
   },
-  "note": "Reviewed copy of the upstream Base model-visible definitions. Tests compare against this file and never read the submodule; refresh it only when the reference pointer moves.",
+  "note": "Reviewed copy of the upstream model-visible definitions: the Base composition plus ask_user_question from the Web preset, and the Base plan-mode prompt section. Tests compare against this file and never read the submodule; refresh it only when the reference pointer moves.",
   "tools": [
+    {
+      "name": "ask_user_question",
+      "source": "docs/tool-catalog.md with packages/interaction/tool-ask-user/src/index.ts",
+      "composition": "Not in Base: the Web preset (packages/bundle/web-app/presets/standard.patch.yml) mounts @deepseek-ai/dsh-tool-ask-user without config, which selects the default blocking (legacy) schema; the timed variant and its timeout parameter are not advertised",
+      "description": "Ask the user a concise question when you need confirmation, a choice, or missing information before proceeding.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "questions": {
+            "type": "array",
+            "description": "Questions to ask the user before continuing.",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable id for this question; echoed in the answer."
+                },
+                "question": {
+                  "type": "string",
+                  "description": "The specific question to ask the user."
+                },
+                "header": {
+                  "type": "string",
+                  "description": "Optional short heading for the question, such as \"Confirm\" or \"Choose Mode\"."
+                },
+                "options": {
+                  "type": "array",
+                  "description": "Optional choices to show the user. If you recommend one, put it first and append \"(Recommended)\" to that label.",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "description": "Short user-facing option label."
+                      },
+                      "description": {
+                        "type": "string",
+                        "description": "One sentence explaining the tradeoff or impact."
+                      }
+                    },
+                    "required": [
+                      "label"
+                    ]
+                  }
+                },
+                "multi_select": {
+                  "type": "boolean",
+                  "description": "Whether the user may select more than one option. Defaults to false."
+                }
+              },
+              "required": [
+                "id",
+                "question"
+              ]
+            }
+          }
+        },
+        "required": [
+          "questions"
+        ]
+      }
+    },
     {
       "name": "bash",
       "source": "docs/tool-catalog.md with packages/shell/tool-bash/src/index.ts and packages/sandbox/sandbox/src/escalation.ts",
@@ -95,6 +160,24 @@
           "file_path",
           "old_string",
           "new_string"
+        ]
+      }
+    },
+    {
+      "name": "exit_plan_mode",
+      "source": "docs/tool-catalog.md with packages/plan/plan-mode/src/index.ts",
+      "composition": "Base mounts @deepseek-ai/dsh-plan-mode; the definition does not depend on its config and stays registered outside plan mode",
+      "description": "Use only in plan mode. Present your plan for the user's review and, on approval, leave plan mode. The user may approve (carry out the plan from your next step) or keep planning — their feedback comes back in the tool result; revise and present again.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "plan": {
+            "type": "string",
+            "description": "The complete plan, as markdown, starting with a # heading that names it."
+          }
+        },
+        "required": [
+          "plan"
         ]
       }
     },
@@ -344,6 +427,14 @@
           "content"
         ]
       }
+    }
+  ],
+  "prompt_sections": [
+    {
+      "name": "plan:policy",
+      "source": "packages/bundle/base/cordis.patch.yml, plan-mode row, config.section parsed as YAML (block scalar with clip chomping keeps one final newline)",
+      "composition": "Rendered by @deepseek-ai/dsh-plan-mode at section order PLAN_POLICY (500) while plan mode is active; inactive mode contributes no text",
+      "text": "You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.\n\nExplore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.\n\nThe tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed only to keep the request shape stable. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.\n\nResolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.\n\nMake the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.\n\nWhen ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask \"should I proceed?\" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.\n"
     }
   ]
 }

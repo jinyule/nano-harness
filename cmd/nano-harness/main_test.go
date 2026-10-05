@@ -22,6 +22,8 @@ import (
 	settingsfile "github.com/jinyule/nano-harness/internal/adapter/settings/file"
 	filetool "github.com/jinyule/nano-harness/internal/adapter/tool/file"
 	jobtool "github.com/jinyule/nano-harness/internal/adapter/tool/job"
+	plantool "github.com/jinyule/nano-harness/internal/adapter/tool/plan"
+	questiontool "github.com/jinyule/nano-harness/internal/adapter/tool/question"
 	searchtool "github.com/jinyule/nano-harness/internal/adapter/tool/search"
 	shelltool "github.com/jinyule/nano-harness/internal/adapter/tool/shell"
 	subagenttool "github.com/jinyule/nano-harness/internal/adapter/tool/subagent"
@@ -33,6 +35,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/app/compaction"
 	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	"github.com/jinyule/nano-harness/internal/app/llm"
+	"github.com/jinyule/nano-harness/internal/app/plan"
 	"github.com/jinyule/nano-harness/internal/app/prompt"
 	"github.com/jinyule/nano-harness/internal/app/retry"
 	"github.com/jinyule/nano-harness/internal/app/settings"
@@ -228,7 +231,7 @@ func TestComposition_MatchesUpstreamBaseTools(t *testing.T) {
 		frozen[definition.Name] = definition
 	}
 	upstream := loadCatalog(t, filepath.Join("testdata", "upstream-base-tools.json"))
-	if len(upstream) != 12 {
+	if len(upstream) != 14 {
 		t.Fatalf("upstream fixture lists %d tools", len(upstream))
 	}
 	for _, want := range upstream {
@@ -347,6 +350,7 @@ func restoreMainHooks(t *testing.T) {
 	subagentTools, todoTools, terminal := newSubagentTools, newTodoTools, newTerminal
 	webService, webTools := newWebService, newWebTools
 	jobService, jobTools := newJobService, newJobTools
+	questionTools, planTools := newQuestionTools, newPlanTools
 	t.Cleanup(func() {
 		newWebService, newWebTools = webService, webTools
 		currentWorkingDirectory, userConfigDirectory, readRandom, inspectPath, absolutePath, evaluateLinks = cwd, config, random, inspect, absolute, links
@@ -357,6 +361,7 @@ func restoreMainHooks(t *testing.T) {
 		newWorkspace, newFileTools, newSearchTools, newShellTools = workspaceRoot, fileTools, searchTools, shellTools
 		newSubagentTools, newTodoTools, newTerminal = subagentTools, todoTools, terminal
 		newJobService, newJobTools = jobService, jobTools
+		newQuestionTools, newPlanTools = questionTools, planTools
 	})
 }
 
@@ -505,7 +510,7 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 			newSessionManager = func(sessionjsonl.Config) (*sessionjsonl.Manager, error) { return nil, failure }
 		}},
 		{name: "engine", set: func() {
-			newAgentEngine = func(*llm.Runtime, *appTool.Runtime, *retry.Service, *compaction.Service, *prompt.Assembler, *settings.Service, agent.EngineConfig) (*agent.Engine, error) {
+			newAgentEngine = func(*llm.Runtime, *appTool.Runtime, *retry.Service, *compaction.Service, *prompt.Assembler, *plan.Service, *settings.Service, agent.EngineConfig) (*agent.Engine, error) {
 				return nil, failure
 			}
 		}},
@@ -547,6 +552,12 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 		}},
 		{name: "web tools", set: func() {
 			newWebTools = func(*appTool.Runtime, webtool.Service) (*webtool.Provider, error) { return nil, failure }
+		}},
+		{name: "question tools", set: func() {
+			newQuestionTools = func(*appTool.Runtime, questiontool.Asker) (*questiontool.Provider, error) { return nil, failure }
+		}},
+		{name: "plan tools", set: func() {
+			newPlanTools = func(*appTool.Runtime, plantool.Mode, plantool.Asker) (*plantool.Provider, error) { return nil, failure }
 		}},
 		{name: "terminal", set: func() { newTerminal = func(tui.Config) (*tui.App, error) { return nil, failure } }},
 	}

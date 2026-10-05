@@ -17,6 +17,8 @@ import (
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/approval"
 	"github.com/jinyule/nano-harness/internal/app/llm"
+	"github.com/jinyule/nano-harness/internal/app/plan"
+	"github.com/jinyule/nano-harness/internal/app/question"
 	"github.com/jinyule/nano-harness/internal/app/settings"
 	appSubagent "github.com/jinyule/nano-harness/internal/app/subagent"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
@@ -104,14 +106,26 @@ type fakeRoot struct {
 func (root *fakeRoot) Agent() (agent.Controller, error) { return root.controller, root.err }
 
 type fakePolicyRegistry struct {
-	session string
-	policy  session.ApprovalPolicy
-	err     error
+	mu         sync.Mutex
+	session    string
+	policy     session.ApprovalPolicy
+	err        error
+	planActive []bool
+	planChange plan.Change
+	planErr    error
 }
 
 func (registry *fakePolicyRegistry) SetPolicy(_ context.Context, id string, policy session.ApprovalPolicy) error {
 	registry.session, registry.policy = id, policy
 	return registry.err
+}
+
+func (registry *fakePolicyRegistry) SetPlanMode(_ context.Context, id string, active bool) (plan.Change, error) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	registry.session = id
+	registry.planActive = append(registry.planActive, active)
+	return registry.planChange, registry.planErr
 }
 
 type fakeModelService struct {
@@ -185,6 +199,24 @@ func (registry *fakeApprovalRegistry) RegisterBroker(broker approval.Broker, sco
 	})
 }
 
+type fakeQuestionRegistry struct {
+	broker question.Broker
+	err    error
+	closed bool
+}
+
+func (registry *fakeQuestionRegistry) RegisterBroker(broker question.Broker, scope *plugin.Scope) error {
+	if registry.err != nil {
+		return registry.err
+	}
+	registry.broker = broker
+	return scope.Defer(func(context.Context) error {
+		registry.broker = nil
+		registry.closed = true
+		return nil
+	})
+}
+
 type fakeImages struct {
 	image session.Image
 	err   error
@@ -212,6 +244,7 @@ type appFixture struct {
 	models     *fakeModelService
 	settings   *fakeSettings
 	approval   *fakeApprovalRegistry
+	questions  *fakeQuestionRegistry
 	images     *fakeImages
 	subagents  *fakeSubagents
 }
@@ -221,10 +254,10 @@ func newAppFixture() (*appFixture, Config) {
 		controller: &fakeController{status: agent.Status{SessionID: "root"}, submitResult: agent.TurnResult{Outcome: session.OutcomeCompleted, Text: "done"}},
 		registry:   &fakePolicyRegistry{}, models: &fakeModelService{},
 		settings: &fakeSettings{document: settings.Defaults(), revision: 3},
-		approval: &fakeApprovalRegistry{}, images: &fakeImages{}, subagents: &fakeSubagents{},
+		approval: &fakeApprovalRegistry{}, questions: &fakeQuestionRegistry{}, images: &fakeImages{}, subagents: &fakeSubagents{},
 	}
 	fixture.root = &fakeRoot{controller: fixture.controller}
-	return fixture, Config{Root: fixture.root, Registry: fixture.registry, LLM: fixture.models, Settings: fixture.settings, Approval: fixture.approval, Images: fixture.images, Subagents: fixture.subagents}
+	return fixture, Config{Root: fixture.root, Registry: fixture.registry, LLM: fixture.models, Settings: fixture.settings, Approval: fixture.approval, Questions: fixture.questions, Images: fixture.images, Subagents: fixture.subagents}
 }
 
 func TestNew_RequiresEveryUseCase(t *testing.T) {
@@ -236,7 +269,7 @@ func TestNew_RequiresEveryUseCase(t *testing.T) {
 		func(config *Config) { config.Root = nil }, func(config *Config) { config.Registry = nil },
 		func(config *Config) { config.LLM = nil }, func(config *Config) { config.Settings = nil },
 		func(config *Config) { config.Approval = nil }, func(config *Config) { config.Images = nil },
-		func(config *Config) { config.Subagents = nil },
+		func(config *Config) { config.Subagents = nil }, func(config *Config) { config.Questions = nil },
 	} {
 		config := valid
 		mutate(&config)
@@ -255,7 +288,7 @@ func TestAppStart_ForwardsEventsRegistersBrokerAndCleans(t *testing.T) {
 	if err := app.Start(context.Background(), scope); err != nil {
 		t.Fatal(err)
 	}
-	if app.config.Approval != fixture.approval || fixture.approval.broker != app || len(app.initial) != 1 {
+	if app.config.Approval != fixture.approval || fixture.approval.broker != app || fixture.questions.broker != (questionBroker{app: app}) || len(app.initial) != 1 {
 		t.Fatal("start did not publish broker or initial events")
 	}
 	if err := app.Start(context.Background(), &plugin.Scope{}); !errors.Is(err, ErrInvalidConfig) {
@@ -274,8 +307,8 @@ func TestAppStart_ForwardsEventsRegistersBrokerAndCleans(t *testing.T) {
 	if err := scope.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !fixture.controller.disposed || !fixture.approval.closed || app.active {
-		t.Fatalf("cleanup state: disposed=%v approval=%v active=%v", fixture.controller.disposed, fixture.approval.closed, app.active)
+	if !fixture.controller.disposed || !fixture.approval.closed || !fixture.questions.closed || app.active {
+		t.Fatalf("cleanup state: disposed=%v approval=%v questions=%v active=%v", fixture.controller.disposed, fixture.approval.closed, fixture.questions.closed, app.active)
 	}
 }
 
@@ -333,6 +366,7 @@ func TestAppStart_ContainsRootSnapshotSubscriptionScopeAndBrokerFailures(t *test
 		{name: "events", configure: func(fixture *appFixture) { fixture.controller.eventsErr = failure }},
 		{name: "subscribe", configure: func(fixture *appFixture) { fixture.controller.subscribeErr = failure }},
 		{name: "broker", configure: func(fixture *appFixture) { fixture.approval.err = failure }},
+		{name: "question broker", configure: func(fixture *appFixture) { fixture.questions.err = failure }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture, config := newAppFixture()

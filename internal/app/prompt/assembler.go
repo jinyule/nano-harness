@@ -27,7 +27,10 @@ type Input struct {
 	Model     string
 	Persona   string
 	Delegated bool
-	Tools     []session.ToolDefinition
+	// PlanPolicy is the plan-mode section in force for this request, placed
+	// after the role and before the tool sections as in the upstream order.
+	PlanPolicy string
+	Tools      []session.ToolDefinition
 	// Guidance is the ordered tool paragraphs frozen with Tools.
 	Guidance []string
 }
@@ -64,8 +67,8 @@ func (assembler *Assembler) Start(_ context.Context, scope *plugin.Scope) error 
 	return nil
 }
 
-// Build emits ordered identity, workspace, safety, delegation, tool, and
-// tool-guidance sections.
+// Build emits ordered identity, workspace, safety, delegation, role, plan
+// policy, tool, and tool-guidance sections.
 func (assembler *Assembler) Build(input Input) (string, error) {
 	assembler.mu.RLock()
 	active := assembler.active
@@ -86,6 +89,9 @@ func (assembler *Assembler) Build(input Input) (string, error) {
 	}
 	if persona := strings.TrimSpace(input.Persona); persona != "" {
 		sections = append(sections, "Assigned role:\n"+persona)
+	}
+	if input.PlanPolicy != "" {
+		sections = append(sections, input.PlanPolicy)
 	}
 	tools := slices.Clone(input.Tools)
 	slices.SortFunc(tools, func(left, right session.ToolDefinition) int { return strings.Compare(left.Name, right.Name) })

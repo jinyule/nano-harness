@@ -30,7 +30,7 @@ func Surface(events []Event) ([]SurfaceNode, error) {
 		case RecordTurnStart, RecordStepStart, RecordRequestHeader, RecordAssistantChunk,
 			RecordApprovalAsked, RecordApprovalDecided, RecordApprovalPolicy, RecordRetry,
 			RecordRetryStarted, RecordCompactionStart, RecordCompactionEnd,
-			RecordSubagentDescriptor, RecordTodoWrite, RecordStepEnd, RecordTurnEnd:
+			RecordSubagentDescriptor, RecordTodoWrite, RecordPlanMode, RecordStepEnd, RecordTurnEnd:
 			// Metadata, UI state, and lifecycle facts do not directly contribute a model-visible node.
 		}
 	}
@@ -158,6 +158,10 @@ func CloneEvent(event Event) Event {
 		todo := *event.Record.Todo
 		todo.Items = slices.Clone(todo.Items)
 		cloned.Record.Todo = &todo
+	}
+	if event.Record.Plan != nil {
+		mode := *event.Record.Plan
+		cloned.Record.Plan = &mode
 	}
 	return cloned
 }

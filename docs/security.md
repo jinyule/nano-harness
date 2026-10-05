@@ -88,13 +88,21 @@
 
 工具 schema omission、prompt 声明或 UI 隐藏都不构成授权。web 工具的网络边界见[网络边界](#网络边界)。新写工具必须把 approval/sandbox 决策放在不可绕过的 execution path，并测试允许/拒绝矩阵。
 
+## 用户提问与规划模式
+
+- `ask_user_question` 与 `exit_plan_mode` 的问题来自模型参数，属于不可信输入。提问服务在呈现前限制为最多 16 题、每题最多 32 个选项，id 为无换行的 1–128 字节且唯一，问题与标签不能为空白，标签在题内唯一；文本总量受 128 KiB 参数上限约束。
+- 答案在进入模型前逐题校验：每题恰好一条，只能选择该题提供的标签，单选至多一个，自由回答不超过 16 KiB 且为合法 UTF-8。broker 缺失、取消、失败或非法答案都失败关闭为错误结果，不会被当作默认选择或批准。delegated agent 不能提问。
+- 答案是用户提供的数据，不是授权：它不改变 approval policy、sandbox 或工具 allowlist，写类工具仍在执行点请求一次性 approval。
+- 规划模式是提示词约束，不是授权边界：它不过滤工具，也不读取或改变 approval、sandbox 与 allowlist。需要强制只读时使用 `never` policy。评估与理由见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)。
+- 只有恰好选择 `Approve` 且没有自由回答的审查结果才会退出规划模式；退出在下一个 step 边界持久化为 `plan/mode`。
+
 ## Session 与恢复
 
 - session root 使用 `0700`，JSONL transcript 和独占 writer lock 使用 `0600`。session ID 只能生成 root 内固定文件名。
 - strict decoder 拒绝未知字段、多 JSON value、未来 version、torn record、unsafe 文件、越界大小、错误 digest、非法因果顺序和 composition mismatch。
 - append 先写、`fsync`，再更新内存状态；失败尝试 truncate 回已知 durable prefix。回滚失败会和原错误一起返回。
 - resume 只对 schema 与因果均有效的完整记录做追加式 repair：取消未决 approval、补 tool error，并关闭 compaction/step/turn。它不截断 torn line、不删除未知内容、不迁移旧格式。
-- model-visible stream chunk、message、call/result、approval、retry、compaction summary 和 image 均进入日志；credential、OAuth notice 和内部 provider DTO 不进入。
+- model-visible stream chunk、message、call/result、approval、retry、compaction summary、image、规划模式切换与切换提示均进入日志；credential、OAuth notice 和内部 provider DTO 不进入。问题与答案只作为 `tool/call` 参数和 `tool/result` 存在。
 - `todo/write` 只由调用方 session 中尚未得到 result 的 `todo_write` call 写入，最多 256 项、每项 `content` 2048 字节。decoder 拒绝未知字段、未知状态、未去空白或重复的内容，以及不引用 pending call 的记录。
 
 ## Subagent 与生命周期

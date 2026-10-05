@@ -4,6 +4,69 @@
   "policy": "Reviewed fixture: CI only compares. Edit by hand when a definition change is intended; tools shared with upstream must also match testdata/upstream-base-tools.json.",
   "tools": [
     {
+      "name": "ask_user_question",
+      "description": "Ask the user a concise question when you need confirmation, a choice, or missing information before proceeding.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "questions": {
+            "type": "array",
+            "description": "Questions to ask the user before continuing.",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable id for this question; echoed in the answer."
+                },
+                "question": {
+                  "type": "string",
+                  "description": "The specific question to ask the user."
+                },
+                "header": {
+                  "type": "string",
+                  "description": "Optional short heading for the question, such as \"Confirm\" or \"Choose Mode\"."
+                },
+                "options": {
+                  "type": "array",
+                  "description": "Optional choices to show the user. If you recommend one, put it first and append \"(Recommended)\" to that label.",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "description": "Short user-facing option label."
+                      },
+                      "description": {
+                        "type": "string",
+                        "description": "One sentence explaining the tradeoff or impact."
+                      }
+                    },
+                    "required": [
+                      "label"
+                    ]
+                  }
+                },
+                "multi_select": {
+                  "type": "boolean",
+                  "description": "Whether the user may select more than one option. Defaults to false."
+                }
+              },
+              "required": [
+                "id",
+                "question"
+              ]
+            }
+          }
+        },
+        "required": [
+          "questions"
+        ]
+      }
+    },
+    {
       "name": "bash",
       "description": "Execute a bash command (`bash -c`) and return its stdout/stderr. Each call runs in a fresh shell; pass `workdir` instead of using `cd`. Managed `$DSH_*` variables expose current harness environment facts. Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. Provide `description` before `command` in the arguments. Before any delete or move, verify that the resolved absolute target path is the intended one; never run it against a computed path you have not checked. An unset variable expands to an empty string, so guard variables in such paths with `${VAR:?}`. Commands may run under a file sandbox; a blocked file operation is reported as `[sandbox: file access denied under <mode> mode]`, a policy denial: do not retry another way.",
       "parameters": {
@@ -87,6 +150,22 @@
           "file_path",
           "old_string",
           "new_string"
+        ]
+      }
+    },
+    {
+      "name": "exit_plan_mode",
+      "description": "Use only in plan mode. Present your plan for the user's review and, on approval, leave plan mode. The user may approve (carry out the plan from your next step) or keep planning — their feedback comes back in the tool result; revise and present again.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "plan": {
+            "type": "string",
+            "description": "The complete plan, as markdown, starting with a # heading that names it."
+          }
+        },
+        "required": [
+          "plan"
         ]
       }
     },

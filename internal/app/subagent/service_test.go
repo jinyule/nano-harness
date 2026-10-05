@@ -15,6 +15,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/app/approval"
 	"github.com/jinyule/nano-harness/internal/app/compaction"
 	"github.com/jinyule/nano-harness/internal/app/llm"
+	"github.com/jinyule/nano-harness/internal/app/plan"
 	"github.com/jinyule/nano-harness/internal/app/prompt"
 	"github.com/jinyule/nano-harness/internal/app/retry"
 	"github.com/jinyule/nano-harness/internal/app/settings"
@@ -157,7 +158,9 @@ func startServiceHarness(t *testing.T, actions ...testAction) *serviceHarness {
 	start(compactor)
 	assembler := prompt.New()
 	start(assembler)
-	engine, err := agent.NewEngine(modelRuntime, harness.tools, retries, compactor, assembler, configuration, agent.EngineConfig{MaxSteps: 4})
+	planMode := plan.New()
+	start(planMode)
+	engine, err := agent.NewEngine(modelRuntime, harness.tools, retries, compactor, assembler, planMode, configuration, agent.EngineConfig{MaxSteps: 4})
 	if err != nil {
 		t.Fatal(err)
 	}

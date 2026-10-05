@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	appJob "github.com/jinyule/nano-harness/internal/app/job"
+	"github.com/jinyule/nano-harness/internal/app/plan"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
@@ -14,6 +15,10 @@ func (model *model) applyEvent(event session.Event, live bool) {
 	switch record.Type {
 	case session.RecordUserMessage:
 		text := session.Text(*record.Message)
+		if record.Message.Source.Kind == plan.NoticeSource {
+			model.addLine("mode> " + text)
+			return
+		}
 		attachments := 0
 		for _, block := range record.Message.Content {
 			if block.Type == session.ContentImage {
@@ -66,6 +71,13 @@ func (model *model) applyEvent(event session.Event, live bool) {
 			model.addLine("compact> completed")
 		} else {
 			model.addLine("compact> " + record.Compaction.Error)
+		}
+	case session.RecordPlanMode:
+		model.planActive = record.Plan.Active
+		if model.planActive {
+			model.addLine("mode> plan mode on")
+		} else {
+			model.addLine("mode> plan mode off")
 		}
 	case session.RecordTurnEnd:
 		model.streamText = ""

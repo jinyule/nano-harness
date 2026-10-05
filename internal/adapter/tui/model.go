@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -21,6 +22,7 @@ const (
 	modeNormal inputMode = iota
 	modeApproval
 	modeAuth
+	modeQuestion
 )
 
 type model struct {
@@ -35,6 +37,8 @@ type model struct {
 	mode       inputMode
 	approval   *approvalEnvelope
 	auth       *authEnvelope
+	question   *questionState
+	planActive bool
 	images     []session.Image
 	todos      []session.TodoItem
 	plan       []string
@@ -100,6 +104,9 @@ func (model model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.input.Placeholder = "y to allow once; n to reject"
 		model.input.EchoMode = textinput.EchoNormal
 		return model, waitUI(model.app.events, model.app.stop, model.ctx.Done())
+	case questionEnvelope:
+		model.beginQuestion(message)
+		return model, waitUI(model.app.events, model.app.stop, model.ctx.Done())
 	case authEnvelope:
 		model.mode = modeAuth
 		model.auth = &message
@@ -129,6 +136,16 @@ func (model model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.addLine("system> " + message.text)
 		}
 		return model, nil
+	case planMessage:
+		if message.err != nil {
+			model.addLine("error> " + message.err.Error())
+			return model, nil
+		}
+		model.addLine("system> " + message.text)
+		if message.message == nil {
+			return model, nil
+		}
+		return model, model.deliverCommand(*message.message)
 	case attachmentMessage:
 		if message.err != nil {
 			model.addLine("error> " + message.err.Error())
@@ -176,6 +193,9 @@ func (model model) cancelOrQuit() (tea.Model, tea.Cmd) {
 		model.auth = nil
 		model.restoreInput()
 		return model, nil
+	case modeQuestion:
+		model.cancelQuestion()
+		return model, nil
 	case modeNormal:
 	default:
 	}
@@ -200,6 +220,8 @@ func (model model) submit() (tea.Model, tea.Cmd) {
 		model.auth = nil
 		model.restoreInput()
 		return model, nil
+	case modeQuestion:
+		return model.answerQuestion(value)
 	case modeNormal:
 		// Normal input continues through command or message submission below.
 	}
@@ -218,19 +240,33 @@ func (model model) submit() (tea.Model, tea.Cmd) {
 	}
 	model.images = nil
 	message := session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: content}
-	command := func() tea.Msg {
-		results, err := model.app.agent.Submit(model.ctx, message)
-		if err != nil {
-			return turnMessage{result: agent.TurnResult{Outcome: session.OutcomeError, Err: err}}
-		}
-		select {
-		case result := <-results:
-			return turnMessage{result: result}
-		case <-model.ctx.Done():
-			return turnMessage{result: agent.TurnResult{Outcome: session.OutcomeCanceled, Err: model.ctx.Err()}}
-		}
+	return model, func() tea.Msg { return model.submitAndWait(message) }
+}
+
+// submitAndWait queues a turn and reports its terminal result.
+func (model model) submitAndWait(message session.Message) tea.Msg {
+	results, err := model.app.agent.Submit(model.ctx, message)
+	if err != nil {
+		return turnMessage{result: agent.TurnResult{Outcome: session.OutcomeError, Err: err}}
 	}
-	return model, command
+	select {
+	case result := <-results:
+		return turnMessage{result: result}
+	case <-model.ctx.Done():
+		return turnMessage{result: agent.TurnResult{Outcome: session.OutcomeCanceled, Err: model.ctx.Err()}}
+	}
+}
+
+// deliverCommand steers a message into the active turn, or starts a turn
+// with it when the agent is idle.
+func (model model) deliverCommand(message session.Message) tea.Cmd {
+	return func() tea.Msg {
+		err := model.app.agent.Steer(model.ctx, message)
+		if errors.Is(err, agent.ErrAgentIdle) {
+			return model.submitAndWait(message)
+		}
+		return operationMessage{text: "steer queued", err: err}
+	}
 }
 
 func (model *model) restoreInput() {
@@ -246,13 +282,20 @@ func (model model) View() tea.View {
 	}
 	document, _, _ := model.app.config.Settings.Snapshot()
 	status := model.app.agent.Status()
-	header := headerStyle.MaxWidth(model.width).Render(fmt.Sprintf(" nano-harness  %s/%s  session=%s  busy=%t ", document.Route.Provider, document.Route.Model, status.SessionID, status.Busy))
+	mode := ""
+	if model.planActive {
+		mode = "mode=plan "
+	}
+	header := headerStyle.MaxWidth(model.width).Render(fmt.Sprintf(" nano-harness  %s/%s  session=%s  busy=%t %s", document.Route.Provider, document.Route.Model, status.SessionID, status.Busy, mode))
 	prompt := ""
 	switch model.mode {
 	case modeApproval:
 		prompt = warningStyle.Render(fmt.Sprintf("Approval required: %s (%s)", model.approval.question.Reason, model.approval.question.ToolName))
 	case modeAuth:
 		prompt = warningStyle.Render("Authentication: " + model.auth.prompt.Message)
+	case modeQuestion:
+		state := model.question
+		prompt = warningStyle.Render(fmt.Sprintf("Question %d/%d: %s", state.index+1, len(state.envelope.request.Questions), state.current().Text))
 	case modeNormal:
 		if len(model.images) > 0 {
 			prompt = mutedStyle.Render(fmt.Sprintf("%d image(s) ready", len(model.images)))

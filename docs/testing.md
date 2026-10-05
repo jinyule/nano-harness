@@ -66,13 +66,16 @@ loopback HTTP 证明协议实现，不声称证明远端服务部署。真实 pr
 - followup、steer、interrupt、idle、one-shot、shutdown drain 和 panic containment；
 - 完成通知在 turn 开始后、工具 step 边界和无工具调用的回答之后作为 `user/message` 提交，回答之后的通知让 turn 继续，最后一步留待下一 turn；空闲 agent 被通知唤醒，排队的 turn 优先投递，被取消的 turn 不自动续开；
 - subagent spawn/fork/wait/followup/interrupt/report/list、parent identity、depth、publication race 和 cleanup failure；
-- 后台任务的 owner 隔离、每 owner 上限、增量读取与 UTF-8 拼接、保留窗口与丢失提示、wait 超时/取消/收走、kill reason、值结果只交出一次、producer panic，以及关闭时取消、等待且不发通知。
+- 后台任务的 owner 隔离、每 owner 上限、增量读取与 UTF-8 拼接、保留窗口与丢失提示、wait 超时/取消/收走、kill reason、值结果只交出一次、producer panic，以及关闭时取消、等待且不发通知；
+- 规划模式选择在 turn 之间立即提交、turn 内只在下一个 step 边界提交，用户切换提示只在最近请求描述另一种模式时出现，获批退出在下一个边界生效，边界写入失败使 turn 失败并保留选择。
 
 工具定义抽象用表驱动测试证明 schema 键序、参数违规列表、未知成员拒绝、类型化解码、并发分组、审批前校验和 panic containment。workspace 工具通过真实 runtime 调用并使用真实临时目录，覆盖路径允许/拒绝矩阵（相对、绝对、`..`、symlink 读取与写入）、read 窗口与行/字节上限、UTF-8/BOM/CRLF、原子写入与权限、edit 唯一匹配与 `replace_all`、通过真实 ripgrep 验证 glob 模式、修改时间排序、VCS 排除与上限，以及 grep 的 hidden/ignore/include 规则与上限（ripgrep 不保证跨文件顺序，测试只排序分组后比较），另用脚本化 runner 覆盖退出码 2、信号、超时、启动失败、输出超限、畸形 `--json` 和版本过低、`rg` 缺失时的启动失败、sandbox escalation 的成对规则、delegated denial、timeout、process group 和 tail 截断，以及 `bash` 的后台运行、超时转后台的消费式交接、取消与关闭时终止 job、达到上限时的退回执行。`bash` 另有真实 host 进程测试，包括后台 job 的双流输出和 `job_kill` 终止整个进程组；本机存在 OS sandbox 时还验证 workspace 内可写、workspace 外被拒绝并返回拒绝标记。写工具须从测试进程重新读取文件，不能只断言工具返回文案。
 
 `todo_write` 的定义由下文的上游 Base 固定样本约束。工具测试经真实 tool runtime 验证 schema 违规、去空白、空项、重复、数量与长度上限、无所有者调用、取消和追加失败都不写日志；成功调用按 call 顺序写入完整快照并返回固定计数文案。engine 测试证明执行上下文携带调用方自己的 journal、turn、step 和 call ID。
 
 web 工具在 `app/web` 用真实 LLM runtime 与 settings 只替换远端模型，验证查询校验、未配置 route、单次账户准备、并发查询（barrier 证明重叠）、首个失败取消其余、轮转合并与截断、60 s 时限、调用方取消、缺账户和 shutdown 取消并等待在途操作。`adapter/web/fetch` 用 loopback HTTP/TLS server、注入的 resolver 和只接收已校验 IP:端口的 dialer 验证地址允许/拒绝矩阵（含 IPv4-mapped、zone、NAT64 发现）、重绑定、同源/跨源与超限重定向、charset 与压缩解码、字节/解压/字符截断、超时、取消、断开的正文和 TLS 主机名校验；生产默认配置用真实系统 resolver 证明 loopback 被拒且 server 未被联系。工具层用真实 tool runtime 验证 schema 与 guidance 文本、顺序及可见性条件与参考一致，并验证并发分组、无 approval、未声明根参数拒绝且不触达 service、`Error: <CODE>` 结构化错误文本和 HTML 转换矩阵。
+
+提问接缝用真实 service 与脚本 broker 覆盖请求上限、intent 校验、delegated 拒绝、取消（等待前与等待中）、broker 失败、全部非法答案形态、答案排序与切片解耦，以及 broker 注册与 scope 撤回。`ask_user_question` 与 `exit_plan_mode` 通过真实 tool runtime、提问服务和规划模式服务调用，覆盖逐字节 schema、结果 JSON、错误文本、规划模式外拒绝、标题规则、批准、继续规划、反馈、取消和服务停止。
 
 ## Session、设置、账户与图片
 
@@ -85,13 +88,13 @@ web 工具在 `app/web` 用真实 LLM runtime 与 settings 只替换远端模型
 
 TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event forwarding/backpressure、所有 durable presentation event、text/reasoning stream、图片附加、普通/approval/auth 输入模式、全部命令、UI 消失与 cancellation。
 
-`cmd/nano-harness` assembled e2e 使用真实 CLI config、Plugin Runtime、设置/账户/LLM/tool/agent/session/TUI 构造链和 loopback OpenAI SSE。模型第一步发出 `read`，真实工具读取 workspace，第二步返回最终文本；测试从磁盘重新读取 v2 transcript 并断言 call/result/final assistant 和工具 guidance。todo 场景让模型调用 `todo_write`，从磁盘断言 request header schema、`todo/write` 快照与结果文案，再以新 composition 恢复同一会话并从 replay 得到同一计划。`TestComposition_BackgroundJobsEndToEnd` 走同一 composition 与真实 host 进程，用文件确定因果顺序，覆盖后台启动、`job_list`、带 reason 的 `job_kill`、`job_output` 的 wait 超时与读取，以及空闲 root agent 被完成通知唤醒；断言来自磁盘 transcript 和 provider 收到的请求。另一个测试让默认 Bubble Tea runner 接收终止键，证明真实 terminal lifecycle 可以启动和关闭。独立测试前端复用 `composeApplication` 的共同插件链，验证无需构造 TUI 即可消费 durable 事件并先于 app 服务关闭；这不是 GUI 实现证据。
+`cmd/nano-harness` assembled e2e 使用真实 CLI config、Plugin Runtime、设置/账户/LLM/tool/agent/session/TUI 构造链和 loopback OpenAI SSE。模型第一步发出 `read`，真实工具读取 workspace，第二步返回最终文本；测试从磁盘重新读取 v2 transcript 并断言 call/result/final assistant 和工具 guidance。todo 场景让模型调用 `todo_write`，从磁盘断言 request header schema、`todo/write` 快照与结果文案，再以新 composition 恢复同一会话并从 replay 得到同一计划。`TestComposition_BackgroundJobsEndToEnd` 走同一 composition 与真实 host 进程，用文件确定因果顺序，覆盖后台启动、`job_list`、带 reason 的 `job_kill`、`job_output` 的 wait 超时与读取，以及空闲 root agent 被完成通知唤醒；断言来自磁盘 transcript 和 provider 收到的请求。提问与规划模式的 assembled 测试复用 `composeApplication`，只用脚本前端替换终端 broker：模型调用 `ask_user_question` 后答案从磁盘 transcript 和下一次 provider 请求中验证；规划模式测试从真实 `Registry.SetPlanMode` 进入，依次验证带反馈的继续规划、批准、批准后不再携带 Base 规划段落（与 `upstream-base-tools.json` 中的原文逐字比较）以及规划模式外的拒绝，并检查 `plan/mode` 记录的位置。另一个测试让默认 Bubble Tea runner 接收终止键，证明真实 terminal lifecycle 可以启动和关闭。独立测试前端复用 `composeApplication` 的共同插件链，验证无需构造 TUI 即可消费 durable 事件并先于 app 服务关闭；这不是 GUI 实现证据。
 
 `TestComposition_WebSearchAndFetchEndToEnd` 经真实 CLI config、settings 文件和 composition，让 loopback 模型在一步内调用 `web_search` 与 `web_fetch`：检索请求打到同一 Responses endpoint，抓取经注入 resolver 映射到 loopback 页面且只拨号已校验 IP；测试从磁盘 transcript 断言冻结的 schema、system prompt 指引、检索来源与 HTML 转换结果。`TestComposition_WebSearchUnconfiguredFailsClosed` 证明默认未配置时 `web_search` 返回 `WEB_PROVIDER_UNAVAILABLE` 且不联系 provider。
 
 命令级 failure matrix 覆盖路径归一化、create/resume、每个 constructor、runtime start、TUI run、shutdown、usage/version output 和 write failure；PATH 中没有 `rg` 时，`tui` 以退出码 1 结束并给出安装提示。发布 smoke 必须运行编译后的 `bin/nano-harness`，不能以 `go run` 或直接调用内部函数替代。
 
-`make tui-e2e` 是独立的本机 PTY 验证入口，需要 Python 3、Unix 和 PATH 中的 ripgrep；脚本给被测二进制的最小 PATH 加上当前 `rg` 所在目录。`scripts/tui-e2e.py` 只替换远端模型，在 loopback 的动态端口提供 Responses SSE；TUI、composition、工具、审批、sandbox 和 session 均走编译后的真实 `cmd`。脚本从终端发送任务和审批答案，确认终端显示 `todo_write` 计划，再独立检查根会话的十四次工具调用与 `todo/write` 快照、子会话的 read/followup 与 `never` 策略、`write`/`edit`/两次 `bash` 的四次审批决定、实际文件字节、长行末尾、打断、重启 replay（后续 turn 已清除计划）、私有权限和退出后的 lock 清理。其中一个后台 `bash` job 在第一个 turn 结束后才完成，终端显示 `job>` 通知，通知开启的 turn 用 `job_output` 读到输出。`subagent_interrupt` 场景针对已 idle 的 child；活动 turn 的取消由根 `/interrupt` 场景与 subagent 包测试覆盖。
+`make tui-e2e` 是独立的本机 PTY 验证入口，需要 Python 3、Unix 和 PATH 中的 ripgrep；脚本给被测二进制的最小 PATH 加上当前 `rg` 所在目录。`scripts/tui-e2e.py` 只替换远端模型，在 loopback 的动态端口提供 Responses SSE；TUI、composition、工具、审批、sandbox 和 session 均走编译后的真实 `cmd`。脚本从终端发送任务、审批和提问答案，确认终端显示 `todo_write` 计划，再独立检查根会话的十六次工具调用与 `todo/write` 快照（含两题 `ask_user_question` 的预填推荐项与自由回答，以及 `/plan` 后一次真实 TUI 批准的 `exit_plan_mode`）、`plan/mode` 记录与切换提示、规划段落只出现在批准前的请求中、子会话的 read/followup 与 `never` 策略、`write`/`edit`/两次 `bash` 的四次审批决定、实际文件字节、长行末尾、打断、重启 replay（后续 turn 已清除计划）、私有权限和退出后的 lock 清理。其中一个后台 `bash` job 在第一个 turn 结束后才完成，终端显示 `job>` 通知，通知开启的 turn 用 `job_output` 读到输出。`subagent_interrupt` 场景针对已 idle 的 child；活动 turn 的取消由根 `/interrupt` 场景与 subagent 包测试覆盖。
 
 TUI 回归测试还覆盖 v2 粘贴、按键释放、secret 遮罩、小窗口布局（含计划面板在 18×8 到 80×24 窗口中的行数上限、溢出窗口和 transcript 保留行）、计划的初始 replay、实时替换与下一 turn 清除，以及 Scope 关闭正在运行的 terminal、取消并等待登录命令和拒绝迟到命令。PTY 在两种窗口尺寸下使用 bracketed paste 输入任务。TUI 回归测试证明流式输出与系统行不会串接、reasoning 不隐藏最终回答、中文长行可见、历史浏览保留位置，以及键盘输入和分页/鼠标滚动各自生效。断点调试另按[调试步骤](debugging.md)验证；直接 IDE 与 Remote 各自需要真实断点、调用栈和变量证据，协议 fixture 不等于远端模型 live 证据。
 
@@ -136,7 +139,7 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 
 ## 定向 mutation 与断言有效性
 
-`make mutation` 执行 `scripts/mutation-cases.json` 中十一个已审查回归：Scope cleanup 顺序、approval never、会话序号、事件因果、read 字节上限、路径逃逸、写入跨 symlink、已提交输出后的 retry、web 抓取公网地址校验、同源重定向限制和后台 job 的 owner 隔离。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
+`make mutation` 执行 `scripts/mutation-cases.json` 中十三个已审查回归：Scope cleanup 顺序、approval never、会话序号、事件因果、read 字节上限、路径逃逸、写入跨 symlink、已提交输出后的 retry、web 抓取公网地址校验、同源重定向限制、后台 job 的 owner 隔离、delegated 提问拒绝和 `plan/mode` 只在 step 边界。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
 
 执行器使用 Python 3 标准库，在 Unix 私有临时目录复制当前 cmd/internal、go.mod/go.sum（包含未提交源码与测试），拒绝源 symlink；不在工作树变异，不运行用户数据，不复用历史结果。每项先运行明确选择的真实测试且至少一个测试通过，再变异、独立编译、以 `-count=1` 重跑。只有 Go JSON 输出中的具名测试失败可认定 killed；build-error、timeout、infrastructure-error、no-tests、baseline failure、stale-site 和 survived 全部失败。当前列举的每个 site 都执行，不依赖 coverage 筛选，因此没有“缺失 coverage 就跳过”的成功路径。空集合、重复 ID 或找不到唯一替换位置均拒绝。超时终止并等待整个测试进程组；临时树最终清理。
 
@@ -148,13 +151,15 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 
 `internal/adapter/session/jsonl/testdata/session-v2.jsonl` 是手写、已审查的合成 v2 协议样本，没有生成器或自动刷新开关。`TestSessionV2_FrozenContract` 从真实 Manager/Inspect/Open 读取、投影并确认关闭会话不改字节；writer 使用独立构造的记录精确比较同一格式，避免 writer/reader 一起改错而 round-trip 仍绿。`TestSessionV2_RejectsChangedContract` 拒绝旧/未来版本、未知字段/记录、序号缺口和非法 step。`testdata/session-v2-todo.jsonl` 按同一规则固定 `todo/write`：`TestSessionV2Todo_FrozenContract` 读取、投影计划并比较 writer 字节，`TestSessionV2Todo_RejectsChangedContract` 拒绝未知 todo/item 字段、未知状态、未去空白或重复的内容、缺失或为 null 的 `items`、无 pending call，以及跨 step/turn 的记录。
 
+`testdata/session-v2-plan.jsonl` 以同样方式冻结 `plan/mode`：`TestSessionV2Plan_FrozenContract` 覆盖 turn 之间进入、切换提示、审查调用和 turn 内退出，`TestSessionV2Plan_RejectsChangedContract` 拒绝未知字段、缺失负载、step 内记录、错误 turn 和重复当前模式；resume 测试证明修复中断尾部不改动已提交的模式。
+
 修改持久化字段、枚举、顺序、版本或恢复语义时，PR 明确选择同版本兼容、严格拒绝旧版或迁移，给出样本与因果/事务证据并更新架构和 ADR。固定样本不是全部记录类型的 schema catalog，也不代替现有图片、compaction、subagent、错误恢复和 I/O rollback 测试。CI 不重写样本，nano v2 严格拒绝旧格式的承诺不变。
 
 ## 模型可见工具目录
 
 `cmd/nano-harness/testdata/tool-catalog.json` 冻结真实 composition 的全部工具定义。`TestComposition_ToolCatalogGolden` 经 `cmd` 跑完一轮，从磁盘 transcript 的第一个 `request/header` 取出 tools，逐项比较名称、描述和紧凑化后的参数 JSON（保留键序），并确认 loopback provider 收到的 wire 定义与 header 相同。fixture 是人工审查的期望值，CI 只比较；有意变化时手工修改 fixture 并在同一变更中提升 composition 版本。
 
-`cmd/nano-harness/testdata/upstream-base-tools.json` 记录上游 Base 组合中 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`todo_write`、`web_search`、`web_fetch` 的定义，标注上游提交、来源文件和组合推导，测试不读取 submodule。`TestComposition_MatchesUpstreamBaseTools` 要求同名工具逐字节一致。更新参考指针时按 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md) 重新推导这份数据。
+`cmd/nano-harness/testdata/upstream-base-tools.json` 记录上游 Base 组合中 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`todo_write`、`web_search`、`web_fetch`、`exit_plan_mode` 和 Web preset 的 `ask_user_question` 定义，以及 Base 规划段落原文（`prompt_sections`），标注上游提交、来源文件和组合推导，测试不读取 submodule。`TestComposition_MatchesUpstreamBaseTools` 要求同名工具逐字节一致；规划模式 assembled 测试要求请求中的规划段落与 fixture 原文一致。更新参考指针时按 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md) 重新推导这份数据。
 
 ## 性能观测与预算
 

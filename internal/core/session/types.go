@@ -66,6 +66,8 @@ const (
 	RecordSubagentDescriptor RecordType = "subagent/descriptor"
 	// RecordTodoWrite commits the complete todo list written by one pending tool call.
 	RecordTodoWrite RecordType = "todo/write"
+	// RecordPlanMode commits the plan mode in force from this point on.
+	RecordPlanMode RecordType = "plan/mode"
 	// RecordStepEnd closes an active step after all calls and approvals settle.
 	RecordStepEnd RecordType = "step/end"
 	// RecordTurnEnd closes an active turn with a stable outcome.
@@ -304,6 +306,7 @@ type Record struct {
 	Compaction *CompactionData     `json:"compaction,omitempty"`
 	Subagent   *SubagentDescriptor `json:"subagent,omitempty"`
 	Todo       *TodoWrite          `json:"todo,omitempty"`
+	Plan       *PlanMode           `json:"plan,omitempty"`
 	Outcome    TurnOutcome         `json:"outcome,omitempty"`
 }
 

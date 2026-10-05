@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/jinyule/nano-harness/internal/app/compaction"
+	"github.com/jinyule/nano-harness/internal/app/plan"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
@@ -347,6 +348,19 @@ func (agent *Agent) Compact(ctx context.Context) (bool, error) {
 	}
 	agent.mu.Unlock()
 	return agent.engine.compaction.Maybe(ctx, compaction.Request{Journal: agent.journal, Force: true})
+}
+
+// selectPlan applies a plan-mode selection while holding the worker's state
+// lock. The worker marks itself busy under the same lock before it appends
+// turn/start, so an immediate commit between turns can never interleave
+// with a turn starting.
+func (agent *Agent) selectPlan(ctx context.Context, active bool) (plan.Change, error) {
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if !agent.active {
+		return "", ErrNotRunning
+	}
+	return agent.engine.plan.Select(ctx, agent.journal, active, agent.busy)
 }
 
 func (agent *Agent) close(ctx context.Context, scope *plugin.Scope) error {

@@ -75,5 +75,19 @@
     "before": "if current := service.records[index]; current.owner == owner {",
     "after": "if current := service.records[index]; current.owner == owner || true {",
     "test": "^TestService_FencesOwnersAndUnknownJobs$"
+  },
+  {
+    "id": "question-delegated",
+    "file": "internal/app/question/question.go",
+    "before": "if request.Delegated {",
+    "after": "if false && request.Delegated {",
+    "test": "^TestService_AskFailsClosed$"
+  },
+  {
+    "id": "plan-mode-boundary",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": "record.Turn != state.turn || state.step != 0 || record.Plan.Active == state.plan",
+    "after": "record.Turn != state.turn || record.Plan.Active == state.plan",
+    "test": "^TestValidateOrder_PlanModeOnlyAtStepBoundaries$"
   }
 ]

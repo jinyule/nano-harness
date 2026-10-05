@@ -8,6 +8,8 @@ import (
 	settingsfile "github.com/jinyule/nano-harness/internal/adapter/settings/file"
 	filetool "github.com/jinyule/nano-harness/internal/adapter/tool/file"
 	jobtool "github.com/jinyule/nano-harness/internal/adapter/tool/job"
+	plantool "github.com/jinyule/nano-harness/internal/adapter/tool/plan"
+	questiontool "github.com/jinyule/nano-harness/internal/adapter/tool/question"
 	searchtool "github.com/jinyule/nano-harness/internal/adapter/tool/search"
 	shelltool "github.com/jinyule/nano-harness/internal/adapter/tool/shell"
 	subagenttool "github.com/jinyule/nano-harness/internal/adapter/tool/subagent"
@@ -20,7 +22,9 @@ import (
 	"github.com/jinyule/nano-harness/internal/app/compaction"
 	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	"github.com/jinyule/nano-harness/internal/app/llm"
+	"github.com/jinyule/nano-harness/internal/app/plan"
 	"github.com/jinyule/nano-harness/internal/app/prompt"
+	"github.com/jinyule/nano-harness/internal/app/question"
 	"github.com/jinyule/nano-harness/internal/app/retry"
 	"github.com/jinyule/nano-harness/internal/app/settings"
 	"github.com/jinyule/nano-harness/internal/app/subagent"
@@ -39,6 +43,7 @@ type application struct {
 	models    *llm.Runtime
 	settings  *settings.Service
 	approval  *approval.Service
+	questions *question.Service
 	images    *mediaimage.Normalizer
 	subagents *subagent.Service
 }
@@ -66,6 +71,8 @@ var (
 	newTodoTools         = todotool.New
 	newWebService        = appweb.New
 	newWebTools          = webtool.New
+	newQuestionTools     = questiontool.New
+	newPlanTools         = plantool.New
 )
 
 func composeApplication(config applicationConfig, deps dependencies) (*application, error) {
@@ -95,12 +102,14 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 		providers = append(providers, provider)
 	}
 	approvalService := approval.New()
+	questionService := question.New()
 	toolRuntime, err := newToolRuntime(approvalService)
 	if err != nil {
 		return nil, err
 	}
 	images := mediaimage.New()
 	assembler := prompt.New()
+	planMode := plan.New()
 	retryService, err := newRetryService(configuration)
 	if err != nil {
 		return nil, err
@@ -117,7 +126,7 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
-	engine, err := newAgentEngine(modelRuntime, toolRuntime, retryService, compactionService, assembler, configuration, agent.EngineConfig{MaxSteps: config.maxSteps})
+	engine, err := newAgentEngine(modelRuntime, toolRuntime, retryService, compactionService, assembler, planMode, configuration, agent.EngineConfig{MaxSteps: config.maxSteps})
 	if err != nil {
 		return nil, err
 	}
@@ -170,14 +179,23 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
+	questionTools, err := newQuestionTools(toolRuntime, questionService)
+	if err != nil {
+		return nil, err
+	}
+	planTools, err := newPlanTools(toolRuntime, planMode, questionService)
+	if err != nil {
+		return nil, err
+	}
 	// Jobs start after shell tools so their cleanup stops every background
 	// process before the shell temporary directory is removed.
 	plugins := []plugin.Plugin{
 		configuration, settingsProvider, credentials, modelRuntime,
-		providers[0], providers[1], providers[2], approvalService, toolRuntime,
-		images, assembler, retryService, compactionService, webService, sessions, engine,
+		providers[0], providers[1], providers[2], approvalService, questionService, toolRuntime,
+		images, assembler, planMode, retryService, compactionService, webService, sessions, engine,
 		registry, root, subagents, fileTools, searchTools, shellTools, jobs, jobTools, subagentTools, todoTools, webTools,
+		questionTools, planTools,
 	}
 	return &application{plugins: plugins, root: root, registry: registry, models: modelRuntime,
-		settings: configuration, approval: approvalService, images: images, subagents: subagents}, nil
+		settings: configuration, approval: approvalService, questions: questionService, images: images, subagents: subagents}, nil
 }

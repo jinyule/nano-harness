@@ -237,7 +237,7 @@ func composeTUI(config applicationConfig, deps dependencies) (*composition, erro
 	}
 	terminal, err := newTerminal(tui.Config{
 		Root: app.root, Registry: app.registry, LLM: app.models, Settings: app.settings,
-		Approval: app.approval, Images: app.images, Subagents: app.subagents,
+		Approval: app.approval, Questions: app.questions, Images: app.images, Subagents: app.subagents,
 	})
 	if err != nil {
 		return nil, err
@@ -258,7 +258,7 @@ func composeTUI(config applicationConfig, deps dependencies) (*composition, erro
 // each tool provider, and the session format. Bump a provider token whenever
 // its model-visible definitions or behavior change incompatibly.
 func compositionID(config applicationConfig) string {
-	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00fs-tools-v1\x00search-tools-v2\x00shell-tools-v2\x00job-tools-v1\x00subagent-tools-v2\x00todo-tools-v1\x00web-tools-v1\x00session-v2"
+	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00fs-tools-v1\x00search-tools-v2\x00shell-tools-v2\x00job-tools-v1\x00subagent-tools-v2\x00todo-tools-v1\x00web-tools-v1\x00question-tools-v1\x00plan-tools-v1\x00session-v2"
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
 }

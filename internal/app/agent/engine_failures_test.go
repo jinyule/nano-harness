@@ -108,9 +108,17 @@ func TestEngine_ContainsStepPreparationFailures(t *testing.T) {
 		{name: "prepare call", match: "prepare", configure: func(harness *engineHarness, _ *memoryLog) {
 			harness.provider.prepareErr = errors.New("prepare")
 		}},
-		{name: "second events", match: "events", configure: func(_ *engineHarness, log *memoryLog) {
+		{name: "plan boundary", match: "plan mode boundary: events", configure: func(_ *engineHarness, log *memoryLog) {
 			log.eventsHook = func(call int) error {
 				if call == 3 {
+					return errors.New("events")
+				}
+				return nil
+			}
+		}},
+		{name: "second events", match: "events", configure: func(_ *engineHarness, log *memoryLog) {
+			log.eventsHook = func(call int) error {
+				if call == 4 {
 					return errors.New("events")
 				}
 				return nil

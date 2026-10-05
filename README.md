@@ -52,6 +52,7 @@ make build
 /model PROVIDER MODEL
 /compact
 /permission ask|never
+/plan [off|TEXT]
 /agents
 /interrupt
 /steer TEXT
@@ -59,6 +60,8 @@ make build
 ```
 
 `/attach` 接受 JPEG 或 PNG；图片会缩放、规范化并随下一条消息持久化。`/permission ask` 是默认策略：`write`、`edit` 和 `bash` 在实际执行前请求一次性授权。`bash` 默认在 workspace sandbox 中运行；模型可以用 `sandbox_permissions: danger-full-access` 和理由请求让单条命令离开 sandbox，这仍需一次性授权，subagent 不能请求。
+
+`/plan` 进入规划模式，`/plan TEXT` 进入后把文本作为下一条输入，`/plan off` 离开。规划模式期间请求带上游 Base 的规划指引，模型用 `exit_plan_mode` 提交计划，由你批准或带反馈继续规划；它只是指引，写入与 shell 仍需一次性授权。模型用 `ask_user_question` 提问时，输入选项编号（多选用逗号分隔）、直接输入文字作答，或留空跳过；推荐选项会预先填入，Ctrl+C 取消。
 
 TUI 使用 Bubble Tea v2、Lip Gloss v2 和 Bubbles v2，并作为可回收插件接入共享应用。后续 GUI 可独立复用同一组装，见[前端插件决策](docs/decisions/0005-selectable-frontend-plugins.md)。
 
@@ -85,7 +88,7 @@ model 必须在该 provider 的模型目录中，否则设置加载失败。未�
 
 ## 终端验证与 GoLand 调试
 
-`make tui-e2e` 使用真实二进制和 PTY，配合本地模型协议 fixture，验证文件工具、任务计划、后台任务通知、Subagent、审批、打断和恢复，无需模型账户。需要 Python 3、Unix PTY、ripgrep 和本机 workspace sandbox。
+`make tui-e2e` 使用真实二进制和 PTY，配合本地模型协议 fixture，验证文件工具、任务计划、后台任务通知、Subagent、审批、提问、规划模式、打断和恢复，无需模型账户。需要 Python 3、Unix PTY、ripgrep 和本机 workspace sandbox。
 
 GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点。需要把 TUI 输入保留在 Codex 或其他终端中时，使用 `Nano TUI Remote`；完整步骤见[终端与断点调试](docs/debugging.md)。
 
@@ -93,8 +96,9 @@ GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点�
 
 - provider-neutral 的 Models → Provider → wire API 路由；provider 拥有 catalog、认证、刷新和流协议。
 - OpenAI Responses/ChatGPT Codex Responses、Anthropic Messages、OpenRouter Chat Completions 的流式适配。
-- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`web_search`、`web_fetch` 和记录会话任务计划的 `todo_write`，以及 spawn/followup/interrupt/report/list subagent 工具。
+- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`web_search`、`web_fetch`、记录会话任务计划的 `todo_write` 和 `exit_plan_mode`，与 Web preset 一致的 `ask_user_question`，以及 spawn/followup/interrupt/report/list subagent 工具。
 - `bash` 可在后台运行，前台命令超时后转为后台 job 继续运行；job 完成后通知所属 agent，agent 空闲时自动开启新 turn。
+- 可持久化的规划模式与经用户审查的退出，以及失败关闭的用户提问接缝。
 - 失败关闭的 approval、相邻只读工具并发、写入与 shell 的独占 barrier。
 - 指数退避 retry、主动/被动 context compaction、followup、steer、interrupt 和恢复。
 - v2 严格 JSONL 事件日志；流式 text/reasoning/tool、审批、重试、压缩、任务计划和 subagent 身份均可审计。
@@ -110,7 +114,7 @@ internal/app/{llm,tool,...}/      用例与消费方能力接口
 internal/adapter/model/provider/  OpenAI、Anthropic、OpenRouter provider
 internal/adapter/credential/file/ owner-only 账户存储
 internal/adapter/session/jsonl/   严格 JSONL 会话 provider
-internal/adapter/tool/            file、search、shell、job、subagent、todo、web 工具与 workspace 根
+internal/adapter/tool/            file、search、shell、job、subagent、todo、web、提问与规划模式工具与 workspace 根
 internal/adapter/web/fetch/       公网 HTTP(S) 抓取与地址策略
 internal/adapter/media/image/     图片解码、缩放与规范化
 internal/adapter/tui/             全屏终端 UI

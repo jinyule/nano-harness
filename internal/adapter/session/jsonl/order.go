@@ -15,6 +15,7 @@ type orderState struct {
 	calls      []string
 	approvals  []string
 	compaction string
+	plan       bool
 }
 
 func validateOrder(events []coresession.Event, requireClosed bool) (orderState, error) {
@@ -131,6 +132,14 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 				return state, orderError("turn/end has unfinished work")
 			}
 			state.turn = 0
+		case coresession.RecordPlanMode:
+			// A mode change takes effect at a step boundary: between turns
+			// (turn 0) or inside the active turn before its next step. A
+			// record that repeats the current mode is never written.
+			if record.Turn != state.turn || state.step != 0 || record.Plan.Active == state.plan {
+				return state, orderError("plan/mode is not a mode change at a step boundary")
+			}
+			state.plan = record.Plan.Active
 		case coresession.RecordApprovalPolicy, coresession.RecordSubagentDescriptor:
 			// Durable metadata is independent of the model surface.
 		}

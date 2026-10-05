@@ -12,6 +12,8 @@ import (
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/approval"
 	"github.com/jinyule/nano-harness/internal/app/llm"
+	"github.com/jinyule/nano-harness/internal/app/plan"
+	"github.com/jinyule/nano-harness/internal/app/question"
 	"github.com/jinyule/nano-harness/internal/app/settings"
 	appSubagent "github.com/jinyule/nano-harness/internal/app/subagent"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
@@ -37,6 +39,7 @@ type Config struct {
 	LLM       ModelService
 	Settings  SettingsService
 	Approval  ApprovalRegistry
+	Questions QuestionRegistry
 	Images    ImageNormalizer
 	Subagents SubagentService
 }
@@ -46,9 +49,11 @@ type RootSource interface {
 	Agent() (agent.Controller, error)
 }
 
-// PolicyRegistry changes durable root approval policy.
+// PolicyRegistry changes durable root session policy: the approval policy
+// and plan mode.
 type PolicyRegistry interface {
 	SetPolicy(context.Context, string, session.ApprovalPolicy) error
+	SetPlanMode(context.Context, string, bool) (plan.Change, error)
 }
 
 // ModelService exposes account and model operations used by commands.
@@ -70,6 +75,11 @@ type ApprovalRegistry interface {
 	RegisterBroker(approval.Broker, *plugin.Scope) error
 }
 
+// QuestionRegistry publishes the local user-questions broker for one scope.
+type QuestionRegistry interface {
+	RegisterBroker(question.Broker, *plugin.Scope) error
+}
+
 // SubagentService lists live delegated agents for presentation.
 type SubagentService interface {
 	List(string) ([]appSubagent.Info, error)
@@ -83,6 +93,16 @@ type ImageNormalizer interface {
 type approvalEnvelope struct {
 	question approval.Question
 	result   chan session.ApprovalOutcome
+}
+
+type questionEnvelope struct {
+	request question.Request
+	result  chan questionResult
+}
+
+type questionResult struct {
+	answers []question.Answer
+	err     error
 }
 
 type authEnvelope struct {
@@ -106,6 +126,11 @@ type attachmentMessage struct {
 	image session.Image
 	err   error
 }
+type planMessage struct {
+	text    string
+	err     error
+	message *session.Message
+}
 
 // App is both a lifecycle plugin, approval broker, and auth interaction.
 type App struct {
@@ -128,7 +153,7 @@ type App struct {
 
 // New validates an assembled TUI without starting terminal I/O.
 func New(config Config) (*App, error) {
-	if config.Root == nil || config.Registry == nil || config.LLM == nil || config.Settings == nil || config.Approval == nil || config.Images == nil || config.Subagents == nil {
+	if config.Root == nil || config.Registry == nil || config.LLM == nil || config.Settings == nil || config.Approval == nil || config.Questions == nil || config.Images == nil || config.Subagents == nil {
 		return nil, ErrInvalidConfig
 	}
 	return &App{config: config, events: make(chan any, 512), stop: make(chan struct{}), uiGone: make(chan struct{})}, nil
@@ -137,7 +162,8 @@ func New(config Config) (*App, error) {
 // ID returns the stable plugin identity.
 func (*App) ID() string { return "tui" }
 
-// Start subscribes to durable events and publishes the approval broker.
+// Start subscribes to durable events and publishes the approval and
+// question brokers.
 func (app *App) Start(ctx context.Context, scope *plugin.Scope) error {
 	app.mu.Lock()
 	if app.started {
@@ -212,6 +238,10 @@ func (app *App) Start(ctx context.Context, scope *plugin.Scope) error {
 		_ = scope.Close(context.WithoutCancel(ctx))
 		return err
 	}
+	if err := app.config.Questions.RegisterBroker(questionBroker{app: app}, scope); err != nil {
+		_ = scope.Close(context.WithoutCancel(ctx))
+		return err
+	}
 	return nil
 }
 
@@ -276,6 +306,39 @@ func (app *App) Ask(ctx context.Context, question approval.Question) session.App
 	}
 }
 
+// questionBroker presents user questions through the same serialized
+// interaction channel as approvals; App already uses Ask for approvals.
+type questionBroker struct{ app *App }
+
+// Ask presents one request and returns the user's answers. Ctrl+C in the
+// terminal returns question.ErrCancelled; a closed terminal returns
+// ErrNotRunning, which the question service treats as unavailable.
+func (broker questionBroker) Ask(ctx context.Context, request question.Request) ([]question.Answer, error) {
+	app := broker.app
+	app.interactionMu.Lock()
+	defer app.interactionMu.Unlock()
+	envelope := questionEnvelope{request: request, result: make(chan questionResult, 1)}
+	select {
+	case app.events <- envelope:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-app.stop:
+		return nil, ErrNotRunning
+	case <-app.uiGone:
+		return nil, ErrNotRunning
+	}
+	select {
+	case result := <-envelope.result:
+		return result.answers, result.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-app.stop:
+		return nil, ErrNotRunning
+	case <-app.uiGone:
+		return nil, ErrNotRunning
+	}
+}
+
 // Prompt presents one serialized provider-owned auth input.
 func (app *App) Prompt(ctx context.Context, prompt llm.AuthPrompt) (string, error) {
 	app.interactionMu.Lock()
@@ -312,4 +375,5 @@ func (app *App) Notify(notice llm.AuthNotice) {
 }
 
 var _ approval.Broker = (*App)(nil)
+var _ question.Broker = questionBroker{}
 var _ llm.AuthInteraction = (*App)(nil)

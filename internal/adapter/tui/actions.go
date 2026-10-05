@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/jinyule/nano-harness/internal/app/plan"
 	"github.com/jinyule/nano-harness/internal/app/settings"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
@@ -17,7 +18,7 @@ func (model model) command(value string) (tea.Model, tea.Cmd) {
 		model.quitting = true
 		return model, tea.Quit
 	case "/help":
-		model.addLine("commands> /attach PATH · /accounts · /login PROVIDER METHOD · /logout PROVIDER · /models PROVIDER · /model PROVIDER MODEL · /compact · /permission ask|never · /agents · /interrupt · /steer TEXT · /quit")
+		model.addLine("commands> /attach PATH · /accounts · /login PROVIDER METHOD · /logout PROVIDER · /models PROVIDER · /model PROVIDER MODEL · /compact · /permission ask|never · /plan [off|TEXT] · /agents · /interrupt · /steer TEXT · /quit")
 		return model, nil
 	case "/interrupt":
 		model.app.agent.Interrupt()
@@ -70,6 +71,8 @@ func (model model) command(value string) (tea.Model, tea.Cmd) {
 			err := model.app.config.Registry.SetPolicy(model.ctx, model.app.agent.Status().SessionID, session.ApprovalPolicy(fields[1]))
 			return operationMessage{text: "permission policy=" + fields[1], err: err}
 		}
+	case "/plan":
+		return model.planCommand(strings.TrimSpace(strings.TrimPrefix(value, name)))
 	case "/agents":
 		return model, func() tea.Msg {
 			infos, err := model.app.config.Subagents.List("")
@@ -93,6 +96,59 @@ func (model model) command(value string) (tea.Model, tea.Cmd) {
 		}
 	default:
 		return model.withError("unknown command; use /help")
+	}
+}
+
+// planCommand enters plan mode, optionally with a message and the pending
+// attachments delivered as the next user input, or leaves it with "off".
+func (model model) planCommand(argument string) (tea.Model, tea.Cmd) {
+	active := argument != "off"
+	if !active && len(model.images) > 0 {
+		return model.withError("attachments cannot accompany /plan off")
+	}
+	var message *session.Message
+	if active && (argument != "" || len(model.images) > 0) {
+		content := make([]session.ContentBlock, 0, len(model.images)+1)
+		for index := range model.images {
+			image := model.images[index]
+			content = append(content, session.ContentBlock{Type: session.ContentImage, Image: &image})
+		}
+		if argument != "" {
+			content = append(content, session.ContentBlock{Type: session.ContentText, Text: argument})
+		}
+		message = &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: content}
+		model.images = nil
+	}
+	wasActive := model.planActive
+	return model, func() tea.Msg {
+		change, err := model.app.config.Registry.SetPlanMode(model.ctx, model.app.agent.Status().SessionID, active)
+		if err != nil {
+			return planMessage{err: err}
+		}
+		return planMessage{text: planChangeText(change, active, wasActive), message: message}
+	}
+}
+
+// planChangeText reports a selection; wasActive is the recorded mode the
+// terminal had replayed when the command ran.
+func planChangeText(change plan.Change, active, wasActive bool) string {
+	switch {
+	case active && change == plan.Committed:
+		return "Plan mode on. Use /plan off to leave."
+	case active && change == plan.Cancelled:
+		return "Plan mode exit cancelled; plan mode stays on."
+	case active && (change == plan.Queued || !wasActive):
+		return "Entering plan mode (applies from the next step). Use /plan off to leave."
+	case active:
+		return "Plan mode is already on."
+	case change == plan.Committed:
+		return "Plan mode off."
+	case change == plan.Cancelled:
+		return "Plan mode entry cancelled."
+	case change == plan.Queued || wasActive:
+		return "Leaving plan mode (applies from the next step)."
+	default:
+		return "Plan mode is already off."
 	}
 }
 

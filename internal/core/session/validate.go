@@ -49,6 +49,8 @@ func (record Record) Validate() error {
 		return record.requireSubagent()
 	case RecordTodoWrite:
 		return record.requireTodo()
+	case RecordPlanMode:
+		return record.requirePlan()
 	case RecordStepEnd:
 		return record.requireBare(true, true)
 	case RecordTurnEnd:
@@ -59,7 +61,7 @@ func (record Record) Validate() error {
 }
 
 func allowsZeroTurn(recordType RecordType) bool {
-	return recordType == RecordApprovalPolicy || recordType == RecordCompactionStart || recordType == RecordCompactionSummary || recordType == RecordCompactionEnd || recordType == RecordSubagentDescriptor
+	return recordType == RecordApprovalPolicy || recordType == RecordCompactionStart || recordType == RecordCompactionSummary || recordType == RecordCompactionEnd || recordType == RecordSubagentDescriptor || recordType == RecordPlanMode
 }
 
 func invalid(format string, values ...any) error {
@@ -70,7 +72,7 @@ func (record Record) requireBare(step, usage bool) error {
 	if step != (record.Step > 0) {
 		return invalid("%s has invalid step", record.Type)
 	}
-	if record.Message != nil || record.Chunk != nil || record.Call != nil || record.Result != nil || record.Header != nil || record.Retry != nil || record.Approval != nil || record.Compaction != nil || record.Subagent != nil || record.Todo != nil || record.Outcome != "" || !usage && record.Usage != nil {
+	if record.Message != nil || record.Chunk != nil || record.Call != nil || record.Result != nil || record.Header != nil || record.Retry != nil || record.Approval != nil || record.Compaction != nil || record.Subagent != nil || record.Todo != nil || record.Plan != nil || record.Outcome != "" || !usage && record.Usage != nil {
 		return invalid("%s has unrelated fields", record.Type)
 	}
 	return validateUsage(record.Usage)
@@ -85,7 +87,7 @@ func (record Record) requireMessage(role MessageRole) error {
 }
 
 func (record Record) hasExtras(keep string) bool {
-	return keep != "message" && record.Message != nil || keep != "chunk" && record.Chunk != nil || keep != "call" && record.Call != nil || keep != "result" && record.Result != nil || keep != "header" && record.Header != nil || keep != "usage" && record.Usage != nil || keep != "retry" && record.Retry != nil || keep != "approval" && record.Approval != nil || keep != "compaction" && record.Compaction != nil || keep != "subagent" && record.Subagent != nil || keep != "todo" && record.Todo != nil || keep != "outcome" && record.Outcome != ""
+	return keep != "message" && record.Message != nil || keep != "chunk" && record.Chunk != nil || keep != "call" && record.Call != nil || keep != "result" && record.Result != nil || keep != "header" && record.Header != nil || keep != "usage" && record.Usage != nil || keep != "retry" && record.Retry != nil || keep != "approval" && record.Approval != nil || keep != "compaction" && record.Compaction != nil || keep != "subagent" && record.Subagent != nil || keep != "todo" && record.Todo != nil || keep != "plan" && record.Plan != nil || keep != "outcome" && record.Outcome != ""
 }
 
 func validateMessage(message Message, requireContent bool) error {
@@ -273,7 +275,7 @@ func (record Record) requireApproval() error {
 	case RecordTurnStart, RecordUserMessage, RecordStepStart, RecordRequestHeader,
 		RecordAssistantChunk, RecordAssistantMessage, RecordToolCall, RecordToolResult,
 		RecordRetry, RecordRetryStarted, RecordCompactionStart, RecordCompactionSummary,
-		RecordCompactionEnd, RecordSubagentDescriptor, RecordTodoWrite, RecordStepEnd, RecordTurnEnd:
+		RecordCompactionEnd, RecordSubagentDescriptor, RecordTodoWrite, RecordPlanMode, RecordStepEnd, RecordTurnEnd:
 		// Validate dispatches only approval record types to this shape-specific helper.
 	}
 	return nil
@@ -339,7 +341,7 @@ func (record Record) requireCompaction() error {
 	case RecordTurnStart, RecordUserMessage, RecordStepStart, RecordRequestHeader,
 		RecordAssistantChunk, RecordAssistantMessage, RecordToolCall, RecordApprovalAsked,
 		RecordApprovalDecided, RecordApprovalPolicy, RecordToolResult, RecordRetry,
-		RecordRetryStarted, RecordSubagentDescriptor, RecordTodoWrite, RecordStepEnd, RecordTurnEnd:
+		RecordRetryStarted, RecordSubagentDescriptor, RecordTodoWrite, RecordPlanMode, RecordStepEnd, RecordTurnEnd:
 		// Validate dispatches only compaction record types to this shape-specific helper.
 	}
 	return nil

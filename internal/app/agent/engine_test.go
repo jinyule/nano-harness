@@ -14,6 +14,7 @@ import (
 
 	"github.com/jinyule/nano-harness/internal/app/compaction"
 	"github.com/jinyule/nano-harness/internal/app/llm"
+	"github.com/jinyule/nano-harness/internal/app/plan"
 	"github.com/jinyule/nano-harness/internal/app/prompt"
 	"github.com/jinyule/nano-harness/internal/app/retry"
 	"github.com/jinyule/nano-harness/internal/app/settings"
@@ -157,6 +158,7 @@ type engineHarness struct {
 	retry         *retry.Service
 	compaction    *compaction.Service
 	prompt        *prompt.Assembler
+	plan          *plan.Service
 	settings      *settings.Service
 	settingsScope *plugin.Scope
 	toolScope     *plugin.Scope
@@ -201,8 +203,13 @@ func startEngineHarness(t *testing.T, maxSteps int, actions ...modelAction) *eng
 	if err := harness.prompt.Start(context.Background(), harness.promptScope); err != nil {
 		t.Fatal(err)
 	}
+	harness.plan = plan.New()
+	planScope := &plugin.Scope{}
+	if err := harness.plan.Start(context.Background(), planScope); err != nil {
+		t.Fatal(err)
+	}
 	var err error
-	harness.engine, err = NewEngine(harness.llm, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.settings, EngineConfig{MaxSteps: maxSteps})
+	harness.engine, err = NewEngine(harness.llm, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.plan, harness.settings, EngineConfig{MaxSteps: maxSteps})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +217,7 @@ func startEngineHarness(t *testing.T, maxSteps int, actions ...modelAction) *eng
 	if err := harness.engine.Start(context.Background(), engineScope); err != nil {
 		t.Fatal(err)
 	}
-	harness.scopes = []*plugin.Scope{engineScope, harness.promptScope, compactionScope, retryScope, harness.toolScope, providerScope, llmScope, harness.settingsScope}
+	harness.scopes = []*plugin.Scope{engineScope, harness.promptScope, compactionScope, retryScope, harness.toolScope, providerScope, llmScope, harness.settingsScope, planScope}
 	t.Cleanup(func() {
 		for _, scope := range harness.scopes {
 			_ = scope.Close(context.Background())
@@ -243,16 +250,19 @@ func TestEngine_ValidatesLifecycleAndDefaults(t *testing.T) {
 		t.Fatalf("double start error = %v", err)
 	}
 	for _, config := range []EngineConfig{{MaxSteps: -1}, {MaxSteps: 257}} {
-		if _, err := NewEngine(harness.llm, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.settings, config); !errors.Is(err, ErrInvalidConfig) {
+		if _, err := NewEngine(harness.llm, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.plan, harness.settings, config); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("invalid max steps error = %v", err)
 		}
 	}
-	if _, err := NewEngine(nil, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.settings, EngineConfig{}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := NewEngine(nil, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.plan, harness.settings, EngineConfig{}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("nil dependency error = %v", err)
+	}
+	if _, err := NewEngine(harness.llm, harness.tools, harness.retry, harness.compaction, harness.prompt, nil, harness.settings, EngineConfig{}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("nil plan mode error = %v", err)
 	}
 	closed := &plugin.Scope{}
 	_ = closed.Close(context.Background())
-	inactive, err := NewEngine(harness.llm, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.settings, EngineConfig{})
+	inactive, err := NewEngine(harness.llm, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.plan, harness.settings, EngineConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

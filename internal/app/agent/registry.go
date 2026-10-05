@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jinyule/nano-harness/internal/app/plan"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/app/transcript"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
@@ -64,6 +65,20 @@ func (registry *Registry) SetPolicy(ctx context.Context, sessionID string, polic
 		return ErrInvalidConfig
 	}
 	return registry.approval.SetPolicy(ctx, sessionID, current.journal, policy)
+}
+
+// SetPlanMode selects plan mode for one live root agent. Between turns the
+// selection is recorded at once; during a turn it applies from the next step
+// boundary.
+func (registry *Registry) SetPlanMode(ctx context.Context, sessionID string, active bool) (plan.Change, error) {
+	current, err := registry.Find(sessionID)
+	if err != nil {
+		return "", err
+	}
+	if current.delegated {
+		return "", ErrInvalidConfig
+	}
+	return current.selectPlan(ctx, active)
 }
 
 // ID returns the stable registry plugin identity.

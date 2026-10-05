@@ -10,6 +10,7 @@ import (
 
 	"github.com/jinyule/nano-harness/internal/app/compaction"
 	"github.com/jinyule/nano-harness/internal/app/llm"
+	"github.com/jinyule/nano-harness/internal/app/plan"
 	"github.com/jinyule/nano-harness/internal/app/prompt"
 	"github.com/jinyule/nano-harness/internal/app/retry"
 	"github.com/jinyule/nano-harness/internal/app/settings"
@@ -30,6 +31,7 @@ type Engine struct {
 	retry      *retry.Service
 	compaction *compaction.Service
 	prompt     *prompt.Assembler
+	plan       *plan.Service
 	settings   *settings.Service
 	maxSteps   int
 
@@ -39,14 +41,14 @@ type Engine struct {
 }
 
 // NewEngine validates the full core-loop dependency graph.
-func NewEngine(runtime *llm.Runtime, tools *appTool.Runtime, retries *retry.Service, compactor *compaction.Service, assembler *prompt.Assembler, configuration *settings.Service, config EngineConfig) (*Engine, error) {
-	if runtime == nil || tools == nil || retries == nil || compactor == nil || assembler == nil || configuration == nil || config.MaxSteps < 0 || config.MaxSteps > 256 {
+func NewEngine(runtime *llm.Runtime, tools *appTool.Runtime, retries *retry.Service, compactor *compaction.Service, assembler *prompt.Assembler, planMode *plan.Service, configuration *settings.Service, config EngineConfig) (*Engine, error) {
+	if runtime == nil || tools == nil || retries == nil || compactor == nil || assembler == nil || planMode == nil || configuration == nil || config.MaxSteps < 0 || config.MaxSteps > 256 {
 		return nil, ErrInvalidConfig
 	}
 	if config.MaxSteps == 0 {
 		config.MaxSteps = 32
 	}
-	return &Engine{llm: runtime, tools: tools, retry: retries, compaction: compactor, prompt: assembler, settings: configuration, maxSteps: config.MaxSteps}, nil
+	return &Engine{llm: runtime, tools: tools, retry: retries, compaction: compactor, prompt: assembler, plan: planMode, settings: configuration, maxSteps: config.MaxSteps}, nil
 }
 
 // ID returns the stable plugin identity.
@@ -140,6 +142,13 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			result.Err, result.Outcome = fmt.Errorf("proactive compaction: %w", err), session.OutcomeError
 			return result
 		}
+		// Plan mode changes take effect here, before the step opens, so the
+		// request header below is the first to reflect them.
+		planPolicy, err := engine.plan.Step(ctx, input.journal, turn)
+		if err != nil {
+			result.Err, result.Outcome = fmt.Errorf("plan mode boundary: %w", err), outcomeFor(err)
+			return result
+		}
 		if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordStepStart, Turn: turn, Step: step}); err != nil {
 			result.Err, result.Outcome = err, session.OutcomeError
 			return result
@@ -159,7 +168,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		definitions := catalog.Definitions
 		system, err := engine.prompt.Build(prompt.Input{
 			Workspace: input.journal.Header().Cwd, Provider: document.Route.Provider, Model: document.Route.Model,
-			Persona: input.persona, Delegated: input.delegated, Tools: definitions, Guidance: catalog.Guidance,
+			Persona: input.persona, Delegated: input.delegated, PlanPolicy: planPolicy, Tools: definitions, Guidance: catalog.Guidance,
 		})
 		if err != nil {
 			result.Err, result.Outcome = err, session.OutcomeError

@@ -1,6 +1,6 @@
 # 架构规则
 
-本文定义 `nano-harness` 的当前产品架构和依赖规则。composition 已包含设置、账户、三个 LLM provider、图片、agent、会话、工具、后台任务、任务列表、approval、compaction、subagent、web 检索/抓取与 TUI；新增运行时能力必须扩展这些已记录接缝。
+本文定义 `nano-harness` 的当前产品架构和依赖规则。composition 已包含设置、账户、三个 LLM provider、图片、agent、会话、工具、后台任务、任务列表、approval、用户提问、规划模式、compaction、subagent、web 检索/抓取与 TUI；新增运行时能力必须扩展这些已记录接缝。
 
 ## 设计目标
 
@@ -45,10 +45,10 @@ internal/platform
 
 ```text
 settings → settings file → credential store → LLM runtime
-→ OpenAI/Anthropic/OpenRouter providers → approval → tool runtime
-→ images → prompt → retry → compaction → web → sessions → agent engine
-→ agent registry → root bootstrap → subagents
-→ file/search/shell tools → jobs → job/subagent/todo/web tools → TUI
+→ OpenAI/Anthropic/OpenRouter providers → approval → user questions
+→ tool runtime → images → prompt → plan mode → retry → compaction → web
+→ sessions → agent engine → agent registry → root bootstrap → subagents
+→ file/search/shell tools → jobs → job/subagent/todo/web/question/plan tools → TUI
 ```
 
 纯值、DTO、算法和仓库工具没有运行时 effect，不包装为空插件。
@@ -115,6 +115,7 @@ OpenAI Responses | Anthropic Messages | OpenRouter Chat Completions
 Submit user message
   → turn/start + user/message
   → optional proactive compaction
+  → plan boundary: pending plan/mode + optional switch notice
   → step/start + frozen request/header
   → provider stream → durable assistant/chunk
   → assistant/message + all tool/call
@@ -125,6 +126,7 @@ Submit user message
 ```
 
 - 一个 agent 串行处理 turn；一个 turn 最多 256 个 step，产品默认 32。一个 step 是一次模型调用与其产生的全部工具执行。
+- 每个 step 在 `step/start` 之前经过规划模式边界：提交待生效的 `plan/mode` 选择、必要时追加用户切换提示，并取得本 step 的规划段落，见[用户提问与规划模式](#用户提问与规划模式)。
 - 每个 step 从权威 log 重新折叠 model surface。request header 在调用前固定 provider、model、effort、system、tool schema 和 context window；compaction summary 同样记录其冻结的 provider、model 和 effort。
 - streaming chunk 按 provider 顺序持久化。完成的 assistant message 和全部 tool call 先提交，工具才能执行；每个 call 最终得到唯一 tool result。
 - 没有输出提交的 retryable provider 失败按热策略指数退避；一旦流内容已提交就不自动重试，避免重复事实。
@@ -147,7 +149,7 @@ Submit user message
 - `Invocation` 携带 session、cwd、delegation、approval 结果，以及当前 tool/call 的 call ID、turn、step 和调用方 durable journal。需要记录会话事实的工具在 tool/result 之前向该 journal 追加；没有 journal 的调用方必须失败关闭。
 - 未知工具、panic、拒绝、执行错误和取消都成为有界 tool result，文本使用上游的 `Error: <message>` 格式；resume 为未决调用补写的结果同样使用这一格式。
 
-内置工具与上游 Base 组合同名同定义，映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)，后台任务与 `bash` 后台变体见 [ADR-0009](decisions/0009-background-jobs.md)：
+内置工具与上游 Base 组合同名同定义（`ask_user_question` 取 Web preset 的默认阻塞定义），映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)，后台任务与 `bash` 后台变体见 [ADR-0009](decisions/0009-background-jobs.md)，提问与规划模式见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)：
 
 | 包 | 插件 ID | 工具 |
 |---|---|---|
@@ -158,6 +160,8 @@ Submit user message
 | `internal/adapter/tool/subagent` | `subagent-tools` | 五个 subagent 工具 |
 | `internal/adapter/tool/todo` | `todo-tools` | `todo_write` |
 | `internal/adapter/tool/web` | `web-tools` | `web_search`、`web_fetch` |
+| `internal/adapter/tool/question` | `question-tools` | 阻塞式 `ask_user_question` |
+| `internal/adapter/tool/plan` | `plan-tools` | `exit_plan_mode` |
 
 `internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。
 
@@ -222,6 +226,18 @@ producer Launch(kind, label, owner, Run)
 - followup 仅允许 parent 对自己的 continuable child 发起；interrupt 取消 child 当前 turn；report/list 返回无凭据的状态与最近结果。
 - service cleanup 停止 monitor、等待退出并关闭所有 child Scope；descriptor 支持 cold resume 时恢复 mode、persona 与 tool allowlist。
 
+## 用户提问与规划模式
+
+`internal/app/question.Service`（插件 `user-questions`）是用户提问接缝。所选前端用 `RegisterBroker` 发布唯一回答面；调用方用 `Ask(ctx, question.Request) ([]question.Answer, error)` 提问。服务在调用 broker 前校验请求（非空、数量与 id 上限、标签、`plan-review` intent），拒绝 delegated 调用方，并对答案逐题校验后按请求顺序返回；取消、broker 缺失或失败、非法答案都失败关闭。错误文本沿用上游，规则与上限见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)。问题与答案不另写记录：问题是 `tool/call` 参数，答案是 `tool/result`。
+
+`internal/app/plan.Service`（插件 `plan-mode`）拥有规划模式。持久化状态是最后一条 `plan/mode`，由 `session.ProjectPlan` 折叠：
+
+- `Registry.SetPlanMode` 是用户选择入口，只接受 live root agent，并在 worker 状态锁内调用 `Select`：没有打开的 turn 时立即追加 `turn:0` 记录，turn 进行中则保留到下一个 step 边界。
+- engine 在每个 step 的 `step/start` 前调用 `Step`：提交待生效选择；若是用户切换且最近一次 `request/header` 描述的是另一种模式，追加 `source.kind = "plan-mode"` 的切换提示；规划模式生效时返回 Base `section` 原文，prompt assembler 把它放在角色段落之后、工具段落之前。
+- `exit_plan_mode` 在本 step 处于规划模式时通过提问接缝提交计划审查；获批后用 `Exit` 安排在下一个边界静默退出，其余答案保持规划模式并把反馈作为错误结果返回。
+
+待生效选择只在进程内。规划模式不改变工具目录、approval、sandbox 或 allowlist，写类工具仍在执行点请求一次性 approval，评估见 ADR-0014。
+
 ## 图片输入
 
 TUI 的 `/attach` 显式读取本地 JPEG/PNG。image plugin 限制源文件大小和像素数，最长边缩放到 2048，重新编码为有界 JPEG，记录尺寸、SHA-256 和标准 base64。规范化图片作为 `user/message` content block 持久化，因而 resume、fork、compaction 和 vision provider 请求都从同一事实构建。模型不支持 vision 时 provider 在 wire 调用前拒绝。
@@ -236,11 +252,11 @@ assistant/chunk, assistant/message, tool/call,
 approval/asked, approval/decided, approval/policy,
 tool/result, llm/retry, llm/retry-started,
 compaction/start, compaction/summary, compaction/end,
-subagent/descriptor, todo/write, step/end, turn/end
+subagent/descriptor, todo/write, plan/mode, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。
@@ -261,9 +277,9 @@ credential store 按 provider 保存一个 API key 或 OAuth grant，使用 stri
 
 ## TUI 与投影
 
-`internal/adapter/tui` 是使用 Bubble Tea v2、Lip Gloss v2 与 Bubbles v2 的 alternate-screen 插件。`tea.View` 声明终端模式，输入、viewport、命令与事件投影保留在 adapter；app/core 不依赖 Charm。它从 durable event replay 初始化，再订阅已提交事件，展示 route、streamed text/reasoning、tool call/result、approval、retry、compaction 和 turn outcome。当前计划固定显示在输入区上方，最多占 transcript 剩余行数的一半并保留至少一行 transcript；条目溢出时从第一个未完成项开始显示，标题保留各状态计数。TUI 同时实现本地 approval broker 与 auth interaction；secret prompt 使用 password echo。
+`internal/adapter/tui` 是使用 Bubble Tea v2、Lip Gloss v2 与 Bubbles v2 的 alternate-screen 插件。`tea.View` 声明终端模式，输入、viewport、命令与事件投影保留在 adapter；app/core 不依赖 Charm。它从 durable event replay 初始化，再订阅已提交事件，展示 route、streamed text/reasoning、tool call/result、approval、retry、compaction 和 turn outcome。当前计划固定显示在输入区上方，最多占 transcript 剩余行数的一半并保留至少一行 transcript；条目溢出时从第一个未完成项开始显示，标题保留各状态计数。TUI 同时实现本地 approval broker、用户提问 broker 与 auth interaction；secret prompt 使用 password echo。提问逐题显示标题、详情和编号选项，数字列表选择、其他文本作为自由回答、空输入跳过，推荐选项预填，Ctrl+C 取消整批。`/plan`、`/plan off` 和 `/plan TEXT` 调用 `Registry.SetPlanMode`，状态栏在规划模式下显示 `mode=plan`，模式变化与切换提示显示为 `mode>` 行。
 
-UI 命令调用 app 用例，不直接修改文件或 provider 内部状态。退出会 interrupt root 活动 turn；Scope cleanup 撤销 broker、停止 event forwarding，取消并等待终端程序与异步命令静止。Run 退出先取消命令 context，关闭命令执行入口，再等待已开始的操作；迟到命令不再调用 app。前端独立选择，当前只有所选 UI 注册 approval broker；GUI 的扩展边界见 [ADR-0005](decisions/0005-selectable-frontend-plugins.md)。
+UI 命令调用 app 用例，不直接修改文件或 provider 内部状态。退出会 interrupt root 活动 turn；Scope cleanup 撤销 broker、停止 event forwarding，取消并等待终端程序与异步命令静止。Run 退出先取消命令 context，关闭命令执行入口，再等待已开始的操作；迟到命令不再调用 app。前端独立选择，当前只有所选 UI 注册 approval 与提问 broker；GUI 的扩展边界见 [ADR-0005](decisions/0005-selectable-frontend-plugins.md)。
 
 ## 公共 API 与完成条件
 
