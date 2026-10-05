@@ -1,6 +1,8 @@
-// Package shell provides the model-facing foreground bash tool over the
-// sandboxed process runner. The definition matches the upstream Base bash
-// tool without background jobs; every call needs one-shot approval.
+// Package shell provides the model-facing bash tool over the sandboxed
+// process runner. The definition matches the upstream Base bash tool with
+// background jobs: every command runs as a job, so run_in_background returns
+// its ID at once and a foreground call that outlives its timeout keeps
+// running in the background. Every call needs one-shot approval.
 package shell
 
 import (
@@ -12,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
+	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	platformProcess "github.com/jinyule/nano-harness/internal/platform/process"
@@ -34,11 +37,13 @@ type Runner interface {
 }
 
 // Provider owns the bash registration and the private temporary directory
-// commands use as TMPDIR.
+// commands use as TMPDIR. Background commands belong to the job service,
+// which must stop before this provider removes the directory.
 type Provider struct {
 	runtime *appTool.Runtime
 	runner  Runner
 	root    workspace.Root
+	jobs    *appJob.Service
 	// bashPath is resolved once; empty means bash was not found.
 	bashPath string
 
@@ -48,12 +53,12 @@ type Provider struct {
 
 // New constructs an inert provider. A missing bash executable is reported
 // when a command runs, not at startup.
-func New(runtime *appTool.Runtime, runner Runner, root workspace.Root) (*Provider, error) {
-	if runtime == nil || runner == nil || root.Path() == "" {
+func New(runtime *appTool.Runtime, runner Runner, root workspace.Root, jobs *appJob.Service) (*Provider, error) {
+	if runtime == nil || runner == nil || root.Path() == "" || jobs == nil {
 		return nil, ErrInvalidConfig
 	}
 	bash, _ := lookPath("bash")
-	return &Provider{runtime: runtime, runner: runner, root: root, bashPath: bash}, nil
+	return &Provider{runtime: runtime, runner: runner, root: root, jobs: jobs, bashPath: bash}, nil
 }
 
 // ID returns the stable plugin identity.

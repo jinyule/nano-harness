@@ -32,6 +32,8 @@ type Agent struct {
 	turns  chan turnRequest
 	steers chan session.Message
 	done   chan struct{}
+	// wake unblocks an idle worker after Notify queued a notice.
+	wake chan struct{}
 
 	mu            sync.Mutex
 	active        bool
@@ -40,6 +42,10 @@ type Agent struct {
 	currentCancel context.CancelFunc
 	idleWaiters   []chan struct{}
 	last          TurnResult
+	// notices wait for the next step boundary; woken asks the worker to
+	// open a turn for them because no turn would otherwise deliver them.
+	notices []session.Message
+	woken   bool
 }
 
 func (agent *Agent) start(ctx context.Context, scope *plugin.Scope) error {
@@ -65,6 +71,7 @@ func (agent *Agent) run(ctx context.Context) {
 	defer func() {
 		agent.mu.Lock()
 		agent.active, agent.busy, agent.pending = false, false, 0
+		agent.notices, agent.woken = nil, false
 		agent.notifyIdleLocked()
 		agent.mu.Unlock()
 		beforeAgentDrain()
@@ -79,33 +86,104 @@ func (agent *Agent) run(ctx context.Context) {
 		}
 	}()
 	for {
+		if notice, ok := agent.claimWake(); ok {
+			agent.finishTurn(agent.turn(ctx, notice), false)
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			return
+		case <-agent.wake:
 		case request := <-agent.turns:
-			agent.mu.Lock()
-			agent.busy = true
-			turnContext, cancel := context.WithCancel(ctx)
-			agent.currentCancel = cancel
-			agent.mu.Unlock()
-			result := agent.engine.runTurn(turnContext, runInput{
-				journal: agent.journal, message: request.message, persona: agent.persona,
-				tools: agent.tools, delegated: agent.delegated, drain: agent.drainSteers,
-			})
-			cancel()
-			agent.mu.Lock()
-			agent.currentCancel = nil
-			agent.busy = false
-			agent.pending--
-			agent.last = result
-			if agent.pending == 0 {
-				agent.notifyIdleLocked()
-			}
-			agent.mu.Unlock()
+			result := agent.turn(ctx, request.message)
+			agent.finishTurn(result, true)
 			request.result <- result
 			close(request.result)
 		}
 	}
+}
+
+// turn runs one interruptible turn.
+func (agent *Agent) turn(ctx context.Context, message session.Message) TurnResult {
+	turnContext, cancel := context.WithCancel(ctx)
+	agent.mu.Lock()
+	agent.busy, agent.currentCancel = true, cancel
+	agent.mu.Unlock()
+	result := agent.engine.runTurn(turnContext, runInput{
+		journal: agent.journal, message: message, persona: agent.persona,
+		tools: agent.tools, delegated: agent.delegated, drain: agent.drainSteers, notices: agent.drainNotices,
+	})
+	cancel()
+	return result
+}
+
+// finishTurn records a settled turn. Notices that arrived too late for it
+// open another turn unless the turn was cancelled or a queued turn will
+// deliver them first.
+func (agent *Agent) finishTurn(result TurnResult, submitted bool) {
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	agent.currentCancel = nil
+	agent.busy = false
+	if submitted {
+		agent.pending--
+	}
+	agent.last = result
+	agent.woken = len(agent.notices) > 0 && agent.pending == 0 && result.Outcome != session.OutcomeCanceled
+	if agent.pending == 0 && !agent.woken {
+		agent.notifyIdleLocked()
+	}
+}
+
+// claimWake takes the oldest notice as the opening message of a woken
+// turn; later notices are delivered at that turn's first boundary. Only
+// the worker drains notices, and finishTurn recomputes woken after every
+// turn, so a woken agent always holds at least one notice here.
+func (agent *Agent) claimWake() (session.Message, bool) {
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if !agent.woken {
+		return session.Message{}, false
+	}
+	agent.woken = false
+	notice := agent.notices[0]
+	agent.notices = agent.notices[1:]
+	agent.busy = true
+	return notice, true
+}
+
+// Notify delivers a model-facing notice, such as a background job
+// completion. A busy agent appends it as a user message at the next step
+// boundary of its active turn, which then cannot close before answering
+// it; an idle agent opens a new turn for it. Notices left by a cancelled
+// turn wait for the next turn. Pending notices are in memory and are lost
+// when the agent stops.
+func (agent *Agent) Notify(message session.Message) error {
+	if !validUserMessage(message) {
+		return ErrInvalidConfig
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if !agent.active {
+		return ErrNotRunning
+	}
+	agent.notices = append(agent.notices, cloneMessage(message))
+	if !agent.busy && agent.pending == 0 && !agent.woken {
+		agent.woken = true
+		select {
+		case agent.wake <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+
+func (agent *Agent) drainNotices() []session.Message {
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	notices := agent.notices
+	agent.notices = nil
+	return notices
 }
 
 // Submit queues one complete user message.
@@ -131,7 +209,7 @@ func (agent *Agent) Submit(ctx context.Context, message session.Message) (<-chan
 	case <-ctx.Done():
 		agent.mu.Lock()
 		agent.pending--
-		if agent.pending == 0 && !agent.busy {
+		if agent.pending == 0 && !agent.busy && !agent.woken {
 			agent.notifyIdleLocked()
 		}
 		agent.mu.Unlock()
@@ -195,14 +273,14 @@ func (agent *Agent) Interrupt() {
 	}
 }
 
-// WhenIdle waits until the active and queued turn count reaches zero.
+// WhenIdle waits until no turn is active, queued, or woken by a notice.
 func (agent *Agent) WhenIdle(ctx context.Context) error {
 	agent.mu.Lock()
 	if !agent.active {
 		agent.mu.Unlock()
 		return ErrNotRunning
 	}
-	if agent.pending == 0 && !agent.busy {
+	if agent.pending == 0 && !agent.busy && !agent.woken {
 		agent.mu.Unlock()
 		return nil
 	}

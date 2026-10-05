@@ -170,7 +170,7 @@ func (registry *Registry) Create(ctx context.Context, request CreateRequest) (*A
 		engine: registry.engine, journal: ownedJournal, parentID: request.ParentID,
 		label: request.Label, mode: request.Mode, persona: request.Persona,
 		tools: slices.Clone(request.Tools), depth: request.Depth, delegated: request.ParentID != "",
-		turns: make(chan turnRequest, 32), steers: make(chan session.Message, 32), done: make(chan struct{}),
+		turns: make(chan turnRequest, 32), steers: make(chan session.Message, 32), done: make(chan struct{}), wake: make(chan struct{}, 1),
 	}
 	agentScope := newAgentScope()
 	if err := agent.start(registry.ctx, agentScope); err != nil {
@@ -219,6 +219,16 @@ func (registry *Registry) Find(sessionID string) (*Agent, error) {
 		return nil, ErrAgentNotFound
 	}
 	return mounted.agent, nil
+}
+
+// Notify delivers a model-facing notice to the live agent of sessionID; see
+// Agent.Notify for delivery timing.
+func (registry *Registry) Notify(sessionID string, message session.Message) error {
+	current, err := registry.Find(sessionID)
+	if err != nil {
+		return err
+	}
+	return current.Notify(message)
 }
 
 // Statuses returns lexical live snapshots.

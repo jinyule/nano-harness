@@ -1,6 +1,6 @@
 # 架构规则
 
-本文定义 `nano-harness` 的当前产品架构和依赖规则。composition 已包含设置、账户、三个 LLM provider、图片、agent、会话、工具、任务列表、approval、compaction、subagent、web 检索/抓取与 TUI；新增运行时能力必须扩展这些已记录接缝。
+本文定义 `nano-harness` 的当前产品架构和依赖规则。composition 已包含设置、账户、三个 LLM provider、图片、agent、会话、工具、后台任务、任务列表、approval、compaction、subagent、web 检索/抓取与 TUI；新增运行时能力必须扩展这些已记录接缝。
 
 ## 设计目标
 
@@ -48,7 +48,7 @@ settings → settings file → credential store → LLM runtime
 → OpenAI/Anthropic/OpenRouter providers → approval → tool runtime
 → images → prompt → retry → compaction → web → sessions → agent engine
 → agent registry → root bootstrap → subagents
-→ file/search/shell/subagent/todo/web tools → TUI
+→ file/search/shell tools → jobs → job/subagent/todo/web tools → TUI
 ```
 
 纯值、DTO、算法和仓库工具没有运行时 effect，不包装为空插件。
@@ -129,7 +129,8 @@ Submit user message
 - streaming chunk 按 provider 顺序持久化。完成的 assistant message 和全部 tool call 先提交，工具才能执行；每个 call 最终得到唯一 tool result。
 - 没有输出提交的 retryable provider 失败按热策略指数退避；一旦流内容已提交就不自动重试，避免重复事实。
 - 主动 compaction 在估算上下文超过阈值时运行；context-window 错误触发强制 compaction 后重试新 step。raw log 不删除，surface 用持久化 summary 替换旧 prefix。
-- `Followup` 排队新的 turn；`Steer` 只在活动 turn 的工具 step 边界注入；`Interrupt` 只取消活动 turn，保留已排队 followup；`WhenIdle` 等待队列和活动 turn 都结算。
+- `Followup` 排队新的 turn；`Steer` 只在活动 turn 的工具 step 边界注入；`Interrupt` 只取消活动 turn，保留已排队 followup；`WhenIdle` 等待队列、活动 turn 和已唤醒的通知 turn 都结算。
+- `Notify` 投递模型可见通知（目前是后台任务完成通知）。agent 忙时，通知在 turn 开始后、工具 step 结束后以及无工具调用的回答之后作为 `user/message` 追加；最后一种情况下 turn 继续一个 step 回应它，已到 step 上限时留待下一 turn。agent 空闲，或 turn 结束后仍有通知且没有排队的 turn 时，worker 以通知开启新 turn；被取消的 turn 留下的通知等待下一个 turn。待投递通知只在内存中，规则见 [ADR-0009](decisions/0009-background-jobs.md)。
 - 调用取消、step limit、错误和恢复中断分别记录稳定 outcome。异常边界会尝试用不继承上游取消的 context 关闭 step/turn。
 - Registry 拥有每个动态 agent 的 Scope、worker 和 journal，关闭时先拒绝新 agent，再 interrupt 并等待所有 agent 回收。
 
@@ -146,13 +147,14 @@ Submit user message
 - `Invocation` 携带 session、cwd、delegation、approval 结果，以及当前 tool/call 的 call ID、turn、step 和调用方 durable journal。需要记录会话事实的工具在 tool/result 之前向该 journal 追加；没有 journal 的调用方必须失败关闭。
 - 未知工具、panic、拒绝、执行错误和取消都成为有界 tool result，文本使用上游的 `Error: <message>` 格式；resume 为未决调用补写的结果同样使用这一格式。
 
-内置工具与上游 Base 组合同名同定义，映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)：
+内置工具与上游 Base 组合同名同定义，映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)，后台任务与 `bash` 后台变体见 [ADR-0009](decisions/0009-background-jobs.md)：
 
 | 包 | 插件 ID | 工具 |
 |---|---|---|
 | `internal/adapter/tool/file` | `fs-tools` | `read`、`write`、`edit` |
 | `internal/adapter/tool/search` | `search-tools` | `glob`、`grep` |
-| `internal/adapter/tool/shell` | `shell-tools` | 前台 `bash` |
+| `internal/adapter/tool/shell` | `shell-tools` | `bash`（含后台运行与超时转后台） |
+| `internal/adapter/tool/job` | `job-tools` | `job_output`、`job_list`、`job_kill` |
 | `internal/adapter/tool/subagent` | `subagent-tools` | 五个 subagent 工具 |
 | `internal/adapter/tool/todo` | `todo-tools` | `todo_write` |
 | `internal/adapter/tool/web` | `web-tools` | `web_search`、`web_fetch` |
@@ -161,7 +163,7 @@ Submit user message
 
 `search-tools` 与 `shell-tools` 共用 `cmd` 构造的同一个 platform process runner。search provider 在构造时从 PATH 解析 `rg`，找不到时组装失败；`Start` 运行 `rg --version`，低于 15.0.0 时启动失败，不注册降级工具。`glob` 与 `grep` 按上游参数调用 ripgrep，并解析它的路径列表或 `--json` 输出；进程边界见[安全工程规则](security.md#approvalshell-与进程)，版本前提见[开发规范](development.md#ripgrep)。
 
-`read`、`glob`、`grep` 可并行；`write`、`edit`、`bash` 是 exclusive，并在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。`bash` 的 `sandbox_permissions: danger-full-access` 是唯一离开 workspace sandbox 的方式，规则见[安全工程规则](security.md#approvalshell-与进程)。
+`read`、`glob`、`grep`、`web_search`、`web_fetch` 可并行；`write`、`edit`、`bash` 和 `job_*` 是 exclusive；`write`、`edit`、`bash` 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。`bash` 的 `sandbox_permissions: danger-full-access` 是唯一离开 workspace sandbox 的方式，规则见[安全工程规则](security.md#approvalshell-与进程)。
 
 subagent 工具为 `spawn_subagent`、`subagent_followup`、`subagent_interrupt`、`subagent_report` 和 `list_subagents`。它们调用进程内 `app/subagent`，不启动 Codex、Claude 或另一个 harness 进程。
 
@@ -191,6 +193,25 @@ app/web.Service ──Search──► llm.Runtime.PrepareCall(web.search route) 
 - 参数按[工具定义抽象](#工具approval-与调度)校验：根对象的未声明成员被拒绝，查询数量、空白查询和空 URL 由 `app/web` 拒绝。
 - 失败是 `app/web.Error`：`WEB_PROVIDER_UNAVAILABLE`、`WEB_PROVIDER_CREDENTIAL_MISSING`、`WEB_PROVIDER_ERROR`、`WEB_ABORTED`、`WEB_SEARCH_TIMEOUT`、`WEB_INVALID_URL`、`WEB_BLOCKED_URL`、`WEB_REDIRECT_BLOCKED`、`WEB_FETCH_TOO_LARGE`、`WEB_FETCH_TIMEOUT` 与 `WEB_UNSUPPORTED_CONTENT_TYPE`，以 `Error: <CODE>: <消息>` 进入 tool result。网络边界见[安全规则](security.md#网络边界)。
 
+## 后台任务
+
+`internal/app/job.Service`（插件 `jobs`）是进程内后台任务注册表，与任务种类无关：
+
+```text
+producer Launch(kind, label, owner, Run)
+  → service goroutine runs Run(ctx, Output) → bounded output ring
+  → job_output/job_list/job_kill read, wait, kill by owner session
+  → settle → unless awaited/killed/teardown: Notifier → Registry.Notify → owner agent
+```
+
+- job 属于启动它的 session，所有操作都校验调用方 session；ID 为 `<kind>-<n>`。状态为 `running`、可选 `stopping`，再到 `completed`、`killed`、`failed` 之一，先到先得。
+- 每个 owner 最多 10 个活动 job。输出环运行中保留 128 KiB，settle 后第一次读取裁到 16 KiB；模型游标消费式读取，settle 后第一次读取还交出 producer 的值结果。
+- cleanup 先拒绝新 job，再取消全部活动 job，等待 producer goroutine 返回后丢弃记录。`jobs` 在 `shell-tools` 之后启动，所以后台进程在 shell 临时目录删除之前结束。
+- `bash` 的每次调用都作为 kind `bash` 的 job 运行：`run_in_background` 立即返回 ID；前台调用等待 `timeoutMs`，及时结束时移除记录并按前台格式返回，超时则移交为后台 job。
+- job、计数器和待投递通知都不持久化，进程结束时 job 终止。
+
+工具与通知的完整契约见 [ADR-0009](decisions/0009-background-jobs.md)。
+
 ## Subagent
 
 一个 child 是 Registry 中的完整 agent、独立 JSONL session 和独立 Scope。创建时持久化 parent/depth 及 versioned descriptor；模式为 `one-shot` 或 `continuable`，最大 delegation depth 为 4。
@@ -219,13 +240,14 @@ subagent/descriptor, todo/write, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、subagent、todo、web）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。
 - resume 会补写未决 approval 的 cancelled、未决 call 的 interrupted error、未结束 compaction/step/turn 的结束事实；不会截断 torn JSON、猜测未知格式或自动接受旧版本。
 - `session.Surface` 从 raw events 折叠消息、tool call/result 与 compaction replacements。TUI subscriber 只是可丢更新提示；磁盘 replay 仍是恢复来源。
 - `todo/write` 必须位于活动 step，引用尚未得到 result 的 call，且每个 call 最多一条。它不进入 surface；模型只从自己的 tool call 参数和 tool result 看到列表。`session.StandingTodos` 把最新一条之后没有更晚 `turn/start` 的 `todo/write` 投影为当前计划。
+- 后台任务完成通知是 source kind 为 `tool-jobs` 的 `user/message`，没有专用记录类型；无工具调用的 step 之后可以出现 `user/message` 并继续 step。
 
 格式变化必须同一变更原子更新领域类型、严格 decoder/order validator、所有 provider、测试、本文和 ADR。预发布阶段不保留静默兼容层。
 

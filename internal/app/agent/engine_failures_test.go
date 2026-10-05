@@ -31,7 +31,7 @@ func TestEngine_ContainsInitialCancellationAndComponentFailures(t *testing.T) {
 		harness := startEngineHarness(t, 1)
 		journal, log := turnJournal()
 		log.eventsErr = failure
-		result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "go")})
+		result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "go")})
 		if !errors.Is(result.Err, failure) || result.Outcome != session.OutcomeError {
 			t.Fatalf("result = %+v", result)
 		}
@@ -41,7 +41,7 @@ func TestEngine_ContainsInitialCancellationAndComponentFailures(t *testing.T) {
 			harness := startEngineHarness(t, 1)
 			journal, log := turnJournal()
 			log.appendHook = appendFailure(recordType, 1, failure)
-			result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "go")})
+			result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "go")})
 			if !errors.Is(result.Err, failure) || result.Outcome != session.OutcomeError {
 				t.Fatalf("result = %+v", result)
 			}
@@ -52,7 +52,7 @@ func TestEngine_ContainsInitialCancellationAndComponentFailures(t *testing.T) {
 		journal, _ := turnJournal()
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		result := harness.engine.runTurn(ctx, runInput{journal: journal, message: agentMessage(session.RoleUser, "go")})
+		result := harness.engine.runTurn(ctx, runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "go")})
 		if !errors.Is(result.Err, context.Canceled) || result.Outcome != session.OutcomeCanceled {
 			t.Fatalf("result = %+v", result)
 		}
@@ -61,7 +61,7 @@ func TestEngine_ContainsInitialCancellationAndComponentFailures(t *testing.T) {
 		harness := startEngineHarness(t, 1)
 		_ = harness.scopes[2].Close(context.Background())
 		journal, _ := turnJournal()
-		result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "go")})
+		result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "go")})
 		if result.Err == nil || !strings.Contains(result.Err.Error(), "proactive compaction") {
 			t.Fatalf("result = %+v", result)
 		}
@@ -132,7 +132,7 @@ func TestEngine_ContainsStepPreparationFailures(t *testing.T) {
 			harness := startEngineHarness(t, 1)
 			journal, log := turnJournal()
 			test.configure(harness, log)
-			result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
+			result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
 			if result.Err == nil || !strings.Contains(result.Err.Error(), test.match) || result.Outcome != session.OutcomeError {
 				t.Fatalf("result = %+v", result)
 			}
@@ -177,7 +177,7 @@ func TestEngine_ContainsEveryDurableCompletionBoundary(t *testing.T) {
 			if test.steer {
 				drain = func() []session.Message { return []session.Message{agentMessage(session.RoleUser, "steer")} }
 			}
-			result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "go"), tools: []string{"inspect"}, drain: drain})
+			result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "go"), tools: []string{"inspect"}, drain: drain})
 			if !errors.Is(result.Err, failure) || result.Outcome != session.OutcomeError {
 				t.Fatalf("result = %+v records=%#v", result, recordTypes(log.events))
 			}
@@ -191,7 +191,7 @@ func TestEngine_ContextWindowCompactionFailureAndRecovery(t *testing.T) {
 		harness := startEngineHarness(t, 2, modelAction{err: contextFailure})
 		journal, log := turnJournal()
 		log.appendHook = appendFailure(session.RecordStepEnd, 1, errors.New("close"))
-		result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
+		result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
 		if result.Err == nil || !strings.Contains(result.Err.Error(), "close") {
 			t.Fatalf("result = %+v", result)
 		}
@@ -199,7 +199,7 @@ func TestEngine_ContextWindowCompactionFailureAndRecovery(t *testing.T) {
 	t.Run("nothing compactable", func(t *testing.T) {
 		harness := startEngineHarness(t, 2, modelAction{err: contextFailure})
 		journal, _ := turnJournal()
-		result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
+		result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
 		if !errors.Is(result.Err, contextFailure) || result.Outcome != session.OutcomeError {
 			t.Fatalf("result = %+v", result)
 		}
@@ -212,7 +212,7 @@ func TestEngine_ContextWindowCompactionFailureAndRecovery(t *testing.T) {
 		)
 		journal, log := turnJournal()
 		seedSurface(log)
-		result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
+		result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
 		if result.Err == nil || !strings.Contains(result.Err.Error(), "invalid_request") {
 			t.Fatalf("result = %+v", result)
 		}
@@ -225,7 +225,7 @@ func TestEngine_ContextWindowCompactionFailureAndRecovery(t *testing.T) {
 		)
 		journal, log := turnJournal()
 		seedSurface(log)
-		result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
+		result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
 		if result.Outcome != session.OutcomeCompleted || result.Text != "recovered" || result.Err != nil {
 			t.Fatalf("result = %+v", result)
 		}

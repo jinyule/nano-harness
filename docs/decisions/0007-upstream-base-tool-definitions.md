@@ -28,7 +28,7 @@ subagent 工具名称不变；它们的 schema 改用共享子集表达，去掉
 
 ### 定义权威
 
-“上游默认组合”指非 Windows 主机上的 Base 组合。`glob` 使用 “keeps the first paths” 描述；`write`、`edit`、`bash` 声明 `sandbox_permissions`（枚举 `workspace-write`、`danger-full-access`）和 `justification`；`bash` 采用 `enableRunInBackground: false` 的前台变体，不含 `run_in_background`，`timeoutMs` 使用到期即终止的描述。与上游同名的工具在名称、描述和参数 JSON（含属性顺序）上必须逐字节一致。尚未实现的上游能力沿用上游自身的降级输出，例如超限结果报告无法保存完整结果，不改写模型可见描述。
+“上游默认组合”指非 Windows 主机上的 Base 组合。`glob` 使用 “keeps the first paths” 描述；`write`、`edit`、`bash` 声明 `sandbox_permissions`（枚举 `workspace-write`、`danger-full-access`）和 `justification`；`bash` 采用 `enableRunInBackground: false` 的前台变体，不含 `run_in_background`，`timeoutMs` 使用到期即终止的描述；[ADR-0009](0009-background-jobs.md) 已将其改为 Base 的后台变体。与上游同名的工具在名称、描述和参数 JSON（含属性顺序）上必须逐字节一致。尚未实现的上游能力沿用上游自身的降级输出，例如超限结果报告无法保存完整结果，不改写模型可见描述。
 
 ### 定义抽象
 

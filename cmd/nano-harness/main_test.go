@@ -21,6 +21,7 @@ import (
 	sessionjsonl "github.com/jinyule/nano-harness/internal/adapter/session/jsonl"
 	settingsfile "github.com/jinyule/nano-harness/internal/adapter/settings/file"
 	filetool "github.com/jinyule/nano-harness/internal/adapter/tool/file"
+	jobtool "github.com/jinyule/nano-harness/internal/adapter/tool/job"
 	searchtool "github.com/jinyule/nano-harness/internal/adapter/tool/search"
 	shelltool "github.com/jinyule/nano-harness/internal/adapter/tool/shell"
 	subagenttool "github.com/jinyule/nano-harness/internal/adapter/tool/subagent"
@@ -30,6 +31,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/adapter/tui"
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/compaction"
+	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	"github.com/jinyule/nano-harness/internal/app/llm"
 	"github.com/jinyule/nano-harness/internal/app/prompt"
 	"github.com/jinyule/nano-harness/internal/app/retry"
@@ -226,7 +228,7 @@ func TestComposition_MatchesUpstreamBaseTools(t *testing.T) {
 		frozen[definition.Name] = definition
 	}
 	upstream := loadCatalog(t, filepath.Join("testdata", "upstream-base-tools.json"))
-	if len(upstream) != 9 {
+	if len(upstream) != 12 {
 		t.Fatalf("upstream fixture lists %d tools", len(upstream))
 	}
 	for _, want := range upstream {
@@ -344,6 +346,7 @@ func restoreMainHooks(t *testing.T) {
 	workspaceRoot, fileTools, searchTools, shellTools := newWorkspace, newFileTools, newSearchTools, newShellTools
 	subagentTools, todoTools, terminal := newSubagentTools, newTodoTools, newTerminal
 	webService, webTools := newWebService, newWebTools
+	jobService, jobTools := newJobService, newJobTools
 	t.Cleanup(func() {
 		newWebService, newWebTools = webService, webTools
 		currentWorkingDirectory, userConfigDirectory, readRandom, inspectPath, absolutePath, evaluateLinks = cwd, config, random, inspect, absolute, links
@@ -353,6 +356,7 @@ func restoreMainHooks(t *testing.T) {
 		newAgentRegistry, newRootBootstrap, newSubagentService = registry, root, subagents
 		newWorkspace, newFileTools, newSearchTools, newShellTools = workspaceRoot, fileTools, searchTools, shellTools
 		newSubagentTools, newTodoTools, newTerminal = subagentTools, todoTools, terminal
+		newJobService, newJobTools = jobService, jobTools
 	})
 }
 
@@ -525,10 +529,14 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 				return nil, failure
 			}
 		}},
+		{name: "jobs", set: func() { newJobService = func(appJob.Notifier) (*appJob.Service, error) { return nil, failure } }},
 		{name: "shell tools", set: func() {
-			newShellTools = func(*appTool.Runtime, shelltool.Runner, workspace.Root) (*shelltool.Provider, error) {
+			newShellTools = func(*appTool.Runtime, shelltool.Runner, workspace.Root, *appJob.Service) (*shelltool.Provider, error) {
 				return nil, failure
 			}
+		}},
+		{name: "job tools", set: func() {
+			newJobTools = func(*appTool.Runtime, *appJob.Service) (*jobtool.Provider, error) { return nil, failure }
 		}},
 		{name: "subagent tools", set: func() {
 			newSubagentTools = func(*appTool.Runtime, subagenttool.Service) (*subagenttool.Provider, error) { return nil, failure }

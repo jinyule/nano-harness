@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -61,7 +62,7 @@ func TestRunnerRun_ValidatesRequestAndPaths(t *testing.T) {
 		func(request *Request) { request.TempDir, request.Mode = "", ModeWorkspace },
 		func(request *Request) { request.Mode = "unknown" },
 		func(request *Request) { request.StdoutLimit = -1 },
-		func(request *Request) { request.Timeout = 0 },
+		func(request *Request) { request.Timeout = -time.Second },
 		func(request *Request) { request.Timeout = 11 * time.Minute },
 		func(request *Request) { request.Cwd = filepath.Dir(temporary) },
 		func(request *Request) { request.TempDir = filepath.Dir(temporary) },
@@ -169,6 +170,56 @@ func TestRunnerRun_ReportsStreamsExitSignalTimeoutAndCancellation(t *testing.T) 
 	}
 	if _, err = runner.Run(ctx, request); !errors.Is(err, context.Canceled) {
 		t.Fatalf("pre-canceled error = %v", err)
+	}
+}
+
+// lockedBuffer is a stream observer safe for the runner's copy goroutines.
+type lockedBuffer struct {
+	mu   sync.Mutex
+	data []byte
+}
+
+func (buffer *lockedBuffer) Write(data []byte) (int, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	buffer.data = append(buffer.data, data...)
+	return len(data), nil
+}
+
+func (buffer *lockedBuffer) String() string {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return string(buffer.data)
+}
+
+func TestRunnerRun_ObservesStreamsWithoutDeadline(t *testing.T) {
+	root := t.TempDir()
+	runner := &Runner{goos: "linux"}
+	var stdout, stderr lockedBuffer
+	request := Request{
+		Path: "/bin/sh", Args: []string{"-c", "printf out; printf err >&2; exit 4"},
+		Root: root, Cwd: root, TempDir: root, Mode: ModeHost, Stdout: &stdout, Stderr: &stderr,
+	}
+	result, err := runner.Run(context.Background(), request)
+	if err != nil || result.ExitCode != 4 || result.TimedOut || result.Stdout.Text != "out" || result.Stderr.Text != "err" || stdout.String() != "out" || stderr.String() != "err" {
+		t.Fatalf("result = %+v, observed %q/%q, error = %v", result, stdout.String(), stderr.String(), err)
+	}
+
+	// Without a deadline only the caller stops the process; the observer
+	// sees output produced before cancellation.
+	ctx, cancel := context.WithCancel(context.Background())
+	var live lockedBuffer
+	request.Args, request.Stdout, request.Stderr = []string{"-c", "printf ready; sleep 30"}, &live, nil
+	go func() {
+		for live.String() == "" {
+			time.Sleep(5 * time.Millisecond)
+		}
+		cancel()
+	}()
+	started := time.Now()
+	result, err = runner.Run(ctx, request)
+	if !errors.Is(err, context.Canceled) || result.Signal != "SIGKILL" || result.TimedOut || live.String() != "ready" || time.Since(started) > 10*time.Second {
+		t.Fatalf("canceled result = %+v, error = %v", result, err)
 	}
 }
 

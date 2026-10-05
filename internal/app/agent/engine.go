@@ -77,7 +77,11 @@ type runInput struct {
 	persona   string
 	tools     []string
 	delegated bool
-	drain     func() []session.Message
+	// drain takes steers at tool-step boundaries.
+	drain func() []session.Message
+	// notices takes queued notices at turn start, at tool-step boundaries,
+	// and before a turn would complete, which then continues to answer them.
+	notices func() []session.Message
 }
 
 func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnResult) {
@@ -121,6 +125,10 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			result.Err = errors.Join(result.Err, closeErr)
 		}
 	}()
+	if err := appendUserMessages(ctx, input.journal, turn, input.notices()); err != nil {
+		result.Err, result.Outcome = err, session.OutcomeError
+		return result
+	}
 
 	maxSteps := uint64(engine.maxSteps) //nolint:gosec // construction restricts maxSteps to the positive range 1-256
 	for step := uint64(1); step <= maxSteps; step++ {
@@ -233,6 +241,16 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			}
 			stepOpen = false
 			openStep = 0
+			if step < maxSteps {
+				notices := input.notices()
+				if err := appendUserMessages(ctx, input.journal, turn, notices); err != nil {
+					result.Err, result.Outcome = err, session.OutcomeError
+					return result
+				}
+				if len(notices) > 0 {
+					continue
+				}
+			}
 			if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordTurnEnd, Turn: turn, Outcome: session.OutcomeCompleted}); err != nil {
 				result.Err, result.Outcome = err, session.OutcomeError
 				return result
@@ -257,16 +275,23 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		}
 		stepOpen = false
 		openStep = 0
-		for _, steer := range input.drain() {
-			steerCopy := steer
-			if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordUserMessage, Turn: turn, Message: &steerCopy}); err != nil {
-				result.Err, result.Outcome = err, session.OutcomeError
-				return result
-			}
+		if err := appendUserMessages(ctx, input.journal, turn, append(input.drain(), input.notices()...)); err != nil {
+			result.Err, result.Outcome = err, session.OutcomeError
+			return result
 		}
 	}
 	result.Outcome = session.OutcomeStepLimit
 	return result
+}
+
+// appendUserMessages commits input that arrived during a turn, in order.
+func appendUserMessages(ctx context.Context, log *journal, turn uint64, messages []session.Message) error {
+	for index := range messages {
+		if _, err := log.Append(ctx, session.Record{Type: session.RecordUserMessage, Turn: turn, Message: &messages[index]}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func nextTurn(events []session.Event) uint64 {

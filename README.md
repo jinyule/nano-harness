@@ -85,7 +85,7 @@ model 必须在该 provider 的模型目录中，否则设置加载失败。未�
 
 ## 终端验证与 GoLand 调试
 
-`make tui-e2e` 使用真实二进制和 PTY，配合本地模型协议 fixture，验证文件工具、任务计划、Subagent、审批、打断和恢复，无需模型账户。需要 Python 3、Unix PTY、ripgrep 和本机 workspace sandbox。
+`make tui-e2e` 使用真实二进制和 PTY，配合本地模型协议 fixture，验证文件工具、任务计划、后台任务通知、Subagent、审批、打断和恢复，无需模型账户。需要 Python 3、Unix PTY、ripgrep 和本机 workspace sandbox。
 
 GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点。需要把 TUI 输入保留在 Codex 或其他终端中时，使用 `Nano TUI Remote`；完整步骤见[终端与断点调试](docs/debugging.md)。
 
@@ -93,7 +93,8 @@ GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点�
 
 - provider-neutral 的 Models → Provider → wire API 路由；provider 拥有 catalog、认证、刷新和流协议。
 - OpenAI Responses/ChatGPT Codex Responses、Anthropic Messages、OpenRouter Chat Completions 的流式适配。
-- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`web_search`、`web_fetch` 和记录会话任务计划的 `todo_write`，以及 spawn/followup/interrupt/report/list subagent 工具。
+- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`web_search`、`web_fetch` 和记录会话任务计划的 `todo_write`，以及 spawn/followup/interrupt/report/list subagent 工具。
+- `bash` 可在后台运行，前台命令超时后转为后台 job 继续运行；job 完成后通知所属 agent，agent 空闲时自动开启新 turn。
 - 失败关闭的 approval、相邻只读工具并发、写入与 shell 的独占 barrier。
 - 指数退避 retry、主动/被动 context compaction、followup、steer、interrupt 和恢复。
 - v2 严格 JSONL 事件日志；流式 text/reasoning/tool、审批、重试、压缩、任务计划和 subagent 身份均可审计。
@@ -109,7 +110,7 @@ internal/app/{llm,tool,...}/      用例与消费方能力接口
 internal/adapter/model/provider/  OpenAI、Anthropic、OpenRouter provider
 internal/adapter/credential/file/ owner-only 账户存储
 internal/adapter/session/jsonl/   严格 JSONL 会话 provider
-internal/adapter/tool/            file、search、shell、subagent、todo、web 工具与 workspace 根
+internal/adapter/tool/            file、search、shell、job、subagent、todo、web 工具与 workspace 根
 internal/adapter/web/fetch/       公网 HTTP(S) 抓取与地址策略
 internal/adapter/media/image/     图片解码、缩放与规范化
 internal/adapter/tui/             全屏终端 UI

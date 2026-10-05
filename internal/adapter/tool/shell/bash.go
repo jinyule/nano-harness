@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
+	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	platformProcess "github.com/jinyule/nano-harness/internal/platform/process"
 )
@@ -37,8 +38,14 @@ type bashArgs struct {
 	Command            string   `json:"command"`
 	TimeoutMS          *float64 `json:"timeoutMs"`
 	Workdir            *string  `json:"workdir"`
+	RunInBackground    *bool    `json:"run_in_background"`
 	SandboxPermissions *string  `json:"sandbox_permissions"`
 	Justification      *string  `json:"justification"`
+}
+
+// background reports a request to return a job ID immediately.
+func (arguments bashArgs) background() bool {
+	return arguments.RunInBackground != nil && *arguments.RunInBackground
 }
 
 // escalated reports a validated request to leave the workspace sandbox.
@@ -54,8 +61,9 @@ func (provider *Provider) bashTool() *appTool.Tool {
 			appTool.Required("description", appTool.String("Clear, concise description of what this command does in active voice, 5-10 words (shown in the UI). "+
 				"Examples: \"ls\" → \"List files in current directory\"; \"git status\" → \"Show working tree status\"; \"npm install\" → \"Install package dependencies\".")),
 			appTool.Required("command", appTool.String("The bash command to execute.")),
-			appTool.Optional("timeoutMs", appTool.Number("Timeout in milliseconds. The executor applies its configured default and cap, and kills the command on expiry.")),
+			appTool.Optional("timeoutMs", appTool.Number("Timeout in milliseconds. The executor applies its configured default and cap; on expiry the command moves to the background as a job instead of being killed.")),
 			appTool.Optional("workdir", appTool.String("Working directory for this command. Defaults to the session workspace; a relative path is resolved against it.")),
+			appTool.Optional("run_in_background", appTool.Boolean("Run in the background and return a job id immediately (collect with job_output, stop with job_kill). No timeout applies.")),
 		}, workspace.EscalationProperties("command", "command")...),
 		Guidance: appTool.StaticGuidance(appTool.OrderBash, "Check the [exit code: N] marker on every bash result; investigate failures before moving on."),
 		Check: func(arguments bashArgs) error {
@@ -69,6 +77,9 @@ func (provider *Provider) bashTool() *appTool.Tool {
 		Approval: func(arguments bashArgs) string {
 			if arguments.escalated() {
 				return "escalate sandbox to " + workspace.ModeDangerFullAccess + ": " + *arguments.Justification
+			}
+			if arguments.background() {
+				return "run a background shell command in the workspace sandbox: " + arguments.Description
 			}
 			return "run a shell command in the workspace sandbox: " + arguments.Description
 		},
@@ -126,18 +137,117 @@ func (provider *Provider) bash(ctx context.Context, invocation appTool.Invocatio
 	}
 	environment := map[string]string{"DSH_SHELL": "1", "DSH_SESSION_ID": invocation.SessionID}
 	maps.Copy(environment, terminalEnvironment)
-	result, err := provider.runner.Run(ctx, platformProcess.Request{
+	request := platformProcess.Request{
 		Path: provider.bashPath, Args: []string{"-c", arguments.Command},
-		Root: provider.root.Path(), Cwd: workdir, TempDir: temporary, Mode: mode,
-		Timeout: max(time.Duration(timeoutMS*float64(time.Millisecond)), time.Nanosecond), Additional: environment,
-	})
-	if err != nil {
+		Root: provider.root.Path(), Cwd: workdir, TempDir: temporary, Mode: mode, Additional: environment,
+	}
+	if arguments.background() {
 		if ctx.Err() != nil {
 			return appTool.Result{}, errors.New("tool call aborted")
 		}
+		id, err := provider.jobs.Launch(provider.job(invocation.SessionID, arguments.Command, request, &processRun{}))
+		if err != nil {
+			return appTool.Result{}, err
+		}
+		return appTool.Text("started background job " + id), nil
+	}
+	return provider.foreground(ctx, invocation.SessionID, arguments.Command, request, timeoutMS)
+}
+
+// processRun carries a job's process result to the foreground call that
+// waits on it; the job's settlement orders the write before the read.
+type processRun struct {
+	result platformProcess.Result
+	err    error
+}
+
+// job wraps one command as a background job. The process has no deadline:
+// it ends on its own, by job_kill, or at shutdown, and the runner kills its
+// whole process group on cancellation.
+func (provider *Provider) job(owner, command string, request platformProcess.Request, run *processRun) appJob.Spec {
+	return appJob.Spec{Kind: "bash", Label: command, Owner: owner, Run: func(ctx context.Context, output *appJob.Output) appJob.Outcome {
+		request.Stdout, request.Stderr = output.Writer(appJob.Stdout), output.Writer(appJob.Stderr)
+		run.result, run.err = provider.runner.Run(ctx, request)
+		return outcome(run.result, run.err)
+	}}
+}
+
+// foreground runs a command as a job the call waits on. A command that
+// outlives the timeout keeps running as that job and the call returns its
+// output so far; one that settles in time is removed and rendered like any
+// foreground result. When the owner is at its job limit the command runs
+// under the deadline kill instead.
+func (provider *Provider) foreground(ctx context.Context, owner, command string, request platformProcess.Request, timeoutMS float64) (appTool.Result, error) {
+	timeout := max(time.Duration(timeoutMS*float64(time.Millisecond)), time.Nanosecond)
+	run := &processRun{}
+	id, err := provider.jobs.Launch(provider.job(owner, command, request, run))
+	if errors.Is(err, appJob.ErrLimit) {
+		request.Timeout = timeout
+		run.result, run.err = provider.runner.Run(ctx, request)
+		return finish(ctx, *run, timeoutMS)
+	}
+	if err != nil {
 		return appTool.Result{}, err
 	}
-	return appTool.Text(render(result, timeoutMS)), nil
+	view, err := provider.jobs.Wait(ctx, owner, id, timeout)
+	if err != nil {
+		// Only the call's cancellation or shutdown ends a wait on its own
+		// live job; the command goes with the call. The record leaves once
+		// the kill settles, since the model never saw the ID.
+		_, _, _ = provider.jobs.Kill(owner, id, "tool call aborted")
+		_, _ = provider.jobs.Wait(context.WithoutCancel(ctx), owner, id, timeout)
+		_ = provider.jobs.Remove(owner, id)
+		return appTool.Result{}, errors.New("tool call aborted")
+	}
+	if view.Status == appJob.StatusRunning || view.Status == appJob.StatusStopping {
+		// One consuming read hands over the output so far, so job_output
+		// continues exactly after it. It fails only once shutdown dropped
+		// the record, which leaves nothing to hand over.
+		read, _ := provider.jobs.Read(owner, id)
+		return appTool.Text(promoted(read.Delta(), id, timeoutMS)), nil
+	}
+	// Removal fails only after shutdown already dropped the record.
+	_ = provider.jobs.Remove(owner, id)
+	return finish(ctx, *run, timeoutMS)
+}
+
+func finish(ctx context.Context, run processRun, timeoutMS float64) (appTool.Result, error) {
+	if ctx.Err() != nil || errors.Is(run.err, context.Canceled) {
+		return appTool.Result{}, errors.New("tool call aborted")
+	}
+	if run.err != nil {
+		return appTool.Result{}, run.err
+	}
+	return appTool.Text(render(run.result, timeoutMS)), nil
+}
+
+// outcome maps a settled process onto the job vocabulary like upstream: a
+// signal death is killed, any exit is completed with its code, and sandbox
+// facts join the detail every status line shows.
+func outcome(result platformProcess.Result, err error) appJob.Outcome {
+	switch {
+	case err != nil && !errors.Is(err, context.Canceled):
+		return appJob.Outcome{Status: appJob.StatusFailed, Detail: err.Error()}
+	case result.Signal != "":
+		return appJob.Outcome{Status: appJob.StatusKilled, Detail: "signal: " + result.Signal}
+	case err != nil:
+		return appJob.Outcome{Status: appJob.StatusKilled, Detail: "killed before exit"}
+	}
+	detail := "exit code: " + strconv.Itoa(result.ExitCode)
+	if result.SandboxDenied {
+		detail += "; " + workspace.DenialMarker(workspace.ModeWorkspaceWrite) + " " + workspace.EscalationHint("command")
+	}
+	return appJob.Outcome{Status: appJob.StatusCompleted, Detail: detail}
+}
+
+// promoted tells the model a foreground command outlived its timeout and
+// now runs as a job; job_output continues right after the included output.
+func promoted(output, id string, timeoutMS float64) string {
+	if output != "" && !strings.HasSuffix(output, "\n") {
+		output += "\n"
+	}
+	return output + "[still running after " + formatMS(timeoutMS) + "ms; moved to background job " + id + "]\n" +
+		"The command keeps running in the background. You will be notified when it finishes; read newer output with job_output, stop it with job_kill."
 }
 
 // workdir resolves the optional working directory to an existing directory

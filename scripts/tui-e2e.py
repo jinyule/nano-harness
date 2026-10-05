@@ -63,6 +63,9 @@ class Fixture(http.server.BaseHTTPRequestHandler):
             elif "CHILD_READ" in task:
                 call = None if outputs else ("read", {"file_path": "proof.txt"})
                 text = "CHILD_READ_OK"
+            elif task.startswith("background job "):
+                call = None if outputs else ("job_output", {"job_id": "bash-2"})
+                text = "NOTICE_SEEN"
             else:
                 child = re.search(r"session=([^ ]+)", " ".join(outputs))
                 child_id = child.group(1) if child else "missing-child"
@@ -80,6 +83,8 @@ class Fixture(http.server.BaseHTTPRequestHandler):
                     ("write", {"file_path": "written.txt", "content": "WRITE_PROOF\n"}),
                     ("edit", {"file_path": "written.txt", "old_string": "WRITE_PROOF", "new_string": "EDIT_PROOF"}),
                     ("bash", {"description": "Write the shell proof file", "command": "printf SHELL_PROOF > shell.txt"}),
+                    ("bash", {"description": "Start the background proof job", "run_in_background": True,
+                              "command": "while [ ! -e notify ]; do sleep 0.05; done; printf JOB_PROOF"}),
                 ]
                 call = sequence[len(outputs)] if len(outputs) < len(sequence) else None
                 text = "TOOLS_VERIFIED " + "中文long-line-" * 12 + " WRAP_END"
@@ -206,10 +211,15 @@ def verify(binary):
                 terminal.send("\x1b[200~verify tools\x1b[201~\r")
                 terminal.expect("plan> 1 in progress · 1 pending")
                 terminal.expect("[>] inspect workspace")
-                for _ in range(3):
+                for _ in range(4):
                     terminal.expect("Approval required:")
                     terminal.send("y\r")
                 terminal.expect("WRAP_END")
+                terminal.expect("turn> completed")
+                # The background job finishes only now; its notice opens a turn.
+                (workspace / "notify").touch()
+                terminal.expect("job> background job bash-2")
+                terminal.expect("NOTICE_SEEN")
                 terminal.expect("turn> completed")
                 terminal.resize(100, 32)
                 terminal.send("/agents\r")
@@ -230,18 +240,22 @@ def verify(binary):
             root_records = [entry["record"] for entry in root[1:]]
             calls = [entry["call"]["name"] for entry in root_records if entry["type"] == "tool/call"]
             assert calls == ["todo_write", "glob", "grep", "read", "spawn_subagent", "subagent_followup", "subagent_report",
-                             "list_subagents", "subagent_interrupt", "write", "edit", "bash"], calls
+                             "list_subagents", "subagent_interrupt", "write", "edit", "bash", "bash", "job_output"], calls
             results = [entry["result"] for entry in root_records if entry["type"] == "tool/result"]
-            assert len(results) == 12 and all(not entry.get("is_error", False) for entry in results), results
+            assert len(results) == 14 and all(not entry.get("is_error", False) for entry in results), results
             assert results[0]["output"] == "Updated todo list: 1 pending, 1 in progress, 0 completed.", results[0]
             assert results[1]["output"] == "proof.txt", results[1]
             assert results[2]["output"] == "Found 1 match\n\nproof.txt\nLine 1: PTY_PROOF", results[2]
             assert "1: PTY_PROOF" in results[3]["output"], results[3]
+            assert results[12]["output"] == "started background job bash-2", results[12]
+            assert results[13]["output"] == "JOB_PROOF\n[status: completed, exit code: 0]", results[13]
+            notices = [entry for entry in root_records if entry["type"] == "user/message" and entry["message"]["source"]["kind"] == "tool-jobs"]
+            assert len(notices) == 1 and notices[0]["message"]["content"][0]["text"].startswith("background job bash-2 (bash: "), notices
             todos = [entry["todo"] for entry in root_records if entry["type"] == "todo/write"]
             assert todos == [{"call_id": "call-0", "items": [{"content": "inspect workspace", "status": "in_progress"},
                                                              {"content": "report tools", "status": "pending"}]}], todos
             decisions = [entry["approval"]["outcome"] for entry in root_records if entry["type"] == "approval/decided"]
-            assert decisions == ["allowed-once", "allowed-once", "allowed-once"], decisions
+            assert decisions == ["allowed-once"] * 4, decisions
             assert (workspace / "proof.txt").read_text() == "PTY_PROOF\n"
             assert (workspace / "written.txt").read_text() == "EDIT_PROOF\n"
             assert (workspace / "shell.txt").read_text() == "SHELL_PROOF"
@@ -262,7 +276,7 @@ def verify(binary):
                 assert terminal.process.wait(timeout=10) == 0
             finally:
                 terminal.close()
-            print("PASS: real binary/PTY, 12 root tools, todo plan, child read/followup, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
+            print("PASS: real binary/PTY, 14 root tool calls, todo plan, background job notice, child read/followup, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
 
 
 def main():
@@ -273,7 +287,7 @@ def main():
     if args.serve:
         with fixture(args.serve.resolve()) as (workspace, settings):
             print(f"fixture ready: root={workspace} settings={settings}; NANO_FIXTURE_KEY=fixture-key", flush=True)
-            print("TUI input: verify tools (approve three times), /agents, wait, /interrupt, /quit", flush=True)
+            print("TUI input: verify tools (approve four times), touch workspace/notify, /agents, wait, /interrupt, /quit", flush=True)
             try:
                 threading.Event().wait()
             except KeyboardInterrupt:

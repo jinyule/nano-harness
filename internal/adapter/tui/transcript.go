@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
+	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
@@ -22,7 +23,12 @@ func (model *model) applyEvent(event session.Event, live bool) {
 		if attachments > 0 {
 			text += fmt.Sprintf(" [images=%d]", attachments)
 		}
-		model.addLine("you> " + text)
+		// Completion notices are harness input, not something the user typed.
+		if record.Message.Source.Kind == appJob.NoticeSource {
+			model.addLine("job> " + text)
+		} else {
+			model.addLine("you> " + text)
+		}
 	case session.RecordRequestHeader:
 		route := fmt.Sprintf("route> %s/%s", record.Header.Provider, record.Header.Model)
 		if record.Header.Effort != "" {

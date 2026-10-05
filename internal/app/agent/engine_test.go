@@ -227,6 +227,8 @@ func assistantCompletion(text string, calls ...session.ToolCall) llm.Completion 
 	return llm.Completion{Message: session.Message{Role: session.RoleAssistant, Content: []session.ContentBlock{{Type: session.ContentText, Text: text}}}, Calls: calls, Usage: &session.TokenUsage{InputTokens: 3, OutputTokens: 2}}
 }
 
+func noMessages() []session.Message { return nil }
+
 func turnJournal() (*journal, *memoryLog) {
 	log := &memoryLog{header: session.Header{SessionID: "session", Cwd: "/workspace"}, path: "/session.jsonl"}
 	return newJournal(log), log
@@ -258,7 +260,7 @@ func TestEngine_ValidatesLifecycleAndDefaults(t *testing.T) {
 		t.Fatalf("closed scope error = %v", err)
 	}
 	journal, _ := turnJournal()
-	result := inactive.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "hello")})
+	result := inactive.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "hello")})
 	if !errors.Is(result.Err, ErrNotRunning) || result.Outcome != session.OutcomeError {
 		t.Fatalf("inactive result = %+v", result)
 	}
@@ -270,7 +272,7 @@ func TestEngine_CompletesStreamingTurnWithDurableOrder(t *testing.T) {
 		completion: assistantCompletion("final"),
 	})
 	journal, log := turnJournal()
-	result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "hello"), persona: "tester", drain: func() []session.Message { return nil }})
+	result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "hello"), persona: "tester", drain: func() []session.Message { return nil }})
 	if result.SessionID != "session" || result.Turn != 1 || result.Outcome != session.OutcomeCompleted || result.Text != "final" || result.Err != nil {
 		t.Fatalf("result = %+v", result)
 	}
@@ -310,7 +312,7 @@ func TestEngine_ExecutesToolsSteersAndNextTurn(t *testing.T) {
 	journal, log := turnJournal()
 	steer := agentMessage(session.RoleUser, "new direction")
 	drains := 0
-	result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "first"), tools: []string{"inspect"}, delegated: true, drain: func() []session.Message {
+	result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "first"), tools: []string{"inspect"}, delegated: true, drain: func() []session.Message {
 		drains++
 		if drains == 1 {
 			return []session.Message{steer}
@@ -338,7 +340,7 @@ func TestEngine_ExecutesToolsSteersAndNextTurn(t *testing.T) {
 			t.Fatalf("request header lacks tool guidance: %#v", header)
 		}
 	}
-	second := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "later"), drain: func() []session.Message { return nil }})
+	second := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "later"), drain: func() []session.Message { return nil }})
 	if second.Turn != 2 || second.Outcome != session.OutcomeCompleted || second.Text != "second turn" {
 		t.Fatalf("second turn = %+v", second)
 	}
@@ -353,7 +355,7 @@ func TestEngine_StopsAtStepLimitAndClosesOpenScopes(t *testing.T) {
 		t.Fatal(err)
 	}
 	journal, log := turnJournal()
-	result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "loop"), drain: func() []session.Message { return nil }})
+	result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "loop"), drain: func() []session.Message { return nil }})
 	if result.Outcome != session.OutcomeStepLimit || result.Err != nil || recordTypes(log.events)[len(log.events)-1] != session.RecordTurnEnd {
 		t.Fatalf("step limit result = %+v records=%#v", result, recordTypes(log.events))
 	}
@@ -373,7 +375,7 @@ func TestEngine_ClassifiesCancellationProviderFailureAndPanic(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			harness := startEngineHarness(t, 1, test.action)
 			journal, log := turnJournal()
-			result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
+			result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
 			if result.Outcome != test.outcome || result.Err == nil || !strings.Contains(result.Err.Error(), test.match) {
 				t.Fatalf("result = %+v", result)
 			}

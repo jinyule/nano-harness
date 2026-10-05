@@ -7,6 +7,7 @@ import (
 	sessionjsonl "github.com/jinyule/nano-harness/internal/adapter/session/jsonl"
 	settingsfile "github.com/jinyule/nano-harness/internal/adapter/settings/file"
 	filetool "github.com/jinyule/nano-harness/internal/adapter/tool/file"
+	jobtool "github.com/jinyule/nano-harness/internal/adapter/tool/job"
 	searchtool "github.com/jinyule/nano-harness/internal/adapter/tool/search"
 	shelltool "github.com/jinyule/nano-harness/internal/adapter/tool/shell"
 	subagenttool "github.com/jinyule/nano-harness/internal/adapter/tool/subagent"
@@ -17,6 +18,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/approval"
 	"github.com/jinyule/nano-harness/internal/app/compaction"
+	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	"github.com/jinyule/nano-harness/internal/app/llm"
 	"github.com/jinyule/nano-harness/internal/app/prompt"
 	"github.com/jinyule/nano-harness/internal/app/retry"
@@ -58,6 +60,8 @@ var (
 	newFileTools         = filetool.New
 	newSearchTools       = searchtool.New
 	newShellTools        = shelltool.New
+	newJobService        = appJob.New
+	newJobTools          = jobtool.New
 	newSubagentTools     = subagenttool.New
 	newTodoTools         = todotool.New
 	newWebService        = appweb.New
@@ -142,7 +146,15 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
-	shellTools, err := newShellTools(toolRuntime, processes, workspaceRoot)
+	jobs, err := newJobService(registry)
+	if err != nil {
+		return nil, err
+	}
+	shellTools, err := newShellTools(toolRuntime, processes, workspaceRoot, jobs)
+	if err != nil {
+		return nil, err
+	}
+	jobTools, err := newJobTools(toolRuntime, jobs)
 	if err != nil {
 		return nil, err
 	}
@@ -158,11 +170,13 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
+	// Jobs start after shell tools so their cleanup stops every background
+	// process before the shell temporary directory is removed.
 	plugins := []plugin.Plugin{
 		configuration, settingsProvider, credentials, modelRuntime,
 		providers[0], providers[1], providers[2], approvalService, toolRuntime,
 		images, assembler, retryService, compactionService, webService, sessions, engine,
-		registry, root, subagents, fileTools, searchTools, shellTools, subagentTools, todoTools, webTools,
+		registry, root, subagents, fileTools, searchTools, shellTools, jobs, jobTools, subagentTools, todoTools, webTools,
 	}
 	return &application{plugins: plugins, root: root, registry: registry, models: modelRuntime,
 		settings: configuration, approval: approvalService, images: images, subagents: subagents}, nil

@@ -1,0 +1,354 @@
+package job
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/jinyule/nano-harness/internal/core/plugin"
+	"github.com/jinyule/nano-harness/internal/core/session"
+)
+
+// settleCause records why a job is stopping; only producer settlements
+// that no caller collected produce a completion notice.
+type settleCause int
+
+const (
+	causeProducer settleCause = iota
+	// causeKill means Kill ran first: the killer's own result reports it.
+	causeKill
+	// causeTeardown means the service is stopping and no reader remains.
+	causeTeardown
+)
+
+// record is the mutable state of one job, guarded by Service.mu.
+type record struct {
+	id, kind, label, owner string
+
+	status          Status
+	detail          string
+	result          string
+	resultDelivered bool
+	ring            ring
+	// cursor is the model's consuming read position in the ring.
+	cursor     int64
+	cancel     context.CancelFunc
+	killReason string
+	cause      settleCause
+	// waiters counts live Wait calls; a settlement that releases one is
+	// collected by that caller and sends no notice.
+	waiters int
+	done    chan struct{}
+}
+
+func (current *record) view() View {
+	return View{ID: current.id, Kind: current.kind, Label: current.label, Status: current.status, Detail: current.detail}
+}
+
+// Service is the in-process background job registry. Jobs belong to the
+// session that launched them; every read and control operation names the
+// caller's session and fails for another session's job. Settled jobs stay
+// listed until removed or until the service stops.
+type Service struct {
+	notifier Notifier
+
+	mu       sync.Mutex
+	started  bool
+	active   bool
+	base     context.Context
+	records  []*record
+	counters map[string]int
+	group    sync.WaitGroup
+}
+
+// New constructs an inert job service that delivers completion notices
+// through notifier.
+func New(notifier Notifier) (*Service, error) {
+	if notifier == nil {
+		return nil, ErrInvalidConfig
+	}
+	return &Service{notifier: notifier, counters: map[string]int{}}, nil
+}
+
+// ID returns the stable plugin identity.
+func (*Service) ID() string { return "jobs" }
+
+// Start accepts jobs until scope cleanup. Job contexts derive from ctx, so
+// cancelling the runtime context also stops running work.
+func (service *Service) Start(ctx context.Context, scope *plugin.Scope) error {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.started {
+		return ErrInvalidConfig
+	}
+	if err := scope.Defer(service.stop); err != nil {
+		return err
+	}
+	service.started, service.active, service.base = true, true, ctx
+	return nil
+}
+
+// stop refuses new jobs, cancels live ones, waits for every producer
+// goroutine to return, and drops all records.
+func (service *Service) stop(context.Context) error {
+	service.mu.Lock()
+	service.active = false
+	for _, current := range service.records {
+		if !current.status.terminal() {
+			current.status, current.cause = StatusStopping, causeTeardown
+			current.cancel()
+		}
+	}
+	service.mu.Unlock()
+	service.group.Wait()
+	service.mu.Lock()
+	service.records = nil
+	service.mu.Unlock()
+	return nil
+}
+
+// Launch registers a job and starts its producer. It fails without
+// side effects for an invalid spec, a stopped service, or an owner that
+// already has the maximum number of live jobs. IDs are "<kind>-<n>" with a
+// per-kind counter; they are predictable, so ownership, not secrecy, is the
+// access boundary.
+func (service *Service) Launch(spec Spec) (string, error) {
+	if spec.Kind == "" || spec.Label == "" || spec.Owner == "" || spec.Run == nil {
+		return "", ErrInvalidConfig
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if !service.active {
+		return "", ErrNotRunning
+	}
+	live := 0
+	for _, current := range service.records {
+		if current.owner == spec.Owner && !current.status.terminal() {
+			live++
+		}
+	}
+	if live >= maxActivePerOwner {
+		return "", fmt.Errorf("%w (limit: %d); use job_kill to stop an unneeded job, wait for it to finish, then retry", ErrLimit, maxActivePerOwner)
+	}
+	service.counters[spec.Kind]++
+	ctx, cancel := context.WithCancel(service.base)
+	current := &record{
+		id: spec.Kind + "-" + strconv.Itoa(service.counters[spec.Kind]), kind: spec.Kind, label: spec.Label, owner: spec.Owner,
+		status: StatusRunning, cancel: cancel, done: make(chan struct{}),
+	}
+	service.records = append(service.records, current)
+	output := &Output{service: service, record: current, id: current.id}
+	service.group.Go(func() {
+		outcome := run(ctx, spec.Run, output)
+		output.flush()
+		cancel()
+		service.settle(current, outcome)
+	})
+	return current.id, nil
+}
+
+// run contains a producer panic as a failed outcome so one broken producer
+// cannot take down the process or leave its job live forever.
+func run(ctx context.Context, producer func(context.Context, *Output) Outcome, output *Output) (outcome Outcome) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			outcome = Outcome{Status: StatusFailed, Detail: "job producer panicked"}
+		}
+	}()
+	return producer(ctx, output)
+}
+
+func (service *Service) write(current *record, channel Channel, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if !current.status.terminal() {
+		current.ring.append(channel, data, liveRetainBytes)
+	}
+}
+
+// settle records the terminal outcome, releases waiters, and notifies the
+// owner unless a waiter, a kill, or teardown already accounts for it.
+func (service *Service) settle(current *record, outcome Outcome) {
+	service.mu.Lock()
+	current.status, current.detail, current.result = outcome.Status, outcome.Detail, outcome.Result
+	if !outcome.Status.terminal() {
+		current.status = StatusFailed
+	}
+	if current.status == StatusKilled && current.killReason != "" {
+		current.detail = joinDetail(current.detail, current.killReason)
+	}
+	// Keep every unread byte for the first terminal read, which trims.
+	current.ring.trim(max(settledRetainBytes, int(current.ring.total-current.cursor)))
+	awaited := current.waiters > 0
+	current.waiters = 0
+	close(current.done)
+	notify := !awaited && current.cause == causeProducer && service.base.Err() == nil
+	view, owner := current.view(), current.owner
+	service.mu.Unlock()
+	if notify {
+		// The only failure is an owner that is no longer live; its notice
+		// has no reader left, exactly like a teardown settlement.
+		_ = service.notifier.Notify(owner, Notice(view))
+	}
+}
+
+func joinDetail(detail, reason string) string {
+	if detail == "" {
+		return reason
+	}
+	return detail + "; " + reason
+}
+
+// Notice renders the completion notice delivered to the owner as a
+// user/message with source kind NoticeSource.
+func Notice(view View) session.Message {
+	text := "background job " + view.ID + " (" + view.Kind + ": " + view.Label + ") finished " + view.StatusLine() + ". Read its output with job_output."
+	return session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: NoticeSource}, Content: []session.ContentBlock{{Type: session.ContentText, Text: text}}}
+}
+
+// find returns the caller's job; callers hold service.mu.
+func (service *Service) find(owner, id string) (*record, error) {
+	if !service.active {
+		return nil, ErrNotRunning
+	}
+	index := slices.IndexFunc(service.records, func(current *record) bool { return current.id == id })
+	if index < 0 {
+		return nil, fmt.Errorf("%w %s", ErrUnknownJob, id)
+	}
+	if current := service.records[index]; current.owner == owner {
+		return current, nil
+	}
+	return nil, fmt.Errorf("job %s %w", id, ErrForeignJob)
+}
+
+// List returns the caller's jobs in launch order.
+func (service *Service) List(owner string) []View {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	views := make([]View, 0, len(service.records))
+	for _, current := range service.records {
+		if current.owner == owner {
+			views = append(views, current.view())
+		}
+	}
+	return views
+}
+
+// Get projects one job without consuming output.
+func (service *Service) Get(owner, id string) (View, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	current, err := service.find(owner, id)
+	if err != nil {
+		return View{}, err
+	}
+	return current.view(), nil
+}
+
+// Read consumes the output since the caller's previous read. The first
+// read after settlement also carries the producer's value result and trims
+// retention to the settled cap.
+func (service *Service) Read(owner, id string) (Read, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	current, err := service.find(owner, id)
+	if err != nil {
+		return Read{}, err
+	}
+	var read Read
+	read.Stdout, read.Stderr, read.Lossy = current.ring.readFrom(current.cursor)
+	current.cursor = current.ring.total
+	if current.status.terminal() {
+		if !current.resultDelivered {
+			read.Result, current.resultDelivered = current.result, true
+		}
+		current.ring.trim(settledRetainBytes)
+	}
+	read.Job = current.view()
+	return read, nil
+}
+
+// Wait blocks until the job settles, timeout passes, or ctx ends, without
+// cancelling the job. A timeout returns the live projection; cancellation
+// returns ctx's error only while the job is live, because a settlement that
+// already happened wins.
+func (service *Service) Wait(ctx context.Context, owner, id string, timeout time.Duration) (View, error) {
+	if timeout <= 0 {
+		return View{}, fmt.Errorf("%w: wait timeout must be positive", ErrInvalidConfig)
+	}
+	service.mu.Lock()
+	current, err := service.find(owner, id)
+	if err != nil {
+		service.mu.Unlock()
+		return View{}, err
+	}
+	if current.status.terminal() {
+		view := current.view()
+		service.mu.Unlock()
+		return view, nil
+	}
+	current.waiters++
+	done := current.done
+	service.mu.Unlock()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if !current.status.terminal() {
+		current.waiters--
+		if err := ctx.Err(); err != nil {
+			return View{}, err
+		}
+	}
+	return current.view(), nil
+}
+
+// Kill requests cancellation of a live job, reports whether it did, and
+// returns the projection after the request; a settled job is left
+// unchanged. A non-empty reason is appended to the terminal detail when the
+// job settles killed. A killed job sends no completion notice: the killer's
+// own result reports it.
+func (service *Service) Kill(owner, id, reason string) (View, bool, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	current, err := service.find(owner, id)
+	if err != nil {
+		return View{}, false, err
+	}
+	if current.status.terminal() {
+		return current.view(), false, nil
+	}
+	current.cancel()
+	current.status, current.cause = StatusStopping, causeKill
+	if reason != "" {
+		current.killReason = reason
+	}
+	return current.view(), true, nil
+}
+
+// Remove drops a settled job that its caller collected through its own
+// Wait and never handed out, such as a foreground shell call.
+func (service *Service) Remove(owner, id string) error {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	current, err := service.find(owner, id)
+	if err != nil {
+		return err
+	}
+	if !current.status.terminal() {
+		return fmt.Errorf("job %s %w", id, ErrStillRunning)
+	}
+	service.records = slices.DeleteFunc(service.records, func(candidate *record) bool { return candidate == current })
+	return nil
+}

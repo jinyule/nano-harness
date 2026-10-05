@@ -68,5 +68,12 @@
     "before": "if !sameOrigin(current, next) {",
     "after": "if false && !sameOrigin(current, next) {",
     "test": "^TestFetch_RefusesUnsafeRedirects$"
+  },
+  {
+    "id": "job-owner-fence",
+    "file": "internal/app/job/service.go",
+    "before": "if current := service.records[index]; current.owner == owner {",
+    "after": "if current := service.records[index]; current.owner == owner || true {",
+    "test": "^TestService_FencesOwnersAndUnknownJobs$"
   }
 ]

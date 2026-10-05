@@ -10,7 +10,7 @@
     {
       "name": "bash",
       "source": "docs/tool-catalog.md with packages/shell/tool-bash/src/index.ts and packages/sandbox/sandbox/src/escalation.ts",
-      "composition": "Foreground variant (enableRunInBackground: false removes run_in_background and selects the kill-on-expiry timeoutMs text); Base mounts @deepseek-ai/dsh-bash-sandbox on non-Windows hosts, so sandbox_permissions and justification are advertised",
+      "composition": "Base composes @deepseek-ai/dsh-jobs-local and @deepseek-ai/dsh-tool-jobs with tool-bash defaults (enableRunInBackground: true, promoteOnTimeout: true), so run_in_background is advertised and timeoutMs uses the move-to-background text, matching the catalog; Base also mounts @deepseek-ai/dsh-bash-sandbox on non-Windows hosts, so sandbox_permissions and justification follow run_in_background",
       "description": "Execute a bash command (`bash -c`) and return its stdout/stderr. Each call runs in a fresh shell; pass `workdir` instead of using `cd`. Managed `$DSH_*` variables expose current harness environment facts. Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. Provide `description` before `command` in the arguments. Before any delete or move, verify that the resolved absolute target path is the intended one; never run it against a computed path you have not checked. An unset variable expands to an empty string, so guard variables in such paths with `${VAR:?}`. Commands may run under a file sandbox; a blocked file operation is reported as `[sandbox: file access denied under <mode> mode]`, a policy denial: do not retry another way.",
       "parameters": {
         "type": "object",
@@ -25,11 +25,15 @@
           },
           "timeoutMs": {
             "type": "number",
-            "description": "Timeout in milliseconds. The executor applies its configured default and cap, and kills the command on expiry."
+            "description": "Timeout in milliseconds. The executor applies its configured default and cap; on expiry the command moves to the background as a job instead of being killed."
           },
           "workdir": {
             "type": "string",
             "description": "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it."
+          },
+          "run_in_background": {
+            "type": "boolean",
+            "description": "Run in the background and return a job id immediately (collect with job_output, stop with job_kill). No timeout applies."
           },
           "sandbox_permissions": {
             "type": "string",
@@ -139,6 +143,64 @@
         },
         "required": [
           "pattern"
+        ]
+      }
+    },
+    {
+      "name": "job_kill",
+      "source": "docs/tool-catalog.md (packages/jobs/tool-jobs/src/index.ts)",
+      "composition": "Base loads @deepseek-ai/dsh-tool-jobs with defaults; identical to the catalog",
+      "description": "Request cancellation of a running background job.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "description": "Job id returned by the tool that started the background work."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Optional short reason, recorded in the log and forwarded to the job."
+          }
+        },
+        "required": [
+          "job_id"
+        ]
+      }
+    },
+    {
+      "name": "job_list",
+      "source": "docs/tool-catalog.md (packages/jobs/tool-jobs/src/index.ts)",
+      "composition": "Base loads @deepseek-ai/dsh-tool-jobs with defaults; identical to the catalog",
+      "description": "List your background jobs (running and finished) with their ids, kinds, and statuses.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "job_output",
+      "source": "docs/tool-catalog.md (packages/jobs/tool-jobs/src/index.ts)",
+      "composition": "Base loads @deepseek-ai/dsh-tool-jobs with defaults; identical to the catalog",
+      "description": "Read a background job: output since the previous read for stream jobs, or the result of a finished final-output job.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "description": "Job id returned by the tool that started the background work."
+          },
+          "wait": {
+            "type": "boolean",
+            "description": "Block until the job finishes or the timeout expires; a timed-out wait leaves the job running. Defaults to false."
+          },
+          "timeout_ms": {
+            "type": "number",
+            "description": "Max wait in milliseconds with wait: true. Defaults to and is capped by configuration."
+          }
+        },
+        "required": [
+          "job_id"
         ]
       }
     },

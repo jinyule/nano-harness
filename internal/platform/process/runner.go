@@ -61,13 +61,20 @@ type Request struct {
 	Cwd string
 	// TempDir is the private TMPDIR and must lie inside Root. Workspace mode
 	// requires it; an empty value in host mode leaves TMPDIR unset.
-	TempDir    string
-	Mode       Mode
+	TempDir string
+	Mode    Mode
+	// Timeout kills the process group when it expires; zero leaves ctx as
+	// the only bound, for work a background job owner cancels explicitly.
 	Timeout    time.Duration
 	Additional map[string]string
 	// StdoutLimit is the retained stdout tail in bytes; zero selects the
 	// default. Output.Truncated reports that more was written.
 	StdoutLimit int
+	// Stdout and Stderr, when set, observe each stream as it is produced, in
+	// addition to the retained tails. Each is written from one goroutine,
+	// concurrently with the other, and must not fail.
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 // Output is the retained tail of one stream.
@@ -112,7 +119,7 @@ func New() *Runner {
 // group is killed and reaped. Exit status, signals, and timeouts are facts
 // in Result; errors mean the process could not run or the caller canceled.
 func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) {
-	if request.Path == "" || request.Root == "" || request.Cwd == "" || request.TempDir == "" && request.Mode != ModeHost || request.Mode != ModeWorkspace && request.Mode != ModeHost || request.Timeout <= 0 || request.Timeout > 10*time.Minute || request.StdoutLimit < 0 {
+	if request.Path == "" || request.Root == "" || request.Cwd == "" || request.TempDir == "" && request.Mode != ModeHost || request.Mode != ModeWorkspace && request.Mode != ModeHost || request.Timeout < 0 || request.Timeout > 10*time.Minute || request.StdoutLimit < 0 {
 		return Result{}, ErrInvalidConfig
 	}
 	paths := make([]string, 3)
@@ -134,7 +141,10 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
-	runContext, cancel := context.WithTimeout(ctx, request.Timeout)
+	runContext, cancel := ctx, context.CancelFunc(func() {})
+	if request.Timeout > 0 {
+		runContext, cancel = context.WithTimeout(ctx, request.Timeout)
+	}
 	defer cancel()
 	command := exec.CommandContext(runContext, path, args...) //nolint:gosec // executable and arguments are intentionally selected by the approved tool call
 	command.Dir = cwd
@@ -148,7 +158,7 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 	}
 	command.WaitDelay = pipeDrainDelay
 	stdout, stderr := tailBuffer{limit: request.StdoutLimit}, tailBuffer{}
-	command.Stdout, command.Stderr = &stdout, &stderr
+	command.Stdout, command.Stderr = observed(&stdout, request.Stdout), observed(&stderr, request.Stderr)
 	err = command.Run()
 	// Descendants left in the group are stopped so the call reaches quiescence.
 	killProcessGroup(command)
@@ -230,6 +240,14 @@ func validEnvironmentName(name string) bool {
 func within(root, target string) bool {
 	relative, err := filepath.Rel(root, target)
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+// observed tees a stream to its optional observer after the retained tail.
+func observed(tail *tailBuffer, observer io.Writer) io.Writer {
+	if observer == nil {
+		return tail
+	}
+	return io.MultiWriter(tail, observer)
 }
 
 // tailBuffer keeps the last limit bytes written to it; zero selects

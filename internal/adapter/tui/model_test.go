@@ -344,6 +344,7 @@ func TestApplyEvent_ProjectsAllDurablePresentationFacts(t *testing.T) {
 	image := &session.Image{Name: "image"}
 	events := []session.Event{
 		{Record: session.Record{Type: session.RecordUserMessage, Message: &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: "hello"}, {Type: session.ContentImage, Image: image}}}}},
+		{Record: session.Record{Type: session.RecordUserMessage, Message: &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "tool-jobs"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: "background job bash-1 finished"}}}}},
 		{Record: session.Record{Type: session.RecordRequestHeader, Header: &session.RequestHeader{Provider: "openai", Model: "model", Effort: session.EffortMax}}},
 		{Record: session.Record{Type: session.RecordAssistantChunk, Chunk: &session.AssistantChunk{Kind: session.ChunkText, Text: "one"}}},
 		{Record: session.Record{Type: session.RecordAssistantChunk, Chunk: &session.AssistantChunk{Kind: session.ChunkText, Text: " two"}}},
@@ -363,7 +364,7 @@ func TestApplyEvent_ProjectsAllDurablePresentationFacts(t *testing.T) {
 		current.applyEvent(event, true)
 	}
 	joined := strings.Join(current.lines, "\n")
-	for _, expected := range []string{"you> hello [images=1]", "route> openai/model effort=max", "assistant> one two", "reasoning> think", "tool> read", "approval> write", "result> ok", "tool-error> bad", "retry> attempt=2", "compact> started", "compact> completed", "compact> failed", "turn> completed"} {
+	for _, expected := range []string{"you> hello [images=1]", "job> background job bash-1 finished", "route> openai/model effort=max", "assistant> one two", "reasoning> think", "tool> read", "approval> write", "result> ok", "tool-error> bad", "retry> attempt=2", "compact> started", "compact> completed", "compact> failed", "turn> completed"} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("projection missing %q in %s", expected, joined)
 		}

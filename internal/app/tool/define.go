@@ -21,6 +21,8 @@ const (
 	OrderGlob = 1400
 	// OrderGrep positions content-search guidance.
 	OrderGrep = 1500
+	// OrderJobs positions background-job guidance.
+	OrderJobs = 1600
 	// OrderWebSearch positions web-search guidance.
 	OrderWebSearch = 2000
 	// OrderWebFetch positions web-fetch guidance.

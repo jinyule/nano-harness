@@ -80,7 +80,8 @@
 - root policy 默认 `ask`，可切换为 `never`。delegated agent 的 policy 持久化为 `never`，approval service 不向 broker 提问，因此 subagent 无法写文件或运行 shell。
 - `bash` 默认通过 macOS `sandbox-exec` 或 Linux `bwrap` 执行。sandbox 只允许写 workspace 和 provider 拥有的临时目录；Linux 使用只读 root bind、workspace 可写 bind、独立 namespace、`--die-with-parent`。sandbox executable 缺失时拒绝执行。失败命令的 stderr 命中当前后端的拒绝签名时，结果追加 `[sandbox: file access denied under workspace-write mode]` 和一次性升级提示。
 - 模型参数沿用上游 `sandbox_permissions` 与 `justification`，按上游规则校验：`write`/`edit` 要求两者成对出现；`bash` 重复 `workspace-write` 时可省略 justification，未给模式时空白 justification 被忽略。`workspace-write` 等同默认模式。`danger-full-access` 只对 `bash` 有效：需要非空 justification，approval 原因为 `escalate sandbox to danger-full-access: <justification>`，批准后仅这一条命令在 host 上运行；delegated request 在执行点无条件拒绝。`write` 和 `edit` 在审批前拒绝 `danger-full-access`，文件工具从不离开 workspace。
-- `bash` 运行 `bash -c`，只支持前台执行。`timeoutMs` 默认 60 s、上限 10 min，超过上限按上限执行，非正值拒绝；stdout 与 stderr 各保留最后 64,000 字节。超时或取消时终止整个进程组并等待退出；命令结束后，同一进程组中残留的后台进程也会被终止。非零退出码、信号和超时以 `[exit code: N]`、`[killed by signal: S]`、`[timed out after Nms]` 标记返回，不是 tool error；取消返回 `tool call aborted`。
+- `bash` 运行 `bash -c`。每次调用在审批之后作为后台任务注册表中的 job 运行，进程没有 runner 截止时间，只在自行结束、`job_kill` 或关闭时停止；停止时终止整个进程组并等待退出，命令结束后同一进程组中残留的后台进程也会被终止。`run_in_background: true` 立即返回 job ID，审批原因注明 background；前台调用等待 `timeoutMs`（默认 60 s、上限 10 min，超过上限按上限，非正值拒绝），到期后命令继续作为后台 job 运行而不是被终止。前台结果中 stdout 与 stderr 各保留最后 64,000 字节；非零退出码和信号以 `[exit code: N]`、`[killed by signal: S]` 标记返回，不是 tool error；取消调用会终止该 job 并返回 `tool call aborted`。owner 已有 10 个活动 job 时，后台调用被拒，前台调用退回到期即终止的执行方式，超时以 `[timed out after Nms]` 标记。
+- job 只能由启动它的 session 读取、等待和终止，其他 session 得到 `belongs to another session`；ID 可预测，边界是所有权。每个 job 的输出环运行中最多保留 128 KiB，结束后第一次读取裁到 16 KiB，丢失的字节以提示标出。插件关闭时先拒绝新 job，再终止并等待全部 job；harness 退出不会留下后台进程。完成通知只包含 job ID、种类、标签（命令文本）和状态，规则见 [ADR-0009](decisions/0009-background-jobs.md)。
 - 子进程环境在固定 allowlist 之外只增加 `NO_COLOR=1`、`TERM=dumb`、`PAGER=cat`、`GIT_PAGER=cat`、`DSH_SHELL=1` 和当前 `DSH_SESSION_ID`。
 - `glob`/`grep` 以 argv 直接运行构造时从 PATH 解析的 `rg`，不经过 shell。它们不需要 approval，也不进入 workspace sandbox：ripgrep 只读取文件，OS sandbox 只限制写入，不限制读取，进入 sandbox 不会缩小可见范围，反而会让没有 sandbox 可执行文件的主机失去搜索能力。每次调用前置 `--no-config`，`RIPGREP_CONFIG_PATH` 和配置文件无法注入 `--pre` 等预处理命令；模型提供的 pattern、include 和路径只以 `--regexp=`、`--glob=` 或 `--` 之后的单个参数传入。环境使用同一 allowlist，不传 `HOME`，因此不会读取用户的全局 git excludes；stdin 是空设备，cwd 是 workspace root。stdout 保留上限为 20,000,000 字节，超出时失败而不解析部分结果；stderr 只保留最后 64,000 字节作为错误摘要；超时或取消时终止进程组并等待退出。这与上游通过 subprocess 直接运行打包的 ripgrep 一致。
 - 进程使用 argv 启动；只有 `bash` 工具才由 `bash -c` 解释文本。启动错误、sandbox 不可用、exit status、signal、timeout 和 output truncation 保持独立可诊断语义。
@@ -100,7 +101,7 @@
 
 - subagent 是同进程的独立 agent/session，不启动外部 Codex/Claude 进程，也不共享可变 transcript。
 - 最大 delegation depth 为 4，fork context 与任务有大小上限，child persona 和 tool allowlist 被持久化并在恢复时校验。
-- parent identity 在 followup/interrupt 边界校验。report/list 只返回 session、标签、模式、深度、busy/pending 和最近结果，不返回账户或 prompt secret。
+- parent identity 在 followup/interrupt 边界校验。delegated agent 只能访问自己的 job，且因 `never` 策略无法通过 `bash` 启动 job。report/list 只返回 session、标签、模式、深度、busy/pending 和最近结果，不返回账户或 prompt secret。
 - plugin shutdown 先停止发布新工作，再取消 child monitor/turn，等待 worker 退出并关闭 writer lock。goroutine、listener、临时目录和 registry contribution 必须由创建它的 Scope 回收。
 
 ## 依赖与供应链
