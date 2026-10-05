@@ -354,14 +354,6 @@ func (log *Log) Events(ctx context.Context) ([]coresession.Event, error) {
 	return cloneEvents(log.events), nil
 }
 
-// Remaining reports how many more encoded bytes the session accepts
-// before its size limit.
-func (log *Log) Remaining() int64 {
-	log.mu.Lock()
-	defer log.mu.Unlock()
-	return maxSessionBytes - log.size
-}
-
 // Flush forces the current durable prefix to storage.
 func (log *Log) Flush(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {

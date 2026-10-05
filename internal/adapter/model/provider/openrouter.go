@@ -78,6 +78,10 @@ func (provider *Provider) streamOpenRouter(ctx context.Context, current *snapsho
 }
 
 func (provider *Provider) chatRequest(model llm.ModelInfo, request llm.Request) (chatRequest, error) {
+	images, err := encodeImages(provider.id, request)
+	if err != nil {
+		return chatRequest{}, err
+	}
 	messages := make([]chatMessage, 0, len(request.Surface)+1)
 	if request.System != "" {
 		messages = append(messages, chatMessage{Role: "system", Content: request.System})
@@ -109,7 +113,7 @@ func (provider *Provider) chatRequest(model llm.ModelInfo, request llm.Request) 
 						return chatRequest{}, &llm.Error{Code: llm.ErrorInvalid, Provider: provider.id, Cause: errors.New("only user messages may contain images")}
 					}
 					hasImage = true
-					parts = append(parts, chatPart{Type: "image_url", ImageURL: &chatImageURL{URL: "data:" + block.Image.MediaType + ";base64," + block.Image.Data}})
+					parts = append(parts, chatPart{Type: "image_url", ImageURL: &chatImageURL{URL: images.dataURL(block.Image)}})
 				}
 			}
 			var content any = session.Text(*node.Message)
@@ -127,7 +131,7 @@ func (provider *Provider) chatRequest(model llm.ModelInfo, request llm.Request) 
 		case node.Result != nil:
 			messages = append(messages, chatMessage{Role: "tool", Content: resultText(node.Result), ToolCallID: node.Result.CallID})
 			if node.Result.Image != nil {
-				resultImages = append(resultImages, chatPart{Type: "image_url", ImageURL: &chatImageURL{URL: imageDataURL(node.Result.Image)}})
+				resultImages = append(resultImages, chatPart{Type: "image_url", ImageURL: &chatImageURL{URL: images.dataURL(node.Result.Image)}})
 			}
 		}
 	}

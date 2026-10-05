@@ -198,7 +198,6 @@ func (prepared *prepared) Stream(ctx context.Context, credential llm.Credential,
 	if request.MaxTokens < 0 || !prepared.info.Vision && surfaceHasImage(request.Surface) || !prepared.info.Tools && len(request.Tools) != 0 {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorInvalid, Provider: prepared.owner.id}
 	}
-	request.Surface = fitImages(request.Surface)
 	switch prepared.owner.id {
 	case "openai":
 		return prepared.owner.streamResponses(ctx, prepared.snapshot, prepared.info, credential, request, emit)

@@ -86,6 +86,10 @@ func anthropicHeaders(credential llm.Credential) (map[string]string, error) {
 }
 
 func (provider *Provider) anthropicRequest(model llm.ModelInfo, request llm.Request) (anthropicRequest, error) {
+	images, err := encodeImages(provider.id, request)
+	if err != nil {
+		return anthropicRequest{}, err
+	}
 	messages := make([]anthropicMessage, 0, len(request.Surface))
 	appendBlocks := func(role string, blocks ...anthropicBlock) {
 		if len(messages) > 0 && messages[len(messages)-1].Role == role {
@@ -106,14 +110,14 @@ func (provider *Provider) anthropicRequest(model llm.ModelInfo, request llm.Requ
 					if node.Message.Role != session.RoleUser || block.Image == nil {
 						return anthropicRequest{}, &llm.Error{Code: llm.ErrorInvalid, Provider: provider.id, Cause: errors.New("only user messages may contain images")}
 					}
-					blocks = append(blocks, anthropicBlock{Type: "image", Source: &anthropicSource{Type: "base64", MediaType: block.Image.MediaType, Data: block.Image.Data}})
+					blocks = append(blocks, anthropicBlock{Type: "image", Source: &anthropicSource{Type: "base64", MediaType: block.Image.MediaType, Data: images[block.Image.ID]}})
 				}
 			}
 			appendBlocks(string(node.Message.Role), blocks...)
 		case node.Call != nil:
 			appendBlocks("assistant", anthropicBlock{Type: "tool_use", ID: node.Call.ID, Name: node.Call.Name, Input: node.Call.Arguments})
 		case node.Result != nil:
-			appendBlocks("user", anthropicBlock{Type: "tool_result", ToolUseID: node.Result.CallID, Content: anthropicResultContent(node.Result), IsError: node.Result.IsError})
+			appendBlocks("user", anthropicBlock{Type: "tool_result", ToolUseID: node.Result.CallID, Content: anthropicResultContent(node.Result, images), IsError: node.Result.IsError})
 		}
 	}
 	tools := make([]anthropicTool, len(request.Tools))
@@ -133,7 +137,7 @@ func (provider *Provider) anthropicRequest(model llm.ModelInfo, request llm.Requ
 
 // anthropicResultContent places a tool-result image inside tool_result, after
 // its text, as upstream's Messages adapter does.
-func anthropicResultContent(result *session.ToolResult) any {
+func anthropicResultContent(result *session.ToolResult, images encodedImages) any {
 	if result.Image == nil {
 		if result.Output == "" {
 			return nil
@@ -142,7 +146,7 @@ func anthropicResultContent(result *session.ToolResult) any {
 	}
 	return []anthropicBlock{
 		{Type: "text", Text: resultText(result)},
-		{Type: "image", Source: &anthropicSource{Type: "base64", MediaType: result.Image.MediaType, Data: result.Image.Data}},
+		{Type: "image", Source: &anthropicSource{Type: "base64", MediaType: result.Image.MediaType, Data: images[result.Image.ID]}},
 	}
 }
 

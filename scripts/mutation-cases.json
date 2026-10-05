@@ -161,13 +161,6 @@
     "test": "^TestStream_RefusesToolResultImagesForTextModelsBeforeNetwork$"
   },
   {
-    "id": "image-session-reserve",
-    "file": "internal/app/agent/capacity.go",
-    "before": "return need, available, need <= available",
-    "after": "return need, available, true",
-    "test": "^TestEngine_KeepsTurnsWorkingWhenImagesDoNotFit$"
-  },
-  {
     "id": "spill-session-planted-link",
     "file": "internal/adapter/spill/store.go",
     "before": "if err := preparePrivate(dir, lstatPath); err != nil {",
@@ -229,5 +222,26 @@
     "before": "if service.armed[sessionID] == ref {",
     "after": "if service.armed[sessionID].ID != \"\" {",
     "test": "^TestService_SettlePreservesLaterHumanAuthorization$"
+  },
+  {
+    "id": "attachment-digest-check",
+    "file": "internal/adapter/attachment/store.go",
+    "before": "if len(data) != ref.Bytes || session.ImageID(hex.EncodeToString(digest[:])) != ref.ID {",
+    "after": "if len(data) != ref.Bytes || session.ImageID(hex.EncodeToString(digest[:])) == \"\" {",
+    "test": "^TestStore_ReadVerifiesTheObject$"
+  },
+  {
+    "id": "attachment-flatten-before-scale",
+    "file": "internal/adapter/attachment/normalize.go",
+    "before": "\t\tcurrent = resize(current, width, height)\n\t}\n\toutput, err := encodeImage(current, 88)",
+    "after": "\t\tcurrent = resize(decoded, width, height)\n\t}\n\toutput, err := encodeImage(current, 88)",
+    "test": "^TestStore_TransparentImagesStayWhiteWhenScaled$"
+  },
+  {
+    "id": "attachment-conversion-limit",
+    "file": "internal/adapter/attachment/store.go",
+    "before": "conversions: make(chan struct{}, maxConversions),",
+    "after": "conversions: make(chan struct{}, maxConversions+1),",
+    "test": "^TestStore_LimitsConcurrentConversions$"
   }
 ]

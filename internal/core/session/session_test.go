@@ -2,7 +2,6 @@ package session
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,9 +15,8 @@ func textMessage(role MessageRole, text string) *Message {
 }
 
 func testImage() *Image {
-	data := []byte("jpeg-data")
-	digest := sha256.Sum256(data)
-	return &Image{ID: "img", Name: "x.jpg", MediaType: "image/jpeg", Data: base64.StdEncoding.EncodeToString(data), SHA256: hex.EncodeToString(digest[:]), Width: 1, Height: 1}
+	digest := sha256.Sum256([]byte("jpeg-data"))
+	return &Image{ID: ImageID(hex.EncodeToString(digest[:])), Name: "x.jpg", MediaType: "image/jpeg", Bytes: 9, Width: 1, Height: 1}
 }
 
 func TestRecordValidate_AllKinds(t *testing.T) {
@@ -152,7 +150,7 @@ func TestRecordValidateRejectsEveryInvalidShape(t *testing.T) {
 		"result call ID":            {Type: RecordToolResult, Turn: 1, Step: 1, Result: &ToolResult{}},
 		"result output":             {Type: RecordToolResult, Turn: 1, Step: 1, Result: &ToolResult{CallID: "call", Output: strings.Repeat("x", MaxTextBytes+1)}},
 		"result error image":        {Type: RecordToolResult, Turn: 1, Step: 1, Result: &ToolResult{CallID: "call", Output: "Error: x", IsError: true, Image: testImage()}},
-		"result image digest":       {Type: RecordToolResult, Turn: 1, Step: 1, Result: &ToolResult{CallID: "call", Output: "ok", Image: &Image{ID: "img", Name: "x.jpg", MediaType: "image/jpeg", Width: 1, Height: 1, SHA256: strings.Repeat("0", 64), Data: "eA=="}}},
+		"result image ID":           {Type: RecordToolResult, Turn: 1, Step: 1, Result: &ToolResult{CallID: "call", Output: "ok", Image: &Image{ID: "img", Name: "x.jpg", MediaType: "image/jpeg", Bytes: 1, Width: 1, Height: 1}}},
 		"approval shape":            {Type: RecordApprovalAsked, Turn: 1, Step: 1},
 		"approval asked":            {Type: RecordApprovalAsked, Turn: 1, Step: 1, Approval: &ApprovalData{}},
 		"approval decided":          {Type: RecordApprovalDecided, Turn: 1, Step: 1, Approval: validApproval},
@@ -217,13 +215,24 @@ func TestRecordValidateRejectsEveryInvalidShape(t *testing.T) {
 			t.Fatalf("content accepted: %#v", block)
 		}
 	}
-	images := []Image{
-		{},
-		{ID: "id", Name: "", MediaType: "image/jpeg", Width: 1, Height: 1, SHA256: strings.Repeat("0", 64), Data: "eA=="},
-		{ID: "id", Name: "x", MediaType: "image/gif", Width: 1, Height: 1, SHA256: strings.Repeat("0", 64), Data: "eA=="},
-		{ID: "id", Name: "x", MediaType: "image/jpeg", Width: 0, Height: 1, SHA256: strings.Repeat("0", 64), Data: "eA=="},
-		{ID: "id", Name: "x", MediaType: "image/jpeg", Width: 1, Height: 1, SHA256: strings.Repeat("0", 64), Data: "!"},
-		{ID: "id", Name: "x", MediaType: "image/jpeg", Width: 1, Height: 1, SHA256: strings.Repeat("0", 64), Data: "eA=="},
+	valid := *testImage()
+	images := []Image{}
+	for _, mutate := range []func(*Image){
+		func(image *Image) { image.ID = "" },
+		func(image *Image) { image.ID = "sha256:" + strings.Repeat("0", 63) },
+		func(image *Image) { image.ID = "sha256:" + strings.Repeat("A", 64) },
+		func(image *Image) { image.ID = "md5:" + strings.Repeat("0", 64) },
+		func(image *Image) { image.Name = "" },
+		func(image *Image) { image.Name = "a\nb" },
+		func(image *Image) { image.MediaType = "image/gif" },
+		func(image *Image) { image.Bytes = 0 },
+		func(image *Image) { image.Bytes = MaxImageBytes + 1 },
+		func(image *Image) { image.Width = 0 },
+		func(image *Image) { image.Height = 4097 },
+	} {
+		image := valid
+		mutate(&image)
+		images = append(images, image)
 	}
 	for _, image := range images {
 		if validateImage(image) == nil {
@@ -278,5 +287,17 @@ func TestCloneEventDetachesEveryMutableField(t *testing.T) {
 	}
 	if event.Record.Message.Content[0].Image.Name == "changed" || event.Record.Chunk.Text == "changed" || event.Record.Call.Arguments[0] == '[' || event.Record.Result.Output == "changed" || event.Record.Result.Image.Name == "changed" || event.Record.Header.Tools[0].Parameters[0] == '[' || event.Record.Usage.InputTokens == 2 || event.Record.Retry.ID == "changed" || event.Record.Approval.ID == "changed" || event.Record.Compaction.ShadowedSeqs[0] == 2 || event.Record.Compaction.Summary[0].Image.Name == "changed" || event.Record.Subagent.Tools[0] == "changed" {
 		t.Fatal("CloneEvent aliases source")
+	}
+}
+
+func TestImageID_RoundTripsOnlyCanonicalDigests(t *testing.T) {
+	digest := strings.Repeat("ab", 32)
+	if got, ok := ImageDigest(ImageID(digest)); !ok || got != digest {
+		t.Fatalf("round trip = %q %v", got, ok)
+	}
+	for _, id := range []string{"", digest, "sha256:", "sha256:" + digest[:63], "sha256:" + digest + "0", "sha256:" + strings.ToUpper(digest), "sha256:" + strings.Repeat("g", 64)} {
+		if _, ok := ImageDigest(id); ok {
+			t.Errorf("ImageDigest(%q) accepted", id)
+		}
 	}
 }

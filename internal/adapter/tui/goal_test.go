@@ -150,7 +150,7 @@ func TestModelGoalCommand_ShowsEveryPhaseAndReplacesCompletedGoals(t *testing.T)
 
 func TestModelGoalCommand_ContainsFailuresAndAttachments(t *testing.T) {
 	fixture, current := modelFixture(t)
-	current.images = []session.Image{{Name: "shot.png"}}
+	current.images = []pendingImage{{ref: session.Image{Name: "shot.png"}}}
 	current.input.SetValue("/goal ship")
 	current, command := update(t, current, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if command != nil || !strings.HasSuffix(current.lines[len(current.lines)-1], "error> attachments cannot accompany /goal; send them as a message") || len(current.images) != 1 {

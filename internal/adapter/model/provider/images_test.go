@@ -1,8 +1,6 @@
 package provider
 
 import (
-	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -31,7 +29,7 @@ func imageResultRequest() llm.Request {
 		{Result: &session.ToolResult{CallID: "call-1", Output: "envelope", Image: resultImage()}},
 		{Result: &session.ToolResult{CallID: "call-2", Output: "", Image: resultImage()}},
 		{Message: user("steer")},
-	}}
+	}, Images: imageBytes()}
 }
 
 // recordingServer answers every protocol with a short text completion and
@@ -114,7 +112,9 @@ func TestStream_SendsToolResultImagesInEachWireFormat(t *testing.T) {
 func TestStream_RefusesToolResultImagesForTextModelsBeforeNetwork(t *testing.T) {
 	for _, id := range []string{"openai", "anthropic", "openrouter"} {
 		server, bodies := recordingServer(t)
-		request := llm.Request{Surface: imageResultRequest().Surface[1:5]}
+		// The bytes are attached, so only the vision gate keeps this request
+		// off the network.
+		request := llm.Request{Surface: imageResultRequest().Surface[1:5], Images: imageBytes()}
 		_, err := preparedFor(server, id, false).Stream(t.Context(), llm.Credential{Kind: llm.CredentialAPIKey, APIKey: "key"}, request, func(session.AssistantChunk) error { return nil })
 		expectLLMError(t, err, llm.ErrorInvalid)
 		if len(bodies()) != 0 {
@@ -123,95 +123,37 @@ func TestStream_RefusesToolResultImagesForTextModelsBeforeNetwork(t *testing.T) 
 	}
 }
 
-func sizedImage(name string, size int) *session.Image {
-	return &session.Image{ID: "img-" + name, Name: name, MediaType: "image/jpeg", Data: strings.Repeat("A", size)}
-}
-
-func TestFitImages_OmitsTheOldestOccurrencesBeyondTheBudget(t *testing.T) {
-	if surface := imageResultRequest().Surface; &fitImages(surface)[0] != &surface[0] {
-		t.Fatal("a fitting surface was copied")
-	}
-	// Twenty-one small images: the oldest one exceeds the count budget.
-	surface := []session.SurfaceNode{{Message: &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: []session.ContentBlock{
-		{Type: session.ContentImage, Image: sizedImage("first.png", 4)},
-		{Type: session.ContentText, Text: "two"},
-		{Type: session.ContentImage, Image: sizedImage("second.png", 4)},
-	}}}}
-	for index := range maxRequestImages - 1 {
-		surface = append(surface, session.SurfaceNode{Result: &session.ToolResult{CallID: "c", Output: "r", Image: sizedImage("r", 4+index)}})
-	}
-	fitted := fitImages(surface)
-	content := fitted[0].Message.Content
-	if content[0].Type != session.ContentText || content[0].Text != `[image omitted to fit request image limits; "first.png" (img-first.png). No local normalized image path is available; ask the user to attach it again if needed.]` || content[2].Image == nil {
-		t.Fatalf("fitted content=%#v", content)
-	}
-	if surface[0].Message.Content[0].Image == nil || fitted[1].Result != surface[1].Result {
-		t.Fatal("fitting changed the input surface or copied untouched nodes")
-	}
-
-	// Bytes: a newer large image leaves no room for the older ones, including
-	// both images of one message and an image-only tool result.
-	large := maxRequestImageBytes - 10
-	surface = []session.SurfaceNode{
-		{Message: &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: []session.ContentBlock{
-			{Type: session.ContentImage, Image: sizedImage("a<b>&c.png", 8)},
-			{Type: session.ContentImage, Image: sizedImage("b.png", 8)},
-		}}},
-		{Result: &session.ToolResult{CallID: "old", Image: sizedImage("old.png", 11)}},
-		{Result: &session.ToolResult{CallID: "new", Output: "kept", Image: sizedImage("new.png", large)}},
-	}
-	fitted = fitImages(surface)
-	if fitted[0].Message.Content[0].Type != session.ContentText || !strings.Contains(fitted[0].Message.Content[0].Text, `"a<b>&c.png" (img-a<b>&c.png)`) || fitted[0].Message.Content[1].Type != session.ContentText {
-		t.Fatalf("message images=%#v", fitted[0].Message.Content)
-	}
-	if old := fitted[1].Result; old.Image != nil || !strings.HasPrefix(old.Output, `[image omitted to fit request image limits; "old.png"`) || surface[1].Result.Image == nil {
-		t.Fatalf("old result=%#v", old)
-	}
-	if fitted[2].Result.Image == nil || fitted[2].Result.Output != "kept" {
-		t.Fatalf("newest result=%#v", fitted[2].Result)
-	}
-	surface[2].Result.Output = "text"
-	surface[1].Result.Output = "envelope"
-	if got := fitImages(surface)[1].Result.Output; !strings.HasPrefix(got, "envelope\n[image omitted") {
-		t.Fatalf("result placeholder=%q", got)
-	}
-}
-
-func TestStream_FitsImagesBeforeBuildingTheWireRequest(t *testing.T) {
-	server, bodies := recordingServer(t)
-	data := make([]byte, maxRequestImageBytes*3/8+30)
-	image := &session.Image{ID: "img-big", Name: "big.png", MediaType: "image/jpeg", Data: base64.StdEncoding.EncodeToString(data)}
-	request := llm.Request{Surface: []session.SurfaceNode{
-		{Call: &session.ToolCall{ID: "call-1", Name: "read_image", Arguments: json.RawMessage(`{}`)}},
-		{Result: &session.ToolResult{CallID: "call-1", Output: "first", Image: image}},
-		{Call: &session.ToolCall{ID: "call-2", Name: "read_image", Arguments: json.RawMessage(`{}`)}},
-		{Result: &session.ToolResult{CallID: "call-2", Output: "second", Image: image}},
-	}}
-	if _, err := preparedFor(server, "openai", true).Stream(t.Context(), llm.Credential{Kind: llm.CredentialAPIKey, APIKey: "key"}, request, func(session.AssistantChunk) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	sent := bodies()[0]
-	if strings.Count(sent, `"input_image"`) != 1 || !strings.Contains(sent, `"output":"first\n[image omitted to fit request image limits; \"big.png\" (img-big). No local normalized image path`) {
-		t.Fatalf("budgeted request has %d images", strings.Count(sent, `"input_image"`))
-	}
-	if !bytes.Contains([]byte(sent), []byte(`"call_id":"call-2","output":[{"type":"input_text","text":"second"}`)) {
-		t.Fatal("newest image result was not kept")
-	}
-}
-
-func TestQuoteJSON_MatchesJSONStringify(t *testing.T) {
-	if got := quoteJSON("a\"<b>&\n"); got != `"a\"<b>&\n"` {
-		t.Fatalf("quoted=%s", got)
-	}
-}
-
 func TestResultContent_KeepsEmptyTextOnlyResultsOmitted(t *testing.T) {
 	empty := &session.ToolResult{CallID: "call"}
-	if responsesOutput(empty) != nil || anthropicResultContent(empty) != nil || resultText(empty) != "" {
+	if responsesOutput(empty, nil) != nil || anthropicResultContent(empty, nil) != nil || resultText(empty) != "" {
 		t.Fatal("an empty text result gained content")
 	}
-	encoded, _ := json.Marshal(responsesInput{Type: "function_call_output", CallID: "call", Output: responsesOutput(empty)})
+	encoded, _ := json.Marshal(responsesInput{Type: "function_call_output", CallID: "call", Output: responsesOutput(empty, nil)})
 	if strings.Contains(string(encoded), `"output"`) {
 		t.Fatalf("empty output encoded as %s", encoded)
+	}
+}
+
+func TestRequests_RefuseImagesWithoutAttachedBytes(t *testing.T) {
+	provider := &Provider{id: "openai"}
+	model := llm.ModelInfo{Provider: "openai", ID: "m", Vision: true, Tools: true}
+	for _, surface := range [][]session.SurfaceNode{
+		providerRequest().Surface[:1],
+		imageResultRequest().Surface[1:4],
+	} {
+		request := llm.Request{Surface: surface}
+		for _, id := range []string{"openai", "anthropic", "openrouter"} {
+			provider.id = id
+			var err error
+			switch id {
+			case "openai":
+				_, err = provider.responsesRequest(model, request)
+			case "anthropic":
+				_, err = provider.anthropicRequest(model, request)
+			default:
+				_, err = provider.chatRequest(model, request)
+			}
+			expectLLMError(t, err, llm.ErrorInvalid)
+		}
 	}
 }

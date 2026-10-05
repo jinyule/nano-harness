@@ -45,6 +45,7 @@ type applicationConfig struct {
 	workspaceRoot   string
 	sessionRoot     string
 	spillRoot       string
+	attachmentRoot  string
 	settingsPath    string
 	credentialPath  string
 	skillsDir       string
@@ -176,6 +177,7 @@ func parseTUIConfig(args []string, stderr io.Writer) (applicationConfig, error) 
 	config := applicationConfig{
 		workspaceRoot: workspaceRoot, sessionRoot: filepath.Join(applicationRoot, "sessions"),
 		spillRoot:       filepath.Join(applicationRoot, "spill"),
+		attachmentRoot:  filepath.Join(applicationRoot, "attachments"),
 		settingsPath:    filepath.Join(applicationRoot, "settings.yaml"),
 		credentialPath:  filepath.Join(applicationRoot, "credentials.yaml"),
 		skillsDir:       filepath.Join(applicationRoot, "skills"),
@@ -187,6 +189,7 @@ func parseTUIConfig(args []string, stderr io.Writer) (applicationConfig, error) 
 	flags.StringVar(&config.workspaceRoot, "root", config.workspaceRoot, "workspace root available to coding tools")
 	flags.StringVar(&config.sessionRoot, "session-root", config.sessionRoot, "private directory for JSONL sessions")
 	flags.StringVar(&config.spillRoot, "spill-root", config.spillRoot, "private directory for complete tool output that did not fit inline")
+	flags.StringVar(&config.attachmentRoot, "attachment-root", config.attachmentRoot, "private content-addressed store for image attachments; never pruned")
 	flags.StringVar(&config.settingsPath, "settings", config.settingsPath, "hot-reloadable owner-only settings YAML")
 	flags.StringVar(&config.credentialPath, "credentials", config.credentialPath, "owner-only provider account YAML")
 	flags.StringVar(&config.skillsDir, "skills-dir", config.skillsDir, "user skill directory scanned after the project skill directories")
@@ -210,7 +213,8 @@ func normalizeConfig(config applicationConfig) (applicationConfig, error) {
 		return applicationConfig{}, errors.New("session ID and max-steps 1-256 are required")
 	}
 	for name, value := range map[string]*string{
-		"workspace": &config.workspaceRoot, "session root": &config.sessionRoot, "spill root": &config.spillRoot,
+		"workspace": &config.workspaceRoot, "session root": &config.sessionRoot,
+		"spill root": &config.spillRoot, "attachment root": &config.attachmentRoot,
 		"settings": &config.settingsPath, "credentials": &config.credentialPath,
 		"skills": &config.skillsDir, "agents skills": &config.agentsSkillsDir,
 	} {
@@ -229,7 +233,10 @@ func normalizeConfig(config applicationConfig) (applicationConfig, error) {
 		return applicationConfig{}, fmt.Errorf("resolve workspace links: %w", err)
 	}
 	config.workspaceRoot = resolved
-	if err := separateSpillRoot(config.workspaceRoot, config.spillRoot); err != nil {
+	if err := separateRoot(config.workspaceRoot, config.spillRoot, "spill root", "--spill-root"); err != nil {
+		return applicationConfig{}, err
+	}
+	if err := separateRoot(config.workspaceRoot, config.attachmentRoot, "attachment root", "--attachment-root"); err != nil {
 		return applicationConfig{}, err
 	}
 	path := filepath.Join(config.sessionRoot, config.sessionID+".jsonl")
@@ -247,17 +254,18 @@ func normalizeConfig(config applicationConfig) (applicationConfig, error) {
 	return config, nil
 }
 
-// separateSpillRoot refuses a spill root that contains or lies inside the
-// resolved workspace: spilled output must stay out of glob/grep results and
-// beyond the reach of write, edit, and sandboxed bash. The spill root may
-// not exist yet, so links are resolved on its longest existing prefix.
-func separateSpillRoot(workspaceRoot, spillRoot string) error {
-	resolved, err := resolveExisting(spillRoot)
+// separateRoot refuses a private store root that contains or lies inside
+// the resolved workspace: spilled output and stored images must stay out of
+// glob/grep results and beyond the reach of write, edit, and sandboxed bash.
+// The root may not exist yet, so links are resolved on its longest existing
+// prefix.
+func separateRoot(workspaceRoot, root, name, flagName string) error {
+	resolved, err := resolveExisting(root)
 	if err != nil {
-		return fmt.Errorf("resolve spill root links: %w", err)
+		return fmt.Errorf("resolve %s links: %w", name, err)
 	}
 	if contains(workspaceRoot, resolved) || contains(resolved, workspaceRoot) {
-		return fmt.Errorf("spill root %s must lie outside the workspace %s; choose another --spill-root", spillRoot, workspaceRoot)
+		return fmt.Errorf("%s %s must lie outside the workspace %s; choose another %s", name, root, workspaceRoot, flagName)
 	}
 	return nil
 }
@@ -320,7 +328,7 @@ func composeTUI(config applicationConfig, deps dependencies) (*composition, erro
 // each tool provider, and the session format. Bump a provider token whenever
 // its model-visible definitions or behavior change incompatibly.
 func compositionID(config applicationConfig) string {
-	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00fs-tools-v3\x00search-tools-v3\x00shell-tools-v3\x00job-tools-v1\x00subagent-tools-v3\x00todo-tools-v1\x00web-tools-v1\x00question-tools-v1\x00plan-tools-v1\x00skill-tools-v1\x00goal-tools-v2\x00spill-v1\x00session-v2"
+	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00fs-tools-v3\x00search-tools-v3\x00shell-tools-v3\x00job-tools-v1\x00subagent-tools-v3\x00todo-tools-v1\x00web-tools-v1\x00question-tools-v1\x00plan-tools-v1\x00skill-tools-v1\x00goal-tools-v2\x00spill-v1\x00attachments-v1\x00session-v2"
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
 }

@@ -121,7 +121,7 @@ func TestProviderStartLoginRefreshAndStreamFailures(t *testing.T) {
 	}
 
 	store := &providerStore{credential: llm.Credential{Kind: llm.CredentialAPIKey, APIKey: "key"}}
-	runtime, _ := llm.New(store)
+	runtime, _ := llm.New(store, noImages{})
 	runtimeScope := &plugin.Scope{}
 	if err := runtime.Start(context.Background(), runtimeScope); err != nil {
 		t.Fatal(err)

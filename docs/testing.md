@@ -91,8 +91,9 @@ spill 与先读后写另有专门证据：预览算法用上游 retention 的 Py
 - JSONL：创建、append/fsync、close/reopen、list/inspect、连续 sequence、全部非法 transition、unknown field/version、torn line、权限、composition mismatch、writer lock、I/O rollback 和 interrupted-tail repair。`todo/write` 另覆盖缺失 call、跨 step/turn、同一 call 重复写入、result 之后写入、call ID 复用，以及中断修复后计划仍可从日志投影。fork 种子覆盖与 header 一次写入、事件行与 parent 逐字节相同、恢复时的自有事件边界，以及非连续、schema 非法、turn 未闭合、超出单 record 或单 session 上限的种子被拒且不留文件。
 - settings：defaults + sparse overlay、strict validation、optimistic update、owner-only atomic persist、cross-process lock、external hot reload 与 invalid edit 的 last-good 保留。
 - credentials：环境 fallback、owner-only strict YAML、serialized modify/refresh/delete、symlink 与 unsafe permission、atomic write failure，不在错误中泄露值。
-- images：PNG/JPEG/WebP/GIF decode（GIF 取第一帧，透明像素合成到白色并从解码后的 JPEG 像素验证）、像素/字节/尺寸限制与对应的 `session.ErrImage*` 分类、缩放、重编码、digest/base64、取消、非法文件和 provider vision mapping。
-- 多模态工具结果：`session` 校验覆盖错误结果带图、digest 不符和 clone 隔离；runtime 证明图片结果绕过 spill、携带本 step route；`read_image` 经真实 tool runtime 与真实临时目录覆盖 route 门禁（无 route、文本模型，均不触达规范化）、扩展名与签名矩阵（含 dotfile、无扩展名、`foo.`）、不存在/目录/越界/超限/读取中增长、规范化拒绝的三类文案、观察记录后 `write` 可替换、信封与缩放倍数（`toFixed(2)` 的 1/8 平局）以及两个调用的并发重叠。provider 用 loopback server 比较三种协议的工具结果图片请求字节、文本模型在网络调用前拒绝，以及预算投影（数量、字节、同一消息的多张图片、只含图片的结果、输入不被修改）。
+- images：PNG/JPEG/WebP/GIF decode（GIF 取第一帧，透明像素合成到白色并从解码后的 JPEG 像素验证）、像素/字节/尺寸限制与对应的 `session.ErrImage*` 分类、缩放、重编码、引用 ID 与字节数、取消、非法文件和 provider vision mapping。
+- 附件存储：`attachments` 插件用真实临时目录覆盖启动的私有目录布局与权限、宽权限根/链接 `v1`/文件根的拒绝、链接根的接受、启动与关闭（cleanup 等待进行中的操作、过期 context）；保存后对象的摘要、长度与 `0400`/`0700` 权限，相同内容去重，八个并发写入者收敛为一个对象且不留暂存文件；读取对长度、摘要、类型、宽高、无法解码、缺失对象、缺失前缀、链接对象和前缀为文件的拒绝矩阵，以及 I/O 错误不被当作缺失或损坏；发布各步骤失败都不留下部分对象，预置的不一致对象被拒绝；`PrepareFile` 不写入任何对象，`Commit` 拒绝不匹配引用的字节；透明图片经 `SaveImage` 与 `PrepareFile` 两条路径、在不缩放（16×2）和缩放（4096×2 缩为 2048×1）时都输出白色像素；三个并发规范化中只有两个同时进入编码，持有全部名额时等待者随取消返回；observer 只在缺失或损坏时被调用并随 scope 撤销。`app/llm` 证明预算投影按 `bytes` 计算、每个 ID 只读一次、缺失与损坏换成占位文本而其他读取错误使请求失败，且没有 vision 的模型不读取附件。TUI 证明附件在 `Submit`/`Steer` 之前写入、写入失败不提交消息、unavailable 提示每个图片只显示一次且通知不阻塞读取方。
+- 多模态工具结果：`session` 校验覆盖错误结果带图、digest 不符和 clone 隔离；runtime 证明图片结果绕过 spill、携带本 step route；`read_image` 经真实 tool runtime 与真实临时目录覆盖 route 门禁（无 route、文本模型，均不触达规范化）、扩展名与签名矩阵（含 dotfile、无扩展名、`foo.`）、不存在/目录/越界/超限/读取中增长、规范化拒绝的三类文案、观察记录后 `write` 可替换、信封与缩放倍数（`toFixed(2)` 的 1/8 平局）以及两个调用的并发重叠。provider 用 loopback server 比较三种协议的工具结果图片请求字节、文本模型在网络调用前拒绝，以及没有附上字节的引用被拒绝。
 
 ## TUI 与真实 cmd
 
@@ -106,19 +107,20 @@ TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event f
 
 `TestComposition_SkillCatalogToolAndGesture` 经真实 composition 和 loopback provider 证明：第一次请求带有目录且不含禁止模型调用的 skill 和任何正文，模型调用 `skill` 后下一次请求带有完整 `<skill_content>`，运行中新增的 skill 在下一 turn 产生替换目录，`/name` 注入 user-only skill，重启进程后从磁盘日志推导目录而不重复发布。
 
-`TestComposition_ReadImageEndToEnd` 经真实 CLI config、settings 文件和 composition 让 loopback 模型对 workspace 中 3000×1000 的 PNG 调用 `read_image`：从磁盘 transcript 断言结果信封（路径、规范化字节数、缩放倍数）、`image` 字段的 2048×682 JPEG 与 SHA-256，并比较下一次 provider 请求中 `function_call_output` 的 `input_text`/`input_image` 数组；随后以新 composition 恢复同一会话，证明 replay 请求携带同一张图片。`TestComposition_ReadImageRefusesTextOnlyModels` 证明模型未声明 vision 时结果是门禁错误、日志与请求都没有图片。`TestComposition_ReadImageRefusesImagesTheSessionCannotHold` 用真实 jsonl 把会话填到只剩约 8 MiB 加 30 KB（填充文本由 compaction summary 遮蔽，请求保持很小），然后在一个批次中读取一张小图和一张大图：小图保留，大图变为容量错误且模型在下一请求看到它，turn 正常完成；放不下的附件在 `Submit` 时被拒绝且 transcript 字节不变；之后的文本 turn 仍能提交，`Inspect` 读取的日志有效。
+`TestComposition_ReadImageEndToEnd` 经真实 CLI config、settings 文件和 composition 让 loopback 模型对 workspace 中 3000×1000 的 PNG 调用 `read_image`：从磁盘 transcript 断言结果信封（路径、规范化字节数、缩放倍数）和 `image` 引用，从附件根读取对象并核对 SHA-256、长度与 `0400` 权限，确认 transcript 中只有引用而没有图片字节，并比较下一次 provider 请求中 `function_call_output` 的 `input_text`/`input_image` 数组；随后以新 composition 恢复同一会话并调用 `subagent_fork`，证明 replay 请求与 child 请求都从同一个共享对象携带图片；最后删除对象，下一次请求改为占位文本且 turn 完成。`TestComposition_DamagedAttachmentsBecomePlaceholders` 分别构造缺失、截断、同长度改写和引用类型不符的对象，证明请求都只含占位文本而不含图片字节。`TestComposition_ReadImageRefusesTextOnlyModels` 证明模型未声明 vision 时结果是门禁错误、日志与请求都没有图片。
 
 命令级 failure matrix 覆盖路径归一化、create/resume、每个 constructor、runtime start、TUI run、shutdown、usage/version output 和 write failure；PATH 中没有 `rg` 时，`tui` 以退出码 1 结束并给出安装提示。发布 smoke 必须运行编译后的 `bin/nano-harness`，不能以 `go run` 或直接调用内部函数替代。
 
 `make tui-e2e` 是独立的本机 PTY 验证入口，需要 Python 3、Unix、PATH 中的 ripgrep 和可用的 workspace sandbox；脚本给被测二进制的最小 PATH 加上当前 `rg` 所在目录。[`scripts/tui-e2e.py`](../scripts/tui-e2e.py) 只替换远端模型，在 loopback 的动态端口提供 Responses SSE；TUI、composition、工具、审批、sandbox 和 session 均走编译后的真实 `cmd`。工具调用序列以脚本中的精确断言为准，验证场景包括：
 
-- 文件读取、搜索、写入、编辑和 shell：独立检查 call/result、审批决定与实际文件字节；`read_image` 结果包含规范化 JPEG，终端显示图片摘要，下一次模型请求携带同一张图片。
+- 文件读取、搜索、写入、编辑和 shell：独立检查 call/result、审批决定与实际文件字节。
+- 图片：`/attach` 之后附件根中还没有对象；发送后开场消息的图片和 `read_image` 结果都只保存引用，指向附件根中摘要、长度与 `0400` 权限正确的对象，终端显示图片摘要，provider 请求携带这两张图片的字节。
 - `todo_write`：终端显示计划，磁盘日志包含完整快照，重启 replay 时后续 turn 已清除计划。
 - 后台 `bash`：job 在首个 turn 结束后才完成，`job>` 通知开启新 turn，模型用 `job_output` 读到输出。
 - 前台 one-shot spawn 与 fork：独立子会话包含目录、descriptor 和 `never` 策略，spawn child 调用 `read`；子代理回收后 `list_agents` 返回空列表，`send_message` 写给目录外 id 返回错误，`interrupt_agent` 对不存在的目标是空操作。
 - `ask_user_question` 与规划审查：接受预填推荐项和自由回答；`/plan` 后通过真实 TUI 批准 `exit_plan_mode`，日志包含 `plan/mode` 与切换提示，规划段落只出现在批准前的请求中。
 - `/goal`：创建目标后 driver 自动开启轮次，模型通过 `get_goal` 与 `update_goal` 完成目标；检查 create/complete 的 `goal/change`、轮次与收尾指令、状态查询和状态栏。
-- 终端输入与生命周期：bracketed paste、窗口缩放、长行末尾可见、打断、重启 replay、私有权限（含 `--spill-root` 的 `0700`）与退出后的 lock 清理。
+- 终端输入与生命周期：bracketed paste、窗口缩放、长行末尾可见、打断、重启 replay、私有权限（含 `--spill-root` 与 `--attachment-root` 的 `0700`）与退出后的 lock 清理。
 
 PTY 中的 fork 在首个 turn 内创建，没有已完成 turn 可继承；完整 fork 继承和后台 continuable 生命周期由上面的 assembled 测试与 subagent 包测试覆盖。
 
@@ -183,7 +185,7 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 
 `testdata/session-v2-skill.jsonl` 固定目录、`/name` 注入和 `skill` call/result 作为普通 v2 `user/message` 的形态。`TestSessionV2Skill_FrozenContract` 用同样的读取、投影和独立 writer 比较，并证明恢复后的日志不会重复发布同一目录、删除全部 skill 时产生空目录、已消费的 `/name` 不再待处理；`TestSessionV2Skill_RejectsMisplacedContext` 拒绝 turn 外、错位 step、空内容和来源多余字段的变体。
 
-`testdata/session-v2-image.jsonl` 固定带规范化 JPEG 的 `read_image` call/result。`TestSessionV2Image_FrozenContract` 用同样的读取、投影和独立 writer 比较；`TestSessionV2Image_RejectsChangedContract` 拒绝图片中的未知字段、digest 不符、不支持的 media type、宽度为 0 或超过 4096、非法 base64、空名称和携带图片的错误结果。
+`testdata/session-v2-image.jsonl` 固定带图片引用的 user message 与 `read_image` call/result。`TestSessionV2Image_FrozenContract` 用同样的读取、投影和独立 writer 比较；`TestSessionV2Image_RejectsChangedContract` 拒绝旧的内联 `data` 与 `sha256` 字段、未知字段、旧式或大写或过短的 ID、不支持的 media type、字节数为 0 或超过 4 MiB、宽度为 0 或超过 4096、空名称和携带图片的错误结果。
 
 修改持久化字段、枚举、顺序、版本或恢复语义时，PR 明确选择同版本兼容、严格拒绝旧版或迁移，给出样本与因果/事务证据并更新架构和 ADR。固定样本不是全部记录类型的 schema catalog，也不代替现有图片、compaction、subagent、错误恢复和 I/O rollback 测试。CI 不重写样本，nano v2 严格拒绝旧格式的承诺不变。
 

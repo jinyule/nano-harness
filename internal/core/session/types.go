@@ -20,7 +20,7 @@ const (
 	MaxTextBytes = 256 << 10
 	// MaxArgumentsBytes bounds one serialized tool argument object.
 	MaxArgumentsBytes = 128 << 10
-	// MaxImageBytes bounds one normalized decoded image.
+	// MaxImageBytes bounds one normalized stored image.
 	MaxImageBytes = 4 << 20
 	// MaxContentBlocks bounds one message or summary.
 	MaxContentBlocks = 32
@@ -116,18 +116,20 @@ const (
 	ContentImage ContentType = "image"
 )
 
-// Image is a normalized, replayable image attachment. Data is standard base64.
+// Image is a durable reference to one normalized image held by the
+// attachment store. ID is "sha256:" followed by the lowercase hex digest of
+// the stored bytes and is the only digest of record; Bytes, Width, and
+// Height describe those bytes. The log never holds image data.
 type Image struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	MediaType string `json:"media_type"`
-	Data      string `json:"data"`
-	SHA256    string `json:"sha256"`
+	Bytes     int    `json:"bytes"`
 	Width     int    `json:"width"`
 	Height    int    `json:"height"`
 }
 
-// ContentBlock is either text or an inline normalized image.
+// ContentBlock is either text or a reference to a normalized image.
 type ContentBlock struct {
 	Type  ContentType `json:"type"`
 	Text  string      `json:"text,omitempty"`

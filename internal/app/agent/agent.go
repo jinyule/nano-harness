@@ -129,9 +129,8 @@ func (agent *Agent) finishTurn(result TurnResult, submitted bool) {
 	if submitted {
 		agent.pending--
 	}
-	// A turn its admission dropped, or whose images did not fit, committed
-	// nothing and is not the last turn.
-	if !errors.Is(result.Err, ErrNotAdmitted) && !errors.Is(result.Err, ErrImageCapacity) {
+	// A turn its admission dropped committed nothing and is not the last turn.
+	if !errors.Is(result.Err, ErrNotAdmitted) {
 		agent.last = result
 	}
 	agent.woken = len(agent.notices) > 0 && agent.pending == 0 && result.Outcome != session.OutcomeCanceled && agent.mode != "one-shot"
@@ -201,11 +200,6 @@ func (agent *Agent) Submit(ctx context.Context, message session.Message) (<-chan
 	if !validUserMessage(message) {
 		return nil, ErrInvalidConfig
 	}
-	// Refuse images the session cannot hold before queueing; the worker
-	// checks again before the turn opens.
-	if err := checkMessageImages(agent.journal, message); err != nil {
-		return nil, err
-	}
 	request := turnRequest{message: cloneMessage(message), result: make(chan TurnResult, 1)}
 	agent.mu.Lock()
 	if !agent.active {
@@ -249,9 +243,6 @@ func (agent *Agent) Followup(ctx context.Context, message session.Message) (<-ch
 func (agent *Agent) Steer(ctx context.Context, message session.Message) error {
 	if !validUserMessage(message) {
 		return ErrInvalidConfig
-	}
-	if err := checkMessageImages(agent.journal, message); err != nil {
-		return err
 	}
 	agent.mu.Lock()
 	busy := agent.active && agent.busy

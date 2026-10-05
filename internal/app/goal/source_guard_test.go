@@ -13,9 +13,8 @@ import (
 )
 
 // humanSourceProducers are the only product packages allowed to attribute a
-// message to HumanSource: the terminal, for typed input and commands, and the
-// image normalizer behind its /attach command.
-var humanSourceProducers = []string{"internal/adapter/media/image", "internal/adapter/tui"}
+// message to HumanSource: the terminal, for typed input and commands.
+var humanSourceProducers = []string{"internal/adapter/tui"}
 
 // TestHumanSource_OnlyFrontendsAttributeHumanInput guards the invariant that
 // direct-human goal authority rests on: a "user" message source comes from a

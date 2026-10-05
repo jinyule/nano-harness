@@ -117,7 +117,7 @@ func (fakeInteraction) Notify(AuthNotice)                                  {}
 
 func activeRuntime(t *testing.T, store *fakeStore) (*Runtime, *plugin.Scope) {
 	t.Helper()
-	runtime, err := New(store)
+	runtime, err := New(store, noImages{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,17 +171,17 @@ func TestCredentialAndError(t *testing.T) {
 }
 
 func TestRuntimeRouteLoginAndCleanup(t *testing.T) {
-	if _, err := New(nil); err == nil {
+	if _, err := New(nil, noImages{}); err == nil {
 		t.Fatal("nil store accepted")
 	}
 	store := &fakeStore{credential: Credential{Kind: CredentialAPIKey, APIKey: "key"}, accounts: []AccountInfo{{Provider: "p"}}}
 	closedStart := &plugin.Scope{}
 	_ = closedStart.Close(context.Background())
-	closedRuntime, _ := New(store)
+	closedRuntime, _ := New(store, noImages{})
 	if err := closedRuntime.Start(context.Background(), closedStart); !errors.Is(err, plugin.ErrScopeClosed) {
 		t.Fatalf("closed start=%v", err)
 	}
-	inactive, _ := New(store)
+	inactive, _ := New(store, noImages{})
 	inactiveProvider := &fakeProvider{id: "inactive"}
 	if err := inactive.Register(inactiveProvider, &plugin.Scope{}); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("inactive register=%v", err)

@@ -11,7 +11,7 @@ import (
 
 func TestModelSubmit_SendsSkillGesturesThatAreNotCommands(t *testing.T) {
 	fixture, current := modelFixture(t)
-	current.images = []session.Image{{Name: "one"}}
+	current.images = []pendingImage{{ref: session.Image{Name: "one"}}}
 	current.input.SetValue("/pdf summarize report.pdf")
 	next, command := current.submit()
 	current = next.(model)

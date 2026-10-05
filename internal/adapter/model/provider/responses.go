@@ -91,6 +91,10 @@ func (provider *Provider) responsesTarget(current *snapshot, credential llm.Cred
 }
 
 func (provider *Provider) responsesRequest(model llm.ModelInfo, request llm.Request) (responsesRequest, error) {
+	images, err := encodeImages(provider.id, request)
+	if err != nil {
+		return responsesRequest{}, err
+	}
 	input := make([]responsesInput, 0, len(request.Surface))
 	for _, node := range request.Surface {
 		switch {
@@ -108,7 +112,7 @@ func (provider *Provider) responsesRequest(model llm.ModelInfo, request llm.Requ
 					if node.Message.Role != session.RoleUser || block.Image == nil {
 						return responsesRequest{}, &llm.Error{Code: llm.ErrorInvalid, Provider: provider.id, Cause: errors.New("only user messages may contain images")}
 					}
-					content = append(content, responsesContent{Type: "input_image", ImageURL: "data:" + block.Image.MediaType + ";base64," + block.Image.Data})
+					content = append(content, responsesContent{Type: "input_image", ImageURL: images.dataURL(block.Image)})
 				}
 			}
 			if len(content) == 0 {
@@ -118,7 +122,7 @@ func (provider *Provider) responsesRequest(model llm.ModelInfo, request llm.Requ
 		case node.Call != nil:
 			input = append(input, responsesInput{Type: "function_call", CallID: node.Call.ID, Name: node.Call.Name, Arguments: string(node.Call.Arguments)})
 		case node.Result != nil:
-			input = append(input, responsesInput{Type: "function_call_output", CallID: node.Result.CallID, Output: responsesOutput(node.Result)})
+			input = append(input, responsesInput{Type: "function_call_output", CallID: node.Result.CallID, Output: responsesOutput(node.Result, images)})
 		}
 	}
 	tools := make([]responsesTool, len(request.Tools))
@@ -140,7 +144,7 @@ func (provider *Provider) responsesRequest(model llm.ModelInfo, request llm.Requ
 
 // responsesOutput sends a tool-result image natively in function_call_output,
 // as upstream's Responses adapter does for both endpoints.
-func responsesOutput(result *session.ToolResult) any {
+func responsesOutput(result *session.ToolResult, images encodedImages) any {
 	if result.Image == nil {
 		if result.Output == "" {
 			return nil
@@ -151,7 +155,7 @@ func responsesOutput(result *session.ToolResult) any {
 	if result.Output != "" {
 		items = append(items, responsesContent{Type: "input_text", Text: result.Output})
 	}
-	return append(items, responsesContent{Type: "input_image", ImageURL: imageDataURL(result.Image), Detail: "auto"})
+	return append(items, responsesContent{Type: "input_image", ImageURL: images.dataURL(result.Image), Detail: "auto"})
 }
 
 type responsesEvent struct {

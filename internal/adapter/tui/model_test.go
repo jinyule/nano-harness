@@ -102,7 +102,7 @@ func TestModelUpdate_HandlesEveryEnvelopeAndTerminalInput(t *testing.T) {
 		t.Fatalf("operation lines = %#v", current.lines)
 	}
 	current, _ = update(t, current, attachmentMessage{err: errors.New("image")})
-	image := session.Image{Name: "image.png", Width: 10, Height: 20}
+	image := pendingImage{ref: session.Image{Name: "image.png", Width: 10, Height: 20}, data: []byte("jpeg")}
 	current, _ = update(t, current, attachmentMessage{image: image})
 	if len(current.images) != 1 || !strings.Contains(current.lines[len(current.lines)-1], "10x20") {
 		t.Fatalf("attachment state = %+v", current)
@@ -188,7 +188,7 @@ func TestModelSubmit_NormalMessageImagesErrorsAndCancellation(t *testing.T) {
 	if command != nil || !strings.Contains(current.lines[len(current.lines)-1], "commands>") {
 		t.Fatalf("help submission lines = %#v", current.lines)
 	}
-	current.images = []session.Image{{Name: "one"}, {Name: "two"}}
+	current.images = []pendingImage{{ref: session.Image{Name: "one"}}, {ref: session.Image{Name: "two"}}}
 	current.input.SetValue("inspect")
 	next, command = current.submit()
 	current = next.(model)
@@ -248,7 +248,7 @@ func TestModelCommand_LocalImmediateAndUsageBranches(t *testing.T) {
 
 func TestModelCommand_ExecutesAllAsyncUseCases(t *testing.T) {
 	fixture, current := modelFixture(t)
-	fixture.images.image = session.Image{Name: "attached.png"}
+	fixture.images.image, fixture.images.data = session.Image{Name: "attached.png"}, []byte("jpeg")
 	fixture.models.accounts = []llm.AccountInfo{{Provider: "openai", Kind: llm.CredentialOAuth, Source: "stored"}}
 	fixture.models.models = []llm.ModelInfo{{Provider: "openai", ID: "model", Effort: session.EffortMax, ContextWindow: 1000, Vision: true, Tools: true}}
 	fixture.subagents.infos = []appSubagent.Info{{SessionID: "child", Label: "worker", Mode: "one-shot", Busy: true, Last: agent.TurnResult{Outcome: session.OutcomeCompleted}}}
@@ -278,7 +278,7 @@ func TestModelCommand_ExecutesAllAsyncUseCases(t *testing.T) {
 		message := command()
 		if test.value == "/attach /tmp/image.png" {
 			attachment := message.(attachmentMessage)
-			if attachment.image.Name != "attached.png" || fixture.images.path != "/tmp/image.png" {
+			if attachment.image.ref.Name != "attached.png" || string(attachment.image.data) != "jpeg" || fixture.images.path != "/tmp/image.png" || len(fixture.images.committed) != 0 {
 				t.Fatalf("attachment = %+v path=%q", attachment, fixture.images.path)
 			}
 			continue
@@ -356,7 +356,7 @@ func TestApplyEvent_ProjectsAllDurablePresentationFacts(t *testing.T) {
 		{Record: session.Record{Type: session.RecordApprovalAsked, Approval: &session.ApprovalData{Reason: "write"}}},
 		{Record: session.Record{Type: session.RecordToolResult, Result: &session.ToolResult{Output: "ok"}}},
 		{Record: session.Record{Type: session.RecordToolResult, Result: &session.ToolResult{Output: "bad", IsError: true}}},
-		{Record: session.Record{Type: session.RecordToolResult, Result: &session.ToolResult{Output: "<type>image</type>", Image: &session.Image{Name: "shot.png", Width: 640, Height: 480, SHA256: "0123456789abcdef0123"}}}},
+		{Record: session.Record{Type: session.RecordToolResult, Result: &session.ToolResult{Output: "<type>image</type>", Image: &session.Image{ID: "sha256:0123456789abcdef0123", Name: "shot.png", Width: 640, Height: 480}}}},
 		{Record: session.Record{Type: session.RecordRetry, Retry: &session.RetryData{Attempt: 2, DelayMS: 10, Failure: "server"}}},
 		{Record: session.Record{Type: session.RecordCompactionStart, Compaction: &session.CompactionData{ID: "one"}}},
 		{Record: session.Record{Type: session.RecordCompactionEnd, Compaction: &session.CompactionData{ID: "one"}}},
@@ -406,7 +406,7 @@ func TestLineBufferViewAndInputRestoration(t *testing.T) {
 	if current.View().Content == "" {
 		t.Fatal("normal view is empty")
 	}
-	current.images = []session.Image{{Name: "ready"}}
+	current.images = []pendingImage{{ref: session.Image{Name: "ready"}}}
 	if !strings.Contains(current.View().Content, "image(s) ready") {
 		t.Fatal("image prompt missing")
 	}

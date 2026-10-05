@@ -51,11 +51,17 @@
 - `/attach` 只读取用户明确选择的本地普通文件，不扫描目录或跟随 symlink。
 - `read_image` 只读取 `workspace.Root.Readable` 允许的普通文件（规则与 `read` 相同），审批前先要求本 step 的模型声明图片输入，不满足时不读文件，图片也不会进入日志。读取中文件增长超过源上限时拒绝，不截断。
 - source 必须是 PNG、JPEG、WebP 或 GIF，最多 20 MiB、最多 1600 万像素；`read_image` 还要求文件签名与扩展名声明的格式一致。解码器只来自 Go 标准库与 `golang.org/x/image`；解码后最长边缩至 2048，透明像素合成到白色，并重新编码为最多 4 MiB 的 JPEG。
-- 图片不得占用会话 64 MiB 上限的最后 8 MiB：放不下的工具结果图片在提交前变为错误结果，放不下的附件在写入任何记录前被拒绝，追加失败不会让 turn 出错或损坏会话。
-- session 保存规范化字节的 standard base64、尺寸与 SHA-256；replay 时重新校验 digest、类型、尺寸和 decoded size，`user/message` 与 `tool/result` 中的图片规则相同，错误结果不能携带图片。
-- provider 请求只允许 user message 和成功的工具结果携带图片，assistant 消息中的图片被拒绝；所选模型没有 vision 能力时，含任何图片的请求在网络调用前被拒绝。每个请求最多发送 20 张、base64 合计 10 MiB 的图片，更早的图片替换为占位文本，见 [ADR-0015](decisions/0015-multimodal-tool-results.md)。
+- session 只保存附件引用（`sha256:` ID、名称、类型、字节数、尺寸），不保存图片字节；decoder 拒绝内联字段与格式不符的引用，`user/message` 与 `tool/result` 中的图片规则相同，错误结果不能携带图片。
+- provider 请求只允许 user message 和成功的工具结果携带图片，assistant 消息中的图片被拒绝；所选模型没有 vision 能力时，含任何图片的请求在网络调用前被拒绝，也不读取附件。每个请求最多发送 20 张、base64 合计 10 MiB 的图片，更早的图片替换为占位文本，见 [ADR-0015](decisions/0015-multimodal-tool-results.md)。
 
-图片数据是 session 的模型可见内容，因此 transcript 本身可能敏感；私有权限只是本机访问边界，不是静态加密。
+图片是 session 的模型可见内容；它们保存在附件存储中，与 transcript 一样只受本机 owner-only 权限保护，不是静态加密。
+
+### 附件存储
+
+- 根目录由 `--attachment-root` 配置，加载时解析为绝对路径，与 workspace 互不包含（判断前解析已存在前缀上的链接），因此 `glob`/`grep`、`write`/`edit` 与 sandbox 中的 `bash` 都碰不到它。根可以是链接，但解析后必须是 owner-only 目录；`v1`、`v1/objects`、`v1/tmp` 与两位前缀目录必须是 `0700` 的真实目录，链接或权限过宽时启动或写入失败。
+- 写入在 `v1/tmp` 以 `O_EXCL`、`0600` 创建随机名称的暂存文件，`fsync` 后以排他硬链接发布到 `v1/objects/<sha256[:2]>/<sha256>`；目标已存在时先校验其内容，不一致即拒绝；对象设为只读 `0400`，再同步目录项。失败时删除暂存文件，不留下部分对象。存储从不自动删除对象。
+- 读取不跟随链接：对象和前缀目录必须分别是普通文件和真实目录。长度、SHA-256、类型或宽高任一与引用不符都按损坏处理，字节绝不发给 provider；缺失或损坏的图片在该请求中换成占位文本，TUI 显示一次只含图片名称与 ID 前缀的 `attachment>` 提示，不显示路径。取消、存储停止和 I/O 错误使请求失败。
+- `/attach` 在消息提交前写入对象，未发送的附件不进入存储。会话文件不再自包含：备份会话时必须同时备份附件根，否则其中的图片在请求中变为占位文本。存储、保留与缺失处理见 [ADR-0017](decisions/0017-content-addressed-image-attachments.md)。
 
 ## Workspace 文件边界
 
@@ -130,7 +136,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 
 ## 长期目标
 
-- 目标操作的权限在工具执行点从调用方 turn 的已提交消息判定，不信任模型参数：create、edit、pause、resume 需要该 turn 中 `source.kind = "user"` 的消息，且调用方不是 delegated agent；complete 与 blocked 另接受当前目标 revision 的当前轮次，blocked 还需至少 3 个准入轮次。`user` 来源只由前端在人类输入时使用，通知、规划提示、skill 注入、委派任务与 agent 消息、目标轮次和收尾指令各有自己的来源，因此不能继承人类权限。守卫测试 `TestHumanSource_OnlyFrontendsAttributeHumanInput` 解析全部产品源码，只允许 `internal/adapter/tui` 与 `internal/adapter/media/image` 构造 `user` 来源，其他位置出现即失败。模型不能 resume 一个 paused 目标。
+- 目标操作的权限在工具执行点从调用方 turn 的已提交消息判定，不信任模型参数：create、edit、pause、resume 需要该 turn 中 `source.kind = "user"` 的消息，且调用方不是 delegated agent；complete 与 blocked 另接受当前目标 revision 的当前轮次，blocked 还需至少 3 个准入轮次。`user` 来源只由前端在人类输入时使用，通知、规划提示、skill 注入、委派任务与 agent 消息、目标轮次和收尾指令各有自己的来源，因此不能继承人类权限。守卫测试 `TestHumanSource_OnlyFrontendsAttributeHumanInput` 解析全部产品源码，只允许 `internal/adapter/tui` 构造 `user` 来源，其他位置出现即失败。模型不能 resume 一个 paused 目标。
 - 目标与自动轮次不是授权：它们不改变 approval policy、sandbox、工具 allowlist 或规划模式，轮次中的写类工具同样在执行点请求一次性 approval，`never` 仍然拒绝。轮次上限只限制轮次数，不计量 token、费用或时间。
 - 是否自动继续只在进程内。resume、fork 或进程重启后目标一律 disarmed，driver 不会在无人授权时恢复工作；被取消、失败或输出截断的 turn 会解除继续；轮次开场持久化失败即使没有结束记录也解除该 revision。结算按确切 ID/revision 解除，旧结果不能撤销后来的人类授权。人类的 pause 立即中断正在运行的 turn。
 - objective 与阻塞说明是不可信文本，限制为去除首尾空白后非空且不超过 16 KiB；进入轮次提示时按 JSON 字符串引用，不能闭合 `<goal_round>` 标签。进程内持有 session 写权限的组件仍可伪造 `goal/change`；严格折叠只检测畸形或不一致的事实并拒绝写入或恢复，不是插件隔离。规则见 [ADR-0016](decisions/0016-long-running-goals.md)。
@@ -147,7 +153,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 
 ## Subagent 与生命周期
 
-- subagent 是同进程的独立 agent/session，不启动外部 Codex/Claude 进程，也不共享可变 transcript。fork child 复制 parent 已完成 turn 的事件作为自己日志的前缀，之后两者独立追加；复制内容与 parent 一样是模型可见数据，可能包含工具输出和图片。
+- subagent 是同进程的独立 agent/session，不启动外部 Codex/Claude 进程，也不共享可变 transcript。fork child 复制 parent 已完成 turn 的事件作为自己日志的前缀，之后两者独立追加；复制内容与 parent 一样是模型可见数据，可能包含工具输出和图片引用；图片对象由两者共享，不复制字节。
 - delegated session 的 approval 策略在创建时持久化为 `never`，fork 复制的 parent `ask` 策略被其后的 `never` 覆盖；child 因此不能写文件、运行 `bash` 或请求 sandbox 升级。最大 delegation depth 为 4，每个 continuable 池最多 8 个驻留 child。
 - 授权以精确的 live 调用方 session 与持久化 lineage 为准，不信任模型提供的身份：
 

@@ -43,9 +43,6 @@ func (journal *journal) Events(ctx context.Context) ([]session.Event, error) {
 	return journal.log.Events(ctx)
 }
 
-// Remaining reports how many more bytes the log accepts.
-func (journal *journal) Remaining() int64 { return journal.log.Remaining() }
-
 func (journal *journal) Flush(ctx context.Context) error { return journal.log.Flush(ctx) }
 func (journal *journal) Close(ctx context.Context) error { return journal.log.Close(ctx) }
 

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jinyule/nano-harness/internal/adapter/attachment"
 	credentialfile "github.com/jinyule/nano-harness/internal/adapter/credential/file"
 	modelprovider "github.com/jinyule/nano-harness/internal/adapter/model/provider"
 	sessionjsonl "github.com/jinyule/nano-harness/internal/adapter/session/jsonl"
@@ -108,7 +109,7 @@ func runToolChain(t *testing.T) toolChain {
 		t.Fatal(err)
 	}
 	config, err := normalizeConfig(applicationConfig{
-		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"), settingsPath: settingsPath,
+		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"), attachmentRoot: filepath.Join(data, "attachments"), settingsPath: settingsPath,
 		credentialPath: filepath.Join(data, "credentials.yaml"), skillsDir: filepath.Join(data, "skills"),
 		agentsSkillsDir: filepath.Join(data, "agents-skills"), sessionID: "session-e2e", maxSteps: 8,
 	})
@@ -328,7 +329,7 @@ func TestCommandErrorPaths(t *testing.T) {
 		})
 	}
 	root := t.TempDir()
-	config := applicationConfig{workspaceRoot: root, sessionRoot: root, spillRoot: filepath.Join(root, "spill"), settingsPath: filepath.Join(root, "s"), credentialPath: filepath.Join(root, "c"), skillsDir: filepath.Join(root, "k"), agentsSkillsDir: filepath.Join(root, "a"), sessionID: "id", maxSteps: 1, create: true}
+	config := applicationConfig{workspaceRoot: root, sessionRoot: root, spillRoot: filepath.Join(root, "spill"), attachmentRoot: filepath.Join(root, "attachments"), settingsPath: filepath.Join(root, "s"), credentialPath: filepath.Join(root, "c"), skillsDir: filepath.Join(root, "k"), agentsSkillsDir: filepath.Join(root, "a"), sessionID: "id", maxSteps: 1, create: true}
 	_, err := composeTUI(config, dependencies{newRuntime: func(...plugin.Plugin) (*plugin.Runtime, error) { return nil, failure }})
 	if !errors.Is(err, failure) {
 		t.Fatalf("compose error=%v", err)
@@ -365,7 +366,9 @@ func restoreMainHooks(t *testing.T) {
 	jobService, jobTools := newJobService, newJobTools
 	questionTools, planTools := newQuestionTools, newPlanTools
 	goalService, goalTools, goalDriver := newGoalService, newGoalTools, newGoalDriver
+	attachments := newAttachmentStore
 	t.Cleanup(func() {
+		newAttachmentStore = attachments
 		newWebService, newWebTools = webService, webTools
 		currentWorkingDirectory, userConfigDirectory, userHomeDirectory, readRandom, inspectPath, absolutePath, evaluateLinks = cwd, config, home, random, inspect, absolute, links
 		newSettingsProvider, newCredentialStore, newModelRuntime = settingsProvider, credentials, modelRuntime
@@ -462,9 +465,9 @@ func TestRunTUI_MapsParseComposeLifecycleRunAndShutdown(t *testing.T) {
 func TestNormalizeConfig_ContainsEveryPathBoundary(t *testing.T) {
 	restoreMainHooks(t)
 	root := t.TempDir()
-	base := applicationConfig{workspaceRoot: root, sessionRoot: filepath.Join(root, "sessions"), spillRoot: filepath.Join(t.TempDir(), "spill"), settingsPath: filepath.Join(root, "settings"), credentialPath: filepath.Join(root, "credentials"), skillsDir: filepath.Join(root, "skills"), agentsSkillsDir: filepath.Join(root, "agents-skills"), sessionID: "session", maxSteps: 1}
+	base := applicationConfig{workspaceRoot: root, sessionRoot: filepath.Join(root, "sessions"), spillRoot: filepath.Join(t.TempDir(), "spill"), attachmentRoot: filepath.Join(t.TempDir(), "attachments"), settingsPath: filepath.Join(root, "settings"), credentialPath: filepath.Join(root, "credentials"), skillsDir: filepath.Join(root, "skills"), agentsSkillsDir: filepath.Join(root, "agents-skills"), sessionID: "session", maxSteps: 1}
 	failure := errors.New("failure")
-	for _, field := range []*string{&base.spillRoot, &base.skillsDir} {
+	for _, field := range []*string{&base.spillRoot, &base.attachmentRoot, &base.skillsDir} {
 		saved := *field
 		*field = ""
 		if _, err := normalizeConfig(base); err == nil || !strings.Contains(err.Error(), "path is required") {
@@ -508,7 +511,7 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 	failure := errors.New("constructor")
 	root := t.TempDir()
 	config := applicationConfig{
-		workspaceRoot: root, sessionRoot: filepath.Join(t.TempDir(), "sessions"), spillRoot: filepath.Join(t.TempDir(), "spill"), settingsPath: filepath.Join(t.TempDir(), "settings.yaml"),
+		workspaceRoot: root, sessionRoot: filepath.Join(t.TempDir(), "sessions"), spillRoot: filepath.Join(t.TempDir(), "spill"), attachmentRoot: filepath.Join(t.TempDir(), "attachments"), settingsPath: filepath.Join(t.TempDir(), "settings.yaml"),
 		credentialPath: filepath.Join(t.TempDir(), "credentials.yaml"), skillsDir: filepath.Join(t.TempDir(), "skills"),
 		agentsSkillsDir: filepath.Join(t.TempDir(), "agents-skills"), sessionID: "session", maxSteps: 1, create: true,
 	}
@@ -520,7 +523,12 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 			newSettingsProvider = func(*settings.Service, settingsfile.Config) (*settingsfile.Provider, error) { return nil, failure }
 		}},
 		{name: "credential store", set: func() { newCredentialStore = func(string) (*credentialfile.Store, error) { return nil, failure } }},
-		{name: "model runtime", set: func() { newModelRuntime = func(llm.CredentialStore) (*llm.Runtime, error) { return nil, failure } }},
+		{name: "attachment store", set: func() {
+			newAttachmentStore = func(attachment.Config) (*attachment.Store, error) { return nil, failure }
+		}},
+		{name: "model runtime", set: func() {
+			newModelRuntime = func(llm.CredentialStore, llm.ImageReader) (*llm.Runtime, error) { return nil, failure }
+		}},
 		{name: "model provider", set: func() {
 			newModelProvider = func(*llm.Runtime, *settings.Service, modelprovider.Config) (*modelprovider.Provider, error) {
 				return nil, failure
@@ -554,7 +562,7 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 			newWorkspace = func(string) (workspace.Root, error) { return workspace.Root{}, failure }
 		}},
 		{name: "file tools", set: func() {
-			newFileTools = func(*appTool.Runtime, workspace.Root, filetool.ImageNormalizer) (*filetool.Provider, error) {
+			newFileTools = func(*appTool.Runtime, workspace.Root, filetool.ImageStore) (*filetool.Provider, error) {
 				return nil, failure
 			}
 		}},
@@ -644,10 +652,10 @@ func TestRunTUI_FailsEarlyWithoutRipgrep(t *testing.T) {
 	}
 }
 
-// TestNormalizeConfig_KeepsTheSpillRootOutsideTheWorkspace proves the spill
-// root and the workspace may not contain each other, judged after links are
-// resolved and before either path needs to exist.
-func TestNormalizeConfig_KeepsTheSpillRootOutsideTheWorkspace(t *testing.T) {
+// TestNormalizeConfig_KeepsPrivateRootsOutsideTheWorkspace proves the spill
+// and attachment roots and the workspace may not contain each other, judged
+// after links are resolved and before either path needs to exist.
+func TestNormalizeConfig_KeepsPrivateRootsOutsideTheWorkspace(t *testing.T) {
 	restoreMainHooks(t)
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -662,9 +670,9 @@ func TestNormalizeConfig_KeepsTheSpillRootOutsideTheWorkspace(t *testing.T) {
 	if err := os.Symlink(filepath.Join(workspaceRoot, ".config"), filepath.Join(outside, "alias")); err != nil {
 		t.Fatal(err)
 	}
-	config := func(spill string) applicationConfig {
+	config := func(spill, attachments string) applicationConfig {
 		return applicationConfig{
-			workspaceRoot: workspaceRoot, sessionRoot: filepath.Join(outside, "sessions"), spillRoot: spill,
+			workspaceRoot: workspaceRoot, sessionRoot: filepath.Join(outside, "sessions"), spillRoot: spill, attachmentRoot: attachments,
 			settingsPath: filepath.Join(outside, "settings"), credentialPath: filepath.Join(outside, "credentials"),
 			skillsDir: filepath.Join(outside, "skills"), agentsSkillsDir: filepath.Join(outside, "agents"), sessionID: "session", maxSteps: 1,
 		}
@@ -681,9 +689,13 @@ func TestNormalizeConfig_KeepsTheSpillRootOutsideTheWorkspace(t *testing.T) {
 		{"sibling with a shared prefix", workspaceRoot + "-spill", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := normalizeConfig(config(test.spill))
+			_, err := normalizeConfig(config(test.spill, filepath.Join(outside, "attachments")))
 			if test.allowed != (err == nil) || !test.allowed && !strings.Contains(err.Error(), "spill root") {
 				t.Fatalf("normalizeConfig(%s) = %v", test.spill, err)
+			}
+			_, err = normalizeConfig(config(filepath.Join(outside, "spill"), test.spill))
+			if test.allowed != (err == nil) || !test.allowed && !strings.Contains(err.Error(), "attachment root") || !test.allowed && !strings.Contains(err.Error(), "--attachment-root") {
+				t.Fatalf("normalizeConfig(attachments %s) = %v", test.spill, err)
 			}
 		})
 	}
@@ -694,7 +706,7 @@ func TestNormalizeConfig_KeepsTheSpillRootOutsideTheWorkspace(t *testing.T) {
 		}
 		return "", failure
 	}
-	if _, err := normalizeConfig(config(filepath.Join(outside, "spill"))); !errors.Is(err, failure) {
+	if _, err := normalizeConfig(config(filepath.Join(outside, "spill"), filepath.Join(outside, "attachments"))); !errors.Is(err, failure) {
 		t.Fatalf("spill link failure = %v", err)
 	}
 }

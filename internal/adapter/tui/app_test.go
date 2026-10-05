@@ -218,14 +218,42 @@ func (registry *fakeQuestionRegistry) RegisterBroker(broker question.Broker, sco
 }
 
 type fakeImages struct {
-	image session.Image
-	err   error
-	path  string
+	image      session.Image
+	data       []byte
+	err        error
+	path       string
+	commitErr  error
+	committed  []session.Image
+	onCommit   func()
+	observer   func(session.Image, error)
+	observeErr error
 }
 
-func (images *fakeImages) Normalize(_ context.Context, path string) (session.Image, error) {
+func (images *fakeImages) PrepareFile(_ context.Context, path string) (session.Image, []byte, error) {
 	images.path = path
-	return images.image, images.err
+	return images.image, images.data, images.err
+}
+
+func (images *fakeImages) Commit(_ context.Context, image session.Image, _ []byte) error {
+	if images.onCommit != nil {
+		images.onCommit()
+	}
+	if images.commitErr != nil {
+		return images.commitErr
+	}
+	images.committed = append(images.committed, image)
+	return nil
+}
+
+func (images *fakeImages) ObserveUnavailable(observer func(session.Image, error), scope *plugin.Scope) error {
+	if images.observeErr != nil {
+		return images.observeErr
+	}
+	images.observer = observer
+	return scope.Defer(func(context.Context) error {
+		images.observer = nil
+		return nil
+	})
 }
 
 type fakeSubagents struct {
@@ -370,6 +398,7 @@ func TestAppStart_ContainsRootSnapshotSubscriptionScopeAndBrokerFailures(t *test
 		{name: "subscribe", configure: func(fixture *appFixture) { fixture.controller.subscribeErr = failure }},
 		{name: "broker", configure: func(fixture *appFixture) { fixture.approval.err = failure }},
 		{name: "question broker", configure: func(fixture *appFixture) { fixture.questions.err = failure }},
+		{name: "image observer", configure: func(fixture *appFixture) { fixture.images.observeErr = failure }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture, config := newAppFixture()

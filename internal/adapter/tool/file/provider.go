@@ -51,15 +51,15 @@ var (
 type Provider struct {
 	runtime  *appTool.Runtime
 	root     workspace.Root
-	images   ImageNormalizer
+	images   ImageStore
 	observed observations
 	mutate   pathLocks
 }
 
 // New constructs an inert provider over a resolved workspace. A root widened
 // with WithReadOnly lets read and read_image open the spill partition; write
-// and edit stay inside the workspace. images normalizes read_image sources.
-func New(runtime *appTool.Runtime, root workspace.Root, images ImageNormalizer) (*Provider, error) {
+// and edit stay inside the workspace. images stores read_image sources.
+func New(runtime *appTool.Runtime, root workspace.Root, images ImageStore) (*Provider, error) {
 	if runtime == nil || root.Path() == "" || images == nil {
 		return nil, ErrInvalidConfig
 	}

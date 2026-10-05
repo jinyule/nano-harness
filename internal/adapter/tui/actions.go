@@ -28,8 +28,8 @@ func (model model) command(value string) (tea.Model, tea.Cmd) {
 	case "/attach":
 		path := strings.TrimSpace(strings.TrimPrefix(value, name))
 		return model, func() tea.Msg {
-			image, err := model.app.config.Images.Normalize(model.ctx, path)
-			return attachmentMessage{image: image, err: err}
+			image, data, err := model.app.config.Images.PrepareFile(model.ctx, path)
+			return attachmentMessage{image: pendingImage{ref: image, data: data}, err: err}
 		}
 	case "/accounts":
 		return model, model.accountsCommand()
@@ -116,17 +116,14 @@ func (model model) planCommand(argument string) (tea.Model, tea.Cmd) {
 		return model.withError("attachments cannot accompany /plan off")
 	}
 	var message *session.Message
+	var pending []pendingImage
 	if active && (argument != "" || len(model.images) > 0) {
-		content := make([]session.ContentBlock, 0, len(model.images)+1)
-		for index := range model.images {
-			image := model.images[index]
-			content = append(content, session.ContentBlock{Type: session.ContentImage, Image: &image})
-		}
+		content := imageBlocks(model.images)
 		if argument != "" {
 			content = append(content, session.ContentBlock{Type: session.ContentText, Text: argument})
 		}
 		message = &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: content}
-		model.images = nil
+		pending, model.images = model.images, nil
 	}
 	wasActive := model.planActive
 	return model, func() tea.Msg {
@@ -134,7 +131,7 @@ func (model model) planCommand(argument string) (tea.Model, tea.Cmd) {
 		if err != nil {
 			return planMessage{err: err}
 		}
-		return planMessage{text: planChangeText(change, active, wasActive), message: message}
+		return planMessage{text: planChangeText(change, active, wasActive), message: message, pending: pending}
 	}
 }
 

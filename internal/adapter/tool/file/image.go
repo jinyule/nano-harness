@@ -17,12 +17,13 @@ import (
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
-// ImageNormalizer is the image normalization boundary read_image consumes.
-// It returns the normalized image and the decoded source size, and wraps
+// ImageStore is the attachment boundary read_image consumes. SaveImage
+// normalizes the source, makes it durable in the attachment store, and
+// returns its reference and the decoded source size. It wraps
 // session.ErrImageFormat, session.ErrImagePixels, or session.ErrImageBytes
 // when the source is refused for that reason.
-type ImageNormalizer interface {
-	NormalizeBytes(ctx context.Context, name string, data []byte) (session.Image, stdimage.Point, error)
+type ImageStore interface {
+	SaveImage(ctx context.Context, name string, data []byte) (session.Image, stdimage.Point, error)
 }
 
 // imageExtensions are the extensions read_image accepts; the bytes must
@@ -110,7 +111,9 @@ func (provider *Provider) readImage(ctx context.Context, invocation appTool.Invo
 	case declared != "" && actual != declared:
 		return appTool.Result{}, fmt.Errorf("cannot read %q: the %s extension declares %s, but the bytes use a different image format; rename the file to match its actual format if it is PNG/JPEG/WebP/GIF, or convert it to one of those formats", display, strings.ToLower(extname(arguments.FilePath)), declared)
 	}
-	normalized, source, err := provider.images.NormalizeBytes(ctx, filepath.Base(display), data)
+	// The image is durable before the result that references it is
+	// committed, so the log never cites bytes the store does not hold.
+	normalized, source, err := provider.images.SaveImage(ctx, filepath.Base(display), data)
 	switch {
 	case errors.Is(err, session.ErrImageFormat):
 		return appTool.Result{}, errUndecodable(display)
@@ -188,7 +191,7 @@ func formatImageRead(display string, image session.Image, source stdimage.Point)
 		}
 		scaled = fmt.Sprintf(" (downscaled from %dx%d px; %s to locate features in the original file)", source.X, source.Y, advice)
 	}
-	return fmt.Sprintf("<path>%s</path>\n<type>image</type>\n<content>\n%s image, %dx%d px, %d bytes%s\n</content>", display, image.MediaType, image.Width, image.Height, decodedLength(image.Data), scaled)
+	return fmt.Sprintf("<path>%s</path>\n<type>image</type>\n<content>\n%s image, %dx%d px, %d bytes%s\n</content>", display, image.MediaType, image.Width, image.Height, image.Bytes, scaled)
 }
 
 // toFixed2 formats like JavaScript's toFixed(2). It differs from Go's
@@ -199,9 +202,4 @@ func toFixed2(value float64) string {
 		value += 0.001
 	}
 	return strconv.FormatFloat(value, 'f', 2, 64)
-}
-
-// decodedLength is the byte length of standard padded base64 data.
-func decodedLength(data string) int {
-	return len(data)/4*3 - (len(data) - len(strings.TrimRight(data, "=")))
 }

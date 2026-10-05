@@ -13,8 +13,7 @@ import (
 )
 
 const (
-	fixtureImageData   = "/9j/2wCEAAQDAwMDAgQDAwMEBAQFBgoGBgUFBgwICQcKDgwPDg4MDQ0PERYTDxAVEQ0NExoTFRcYGRkZDxIbHRsYHRYYGRgBBAQEBgUGCwYGCxgQDRAYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGP/AABEIAAEAAQMBIgACEQEDEQH/xAGiAAABBQEBAQEBAQAAAAAAAAAAAQIDBAUGBwgJCgsQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+gEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoLEQACAQIEBAMEBwUEBAABAncAAQIDEQQFITEGEkFRB2FxEyIygQgUQpGhscEJIzNS8BVictEKFiQ04SXxFxgZGiYnKCkqNTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqCg4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2dri4+Tl5ufo6ery8/T19vf4+fr/2gAMAwEAAhEDEQA/APF6KKK/KT+/j//Z"
-	fixtureImageSHA256 = "d0eea4b962c16b0f039d6e746d9bb8e78d355cb5e7b5f95fbdc20d774f4a4ff0"
+	fixtureImageID     = "sha256:d0eea4b962c16b0f039d6e746d9bb8e78d355cb5e7b5f95fbdc20d774f4a4ff0"
 	fixtureImageOutput = "<path>/synthetic/workspace/red.png</path>\n<type>image</type>\n<content>\nimage/jpeg image, 1x1 px, 600 bytes\n</content>"
 )
 
@@ -45,8 +44,11 @@ func TestSessionV2Image_FrozenContract(t *testing.T) {
 		t.Fatalf("surface=%+v err=%v", surface, err)
 	}
 	result := surface[3].Result
-	if result == nil || result.Output != fixtureImageOutput || result.Image == nil || result.Image.SHA256 != fixtureImageSHA256 || result.Image.Width != 1 || result.Image.Name != "red.png" {
+	if result == nil || result.Output != fixtureImageOutput || result.Image == nil || result.Image.ID != fixtureImageID || result.Image.Bytes != 600 || result.Image.Width != 1 || result.Image.Name != "red.png" {
 		t.Fatalf("image result=%+v", result)
+	}
+	if attached := surface[0].Message.Content[1].Image; attached == nil || *attached != *result.Image {
+		t.Fatalf("user image=%+v", attached)
 	}
 	log, err := manager.Open(t.Context(), OpenOptions{SessionID: "fixture", Cwd: "/synthetic/workspace"})
 	if err != nil {
@@ -70,10 +72,13 @@ func TestSessionV2Image_FrozenContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	writer := &Log{file: output, header: header, active: true, size: int64(bytes.IndexByte(fixture, '\n') + 1)}
-	image := &coresession.Image{ID: "img-d0eea4b962c16b0f", Name: "red.png", MediaType: "image/jpeg", Data: fixtureImageData, SHA256: fixtureImageSHA256, Width: 1, Height: 1}
+	image := &coresession.Image{ID: fixtureImageID, Name: "red.png", MediaType: "image/jpeg", Bytes: 600, Width: 1, Height: 1}
+	attachment := *image
+	user := userMessage("look at red.png")
+	user.Content = append(user.Content, coresession.ContentBlock{Type: coresession.ContentImage, Image: &attachment})
 	for _, record := range []coresession.Record{
 		{Type: coresession.RecordTurnStart, Turn: 1},
-		{Type: coresession.RecordUserMessage, Turn: 1, Message: userMessage("look at red.png")},
+		{Type: coresession.RecordUserMessage, Turn: 1, Message: user},
 		{Type: coresession.RecordStepStart, Turn: 1, Step: 1},
 		{Type: coresession.RecordRequestHeader, Turn: 1, Step: 1, Header: &coresession.RequestHeader{Provider: "openai", Model: "model"}},
 		{Type: coresession.RecordAssistantMessage, Turn: 1, Step: 1, Message: assistantMessage("reading")},
@@ -103,13 +108,19 @@ func TestSessionV2Image_RejectsChangedContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, test := range []struct{ name, from, to string }{
+		{"inline-data", `"bytes":600,"width":1,"height":1}}}}`, `"bytes":600,"width":1,"height":1,"data":"/9j/"}}}}`},
+		{"inline-digest", `"image":{"id":`, `"image":{"sha256":"d0ee","id":`},
 		{"unknown-image-field", `"image":{"id":`, `"image":{"page":1,"id":`},
-		{"digest-mismatch", `"sha256":"d0ee`, `"sha256":"00ee`},
-		{"unsupported-media-type", `"media_type":"image/jpeg","data"`, `"media_type":"image/gif","data"`},
-		{"zero-width", `"width":1,"height":1}}`, `"width":0,"height":1}}`},
-		{"oversized-width", `"width":1,"height":1}}`, `"width":4097,"height":1}}`},
-		{"invalid-base64", `"data":"/9j/`, `"data":"!9j/`},
-		{"empty-name", `"name":"red.png"`, `"name":""`},
+		{"legacy-id", `"image":{"id":"sha256:d0ee`, `"image":{"id":"img-d0ee`},
+		{"uppercase-digest", `"image":{"id":"sha256:d0ee`, `"image":{"id":"sha256:D0EE`},
+		{"short-digest", `4a4ff0","name":"red.png","media_type":"image/jpeg","bytes":600,"width":1,"height":1}}}}`, `4a4ff","name":"red.png","media_type":"image/jpeg","bytes":600,"width":1,"height":1}}}}`},
+		{"unsupported-media-type", `"media_type":"image/jpeg","bytes":600,"width":1,"height":1}}}}`, `"media_type":"image/gif","bytes":600,"width":1,"height":1}}}}`},
+		{"zero-bytes", `"bytes":600,"width":1,"height":1}}}}`, `"bytes":0,"width":1,"height":1}}}}`},
+		{"oversized", `"bytes":600,"width":1,"height":1}}}}`, `"bytes":4194305,"width":1,"height":1}}}}`},
+		{"zero-width", `"width":1,"height":1}}}}`, `"width":0,"height":1}}}}`},
+		{"oversized-width", `"width":1,"height":1}}}}`, `"width":4097,"height":1}}}}`},
+		{"empty-name", `"is_error":false,"image":{"id":"sha256:d0eea4b962c16b0f039d6e746d9bb8e78d355cb5e7b5f95fbdc20d774f4a4ff0","name":"red.png"`, `"is_error":false,"image":{"id":"sha256:d0eea4b962c16b0f039d6e746d9bb8e78d355cb5e7b5f95fbdc20d774f4a4ff0","name":""`},
+		{"user-image-name", `"name":"red.png","media_type":"image/jpeg","bytes":600,"width":1,"height":1}}],`, `"name":"","media_type":"image/jpeg","bytes":600,"width":1,"height":1}}],`},
 		{"error-with-image", `"is_error":false,"image"`, `"is_error":true,"image"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -125,26 +136,5 @@ func TestSessionV2Image_RejectsChangedContract(t *testing.T) {
 				t.Fatalf("got %v, want %v", err, ErrCorruptSession)
 			}
 		})
-	}
-}
-
-func TestLog_RemainingTracksTheSessionSizeLimit(t *testing.T) {
-	manager, scope := startManager(t)
-	t.Cleanup(func() { _ = scope.Close(context.Background()) })
-	log, err := manager.Open(t.Context(), OpenOptions{SessionID: "remaining", Create: true, Cwd: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = log.Close(context.Background()) })
-	info, err := os.Stat(log.Path())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := log.Remaining(); got != maxSessionBytes-info.Size() {
-		t.Fatalf("remaining after header = %d, file = %d", got, info.Size())
-	}
-	appendRecord(t, log, coresession.Record{Type: coresession.RecordTurnStart, Turn: 1})
-	if info, err = os.Stat(log.Path()); err != nil || log.Remaining() != maxSessionBytes-info.Size() {
-		t.Fatalf("remaining after append = %d, file = %d (%v)", log.Remaining(), info.Size(), err)
 	}
 }

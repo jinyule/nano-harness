@@ -64,7 +64,7 @@ func TestApplication_SupportsIndependentFrontendPlugin(t *testing.T) {
 	newTerminal = func(tui.Config) (*tui.App, error) { t.Fatal("shared application constructed TUI"); return nil, nil }
 	root := t.TempDir()
 	config, err := normalizeConfig(applicationConfig{
-		workspaceRoot: root, sessionRoot: filepath.Join(root, "sessions"), spillRoot: filepath.Join(t.TempDir(), "spill"),
+		workspaceRoot: root, sessionRoot: filepath.Join(root, "sessions"), spillRoot: filepath.Join(t.TempDir(), "spill"), attachmentRoot: filepath.Join(t.TempDir(), "attachments"),
 		settingsPath: filepath.Join(root, "settings.yaml"), credentialPath: filepath.Join(root, "credentials.yaml"),
 		skillsDir: filepath.Join(root, "skills"), agentsSkillsDir: filepath.Join(root, "agents-skills"),
 		sessionID: "frontend-probe", maxSteps: 2,
@@ -187,7 +187,7 @@ func TestComposition_SpillsResultsAndGuardsWritesEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	config, err := normalizeConfig(applicationConfig{
-		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"),
+		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"), attachmentRoot: filepath.Join(data, "attachments"),
 		settingsPath: settingsPath, credentialPath: filepath.Join(data, "credentials.yaml"), skillsDir: filepath.Join(data, "skills"),
 		agentsSkillsDir: filepath.Join(data, "agents-skills"), sessionID: "session-spill", maxSteps: 8,
 	})

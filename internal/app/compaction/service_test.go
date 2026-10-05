@@ -131,7 +131,7 @@ func newCompactionHarness(t *testing.T) *compactionHarness {
 	if err := configuration.Start(context.Background(), settingsScope); err != nil {
 		t.Fatal(err)
 	}
-	runtime, _ := llm.New(&compactionStore{credential: llm.Credential{Kind: llm.CredentialAPIKey, APIKey: "key"}})
+	runtime, _ := llm.New(&compactionStore{credential: llm.Credential{Kind: llm.CredentialAPIKey, APIKey: "key"}}, noImages{})
 	llmScope := &plugin.Scope{}
 	if err := runtime.Start(context.Background(), llmScope); err != nil {
 		t.Fatal(err)
@@ -351,4 +351,11 @@ func TestFailureClassificationEstimationSelectionAndWait(t *testing.T) {
 	if err := wait(context.Background(), time.Nanosecond); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// noImages is an attachment store that holds no image.
+type noImages struct{}
+
+func (noImages) ReadImage(context.Context, session.Image) ([]byte, error) {
+	return nil, session.ErrAttachmentMissing
 }

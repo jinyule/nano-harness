@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -180,7 +179,7 @@ func startEngineHarness(t *testing.T, maxSteps int, actions ...modelAction) *eng
 	if err := harness.settings.Start(context.Background(), harness.settingsScope); err != nil {
 		t.Fatal(err)
 	}
-	harness.llm, _ = llm.New(memoryCredentialStore{})
+	harness.llm, _ = llm.New(memoryCredentialStore{}, noImages{})
 	llmScope, providerScope := &plugin.Scope{}, &plugin.Scope{}
 	if err := harness.llm.Start(context.Background(), llmScope); err != nil {
 		t.Fatal(err)
@@ -409,14 +408,14 @@ func TestEngine_ClassifiesCancellationProviderFailureAndPanic(t *testing.T) {
 func TestEngine_ValidatesMessagesAndHelperCopies(t *testing.T) {
 	data := []byte("image")
 	digest := sha256.Sum256(data)
-	image := &session.Image{ID: "image-1", Name: "image.png", MediaType: "image/png", Data: base64.StdEncoding.EncodeToString(data), SHA256: fmt.Sprintf("%x", digest), Width: 1, Height: 1}
+	image := &session.Image{ID: session.ImageID(fmt.Sprintf("%x", digest)), Name: "image.png", MediaType: "image/png", Bytes: len(data), Width: 1, Height: 1}
 	message := session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: []session.ContentBlock{{Type: session.ContentImage, Image: image}}}
 	if !validUserMessage(message) {
 		t.Fatal("valid image-only message rejected")
 	}
 	copyMessage := cloneMessage(message)
-	copyMessage.Content[0].Image.Data = "changed"
-	if message.Content[0].Image.Data != base64.StdEncoding.EncodeToString(data) {
+	copyMessage.Content[0].Image.Name = "changed"
+	if message.Content[0].Image.Name != "image.png" {
 		t.Fatal("cloneMessage aliased image")
 	}
 	for _, invalid := range []session.Message{
@@ -458,4 +457,11 @@ func countType(types []session.RecordType, target session.RecordType) int {
 		}
 	}
 	return count
+}
+
+// noImages is an attachment store that holds no image.
+type noImages struct{}
+
+func (noImages) ReadImage(context.Context, session.Image) ([]byte, error) {
+	return nil, session.ErrAttachmentMissing
 }

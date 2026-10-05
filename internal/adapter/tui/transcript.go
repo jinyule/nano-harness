@@ -87,7 +87,7 @@ func (model *model) applyEvent(event session.Event, live bool) {
 		if image := record.Result.Image; image != nil {
 			// The image itself stays out of the terminal; its identity lets
 			// the user match it to the file and the durable record.
-			line += fmt.Sprintf(" [image %s %dx%d sha256:%.12s]", image.Name, image.Width, image.Height, image.SHA256)
+			line += fmt.Sprintf(" [image %s %dx%d %.19s]", image.Name, image.Width, image.Height, image.ID)
 		}
 		model.addLine(line)
 	case session.RecordRetry:

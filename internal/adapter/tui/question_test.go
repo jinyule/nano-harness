@@ -195,7 +195,7 @@ func TestModelPlanCommand_SelectsAndDeliversMessages(t *testing.T) {
 		t.Fatalf("bare /plan: lines=%v submitted=%d", current.lines, len(fixture.controller.submitted))
 	}
 
-	current.images = []session.Image{{Name: "shot.png"}}
+	current.images = []pendingImage{{ref: session.Image{Name: "shot.png"}}}
 	current.input.SetValue("/plan off")
 	current, command = update(t, current, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if command != nil || !strings.HasSuffix(current.lines[len(current.lines)-1], "error> attachments cannot accompany /plan off") || len(current.images) != 1 {
@@ -220,7 +220,7 @@ func TestModelPlanCommand_SelectsAndDeliversMessages(t *testing.T) {
 		t.Fatalf("busy /plan TEXT: steered=%d lines=%v", len(fixture.controller.steered), current.lines)
 	}
 	fixture.controller.steerErr = errors.New("steer failed")
-	current = runCommand(t, current, current.deliverCommand(session.Message{}))
+	current = runCommand(t, current, current.deliverCommand(session.Message{}, nil))
 	if !strings.HasSuffix(current.lines[len(current.lines)-1], "error> steer failed") {
 		t.Fatalf("steer failure: %v", current.lines)
 	}

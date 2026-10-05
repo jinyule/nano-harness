@@ -2,7 +2,9 @@
 """Exercise the compiled TUI through a PTY and a loopback Responses fixture."""
 
 import argparse
+import base64
 import contextlib
+import hashlib
 import errno
 import fcntl
 import http.server
@@ -60,6 +62,8 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         self.server.image_urls.extend(part["image_url"] for output in raw_outputs if isinstance(output, list)
                                       for part in output if part.get("type") == "input_image")
         outputs = [output if isinstance(output, str) else json.dumps(output) for output in raw_outputs]
+        self.server.attached_urls.extend(part["image_url"] for item in inputs if item.get("role") == "user"
+                                         for part in item["content"] if part.get("type") == "input_image")
         self.server.instructions.append((task, len(outputs), body.get("instructions", "")))
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -147,6 +151,7 @@ def fixture(directory):
     server.stopping = threading.Event()
     server.instructions = []
     server.image_urls = []
+    server.attached_urls = []
     worker = threading.Thread(target=server.serve_forever)
     worker.start()
     settings = directory / "settings.yaml"
@@ -183,7 +188,8 @@ class Terminal:
             [str(binary), "tui", "--root", str(workspace), "--settings", str(settings),
              "--credentials", str(directory / "credentials.yaml"), "--session-root", str(directory / "sessions"),
              "--skills-dir", str(directory / "skills"), "--agents-skills-dir", str(directory / "agents-skills"),
-             "--spill-root", str(directory / "spill"), "--session", "session-pty"],
+             "--spill-root", str(directory / "spill"), "--attachment-root", str(directory / "attachments"),
+             "--session", "session-pty"],
             stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
             env={"PATH": tool_path(), "HOME": os.environ["HOME"], "TERM": "xterm-256color", "NANO_FIXTURE_KEY": "fixture-key"},
         )
@@ -233,11 +239,22 @@ class Terminal:
 
 def records(directory):
     assert (directory / "spill").stat().st_mode & 0o777 == 0o700
+    assert (directory / "attachments").stat().st_mode & 0o777 == 0o700
     result = {}
     for path in (directory / "sessions").glob("*.jsonl"):
         assert path.stat().st_mode & 0o777 == 0o600
         result[path.stem] = [json.loads(line) for line in path.read_text().splitlines()]
     return result
+
+
+def stored_image(directory, image):
+    """Return the attachment object behind one reference after checking its identity and mode."""
+    digest = image["id"].removeprefix("sha256:")
+    path = directory / "attachments" / "v1" / "objects" / digest[:2] / digest
+    assert path.stat().st_mode & 0o777 == 0o400, path
+    data = path.read_bytes()
+    assert hashlib.sha256(data).hexdigest() == digest and len(data) == image["bytes"], image
+    return "data:" + image["media_type"] + ";base64," + base64.b64encode(data).decode()
 
 
 def verify(binary):
@@ -247,6 +264,10 @@ def verify(binary):
             terminal = Terminal(binary, directory, workspace, settings)
             try:
                 terminal.expect("/help")
+                # /attach only normalizes; the object is stored when the message is sent.
+                terminal.send("/attach " + str(workspace / "pixel.png") + "\r")
+                terminal.expect("system> attached pixel.png (2x2)")
+                assert not (directory / "attachments" / "v1" / "objects").exists() or not any((directory / "attachments" / "v1" / "objects").iterdir())
                 terminal.resize(60, 20)
                 terminal.send("\x1b[200~verify tools\x1b[201~\r")
                 terminal.expect("plan> 1 in progress · 1 pending")
@@ -315,7 +336,11 @@ def verify(binary):
             image = results[4].get("image")
             assert image and image["name"] == "pixel.png" and image["media_type"] == "image/jpeg", results[4]
             assert (image["width"], image["height"]) == (2, 2) and "<type>image</type>" in results[4]["output"], results[4]
-            assert "data:image/jpeg;base64," + image["data"] in server.image_urls, "the next request lacked the image"
+            assert "data" not in image and stored_image(directory, image) in server.image_urls, "the next request lacked the stored image"
+            opening = next(entry["message"] for entry in root_records if entry["type"] == "user/message")
+            attached = [block["image"] for block in opening["content"] if block["type"] == "image"]
+            assert [entry["name"] for entry in attached] == ["pixel.png"] and "data" not in attached[0], opening
+            assert stored_image(directory, attached[0]) in server.attached_urls, "the provider never received the attachment"
             assert results[5]["output"] == "CHILD_READ_OK", results[5]
             assert results[6]["output"] == "CHILD_FORK_OK", results[6]
             assert results[7]["output"] == "(no subagents)", results[7]
@@ -379,7 +404,7 @@ def verify(binary):
                 assert terminal.process.wait(timeout=10) == 0
             finally:
                 terminal.close()
-            print("PASS: real binary/PTY, 19 root tool calls, read_image result image, todo plan, background job notice, question answers, plan review, /goal round completion, spawn/fork children, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
+            print("PASS: real binary/PTY, 19 root tool calls, /attach and read_image through the attachment store, todo plan, background job notice, question answers, plan review, /goal round completion, spawn/fork children, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
 
 
 def main():

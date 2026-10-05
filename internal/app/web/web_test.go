@@ -13,6 +13,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/app/llm"
 	"github.com/jinyule/nano-harness/internal/app/settings"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
+	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
 type webStore struct{ err error }
@@ -94,7 +95,7 @@ func newFixture(t *testing.T, search settings.WebSearch, store webStore, fetcher
 	if err := configuration.Mount(context.Background(), &staticBackend{document: settings.Document{Web: settings.Web{Search: search}}}, settingsScope); err != nil {
 		t.Fatal(err)
 	}
-	models, err := llm.New(store)
+	models, err := llm.New(store, noImages{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -443,4 +444,11 @@ func TestService_FetchDelegatesWithinOperationScope(t *testing.T) {
 	if err != nil || result != want || received != "https://go.dev" {
 		t.Fatalf("fetch=%#v err=%v received=%q", result, err, received)
 	}
+}
+
+// noImages is an attachment store that holds no image.
+type noImages struct{}
+
+func (noImages) ReadImage(context.Context, session.Image) ([]byte, error) {
+	return nil, session.ErrAttachmentMissing
 }

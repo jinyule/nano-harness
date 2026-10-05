@@ -103,10 +103,6 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		return result
 	}
 	turn := nextTurn(events)
-	if err := checkMessageImages(input.journal, input.message); err != nil {
-		result.Err, result.Outcome = err, session.OutcomeError
-		return result
-	}
 	result.Turn = turn
 	opened := false
 	err = engine.openTurn(ctx, input, func(ctx context.Context) error {
@@ -302,8 +298,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			Calls: completion.Calls, Delegated: input.delegated, Journal: input.journal,
 		})
 		for index := range toolResults {
-			record := fitResultImage(input.journal, session.Record{Type: session.RecordToolResult, Turn: turn, Step: step, Result: &toolResults[index]})
-			if _, err := input.journal.Append(context.WithoutCancel(ctx), record); err != nil {
+			if _, err := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordToolResult, Turn: turn, Step: step, Result: &toolResults[index]}); err != nil {
 				result.Err, result.Outcome = err, session.OutcomeError
 				return result
 			}
@@ -326,8 +321,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 // appendUserMessages commits input that arrived during a turn, in order.
 func appendUserMessages(ctx context.Context, log *journal, turn uint64, messages []session.Message) error {
 	for index := range messages {
-		record := fitMessageImages(log, session.Record{Type: session.RecordUserMessage, Turn: turn, Message: &messages[index]})
-		if _, err := log.Append(ctx, record); err != nil {
+		if _, err := log.Append(ctx, session.Record{Type: session.RecordUserMessage, Turn: turn, Message: &messages[index]}); err != nil {
 			return err
 		}
 	}

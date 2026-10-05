@@ -197,7 +197,7 @@ func startHarness(t *testing.T, rules ...rule) *harness {
 	})
 	configuration := settings.New()
 	start(configuration)
-	models, _ := llm.New(testStore{})
+	models, _ := llm.New(testStore{}, noImages{})
 	start(models)
 	providerScope := &plugin.Scope{}
 	if err := models.Register(&testProvider{model: h.model}, providerScope); err != nil {
@@ -345,4 +345,11 @@ func (h *harness) idle(current *agent.Agent) {
 
 func jsonlOpen(id string) jsonl.OpenOptions {
 	return jsonl.OpenOptions{SessionID: id, Cwd: "/workspace"}
+}
+
+// noImages is an attachment store that holds no image.
+type noImages struct{}
+
+func (noImages) ReadImage(context.Context, session.Image) ([]byte, error) {
+	return nil, session.ErrAttachmentMissing
 }

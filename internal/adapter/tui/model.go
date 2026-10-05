@@ -39,13 +39,16 @@ type model struct {
 	auth       *authEnvelope
 	question   *questionState
 	planActive bool
-	images     []session.Image
-	todos      []session.TodoItem
-	goal       session.GoalState
-	plan       []string
-	stream     string
-	streamText string
-	quitting   bool
+	images     []pendingImage
+	// unavailable holds image IDs already reported as unreadable, so each
+	// appears once although every request reports it again.
+	unavailable map[string]bool
+	todos       []session.TodoItem
+	goal        session.GoalState
+	plan        []string
+	stream      string
+	streamText  string
+	quitting    bool
 }
 
 func newModel(ctx context.Context, app *App, initial []session.Event) model {
@@ -158,15 +161,28 @@ func (model model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if message.message == nil {
 			return model, nil
 		}
-		return model, model.deliverCommand(*message.message)
+		return model, model.deliverCommand(*message.message, message.pending)
 	case attachmentMessage:
 		if message.err != nil {
 			model.addLine("error> " + message.err.Error())
 		} else {
 			model.images = append(model.images, message.image)
-			model.addLine(fmt.Sprintf("system> attached %s (%dx%d)", message.image.Name, message.image.Width, message.image.Height))
+			model.addLine(fmt.Sprintf("system> attached %s (%dx%d)", message.image.ref.Name, message.image.ref.Width, message.image.ref.Height))
 		}
 		return model, nil
+	case unavailableImageMessage:
+		if !model.unavailable[message.image.ID] {
+			if model.unavailable == nil {
+				model.unavailable = map[string]bool{}
+			}
+			model.unavailable[message.image.ID] = true
+			reason := "failed verification in"
+			if message.missing {
+				reason = "is missing from"
+			}
+			model.addLine(fmt.Sprintf("attachment> image %s (%.19s) %s the attachment store; the model sees a placeholder instead", message.image.Name, message.image.ID, reason))
+		}
+		return model, waitUI(model.app.events, model.app.stop, model.ctx.Done())
 	case turnMessage:
 		if message.result.Err != nil {
 			model.addLine("turn> " + string(message.result.Outcome) + ": " + message.result.Err.Error())
@@ -250,19 +266,40 @@ func (model model) submit() (tea.Model, tea.Cmd) {
 
 // send submits value and every attached image as one user message.
 func (model model) send(value string) (tea.Model, tea.Cmd) {
-	content := make([]session.ContentBlock, 0, len(model.images)+1)
-	content = append(content, session.ContentBlock{Type: session.ContentText, Text: value})
-	for index := range model.images {
-		image := model.images[index]
-		content = append(content, session.ContentBlock{Type: session.ContentImage, Image: &image})
-	}
+	content := append([]session.ContentBlock{{Type: session.ContentText, Text: value}}, imageBlocks(model.images)...)
+	pending := model.images
 	model.images = nil
 	message := session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: content}
-	return model, func() tea.Msg { return model.submitAndWait(message) }
+	return model, func() tea.Msg { return model.submitAndWait(message, pending) }
 }
 
-// submitAndWait queues a turn and reports its terminal result.
-func (model model) submitAndWait(message session.Message) tea.Msg {
+// imageBlocks references every pending attachment, in order.
+func imageBlocks(pending []pendingImage) []session.ContentBlock {
+	blocks := make([]session.ContentBlock, len(pending))
+	for index := range pending {
+		image := pending[index].ref
+		blocks[index] = session.ContentBlock{Type: session.ContentImage, Image: &image}
+	}
+	return blocks
+}
+
+// commitImages stores pending attachments before the message citing them
+// is submitted: the object is durable first, then the reference.
+func (model model) commitImages(pending []pendingImage) error {
+	for _, image := range pending {
+		if err := model.app.config.Images.Commit(model.ctx, image.ref, image.data); err != nil {
+			return fmt.Errorf("store attachment %s: %w", image.ref.Name, err)
+		}
+	}
+	return nil
+}
+
+// submitAndWait stores pending attachments, queues a turn, and reports its
+// terminal result.
+func (model model) submitAndWait(message session.Message, pending []pendingImage) tea.Msg {
+	if err := model.commitImages(pending); err != nil {
+		return turnMessage{result: agent.TurnResult{Outcome: session.OutcomeError, Err: err}}
+	}
 	results, err := model.app.agent.Submit(model.ctx, message)
 	if err != nil {
 		return turnMessage{result: agent.TurnResult{Outcome: session.OutcomeError, Err: err}}
@@ -275,13 +312,16 @@ func (model model) submitAndWait(message session.Message) tea.Msg {
 	}
 }
 
-// deliverCommand steers a message into the active turn, or starts a turn
-// with it when the agent is idle.
-func (model model) deliverCommand(message session.Message) tea.Cmd {
+// deliverCommand stores pending attachments, then steers a message into the
+// active turn, or starts a turn with it when the agent is idle.
+func (model model) deliverCommand(message session.Message, pending []pendingImage) tea.Cmd {
 	return func() tea.Msg {
+		if err := model.commitImages(pending); err != nil {
+			return operationMessage{err: err}
+		}
 		err := model.app.agent.Steer(model.ctx, message)
 		if errors.Is(err, agent.ErrAgentIdle) {
-			return model.submitAndWait(message)
+			return model.submitAndWait(message, nil)
 		}
 		return operationMessage{text: "steer queued", err: err}
 	}

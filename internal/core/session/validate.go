@@ -1,9 +1,6 @@
 package session
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -131,8 +128,8 @@ func validateContent(block ContentBlock) error {
 }
 
 func validateImage(image Image) error {
-	if err := validateIdentifier("image ID", image.ID, 128); err != nil {
-		return err
+	if _, ok := ImageDigest(image.ID); !ok {
+		return errors.New("image ID must be sha256:<64 lowercase hex digits>")
 	}
 	if image.Name == "" || len(image.Name) > 255 || strings.ContainsAny(image.Name, "\r\n") {
 		return errors.New("image name is invalid")
@@ -140,16 +137,8 @@ func validateImage(image Image) error {
 	if image.MediaType != "image/jpeg" && image.MediaType != "image/png" {
 		return errors.New("image media type is unsupported")
 	}
-	if image.Width < 1 || image.Width > 4096 || image.Height < 1 || image.Height > 4096 || len(image.SHA256) != 64 {
-		return errors.New("image dimensions or digest are invalid")
-	}
-	decoded, err := base64.StdEncoding.DecodeString(image.Data)
-	if err != nil || len(decoded) == 0 || len(decoded) > MaxImageBytes {
-		return errors.New("image data is invalid")
-	}
-	digest := sha256.Sum256(decoded)
-	if !strings.EqualFold(image.SHA256, hex.EncodeToString(digest[:])) {
-		return errors.New("image digest does not match data")
+	if image.Bytes < 1 || image.Bytes > MaxImageBytes || image.Width < 1 || image.Width > 4096 || image.Height < 1 || image.Height > 4096 {
+		return errors.New("image size or dimensions are invalid")
 	}
 	return nil
 }

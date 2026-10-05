@@ -108,7 +108,7 @@ func TestComposition_BackgroundJobsEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	config, err := normalizeConfig(applicationConfig{
-		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"), settingsPath: settingsPath,
+		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"), attachmentRoot: filepath.Join(data, "attachments"), settingsPath: settingsPath,
 		credentialPath: filepath.Join(data, "credentials.yaml"), skillsDir: filepath.Join(data, "skills"),
 		agentsSkillsDir: filepath.Join(data, "agents-skills"), sessionID: "session-jobs", maxSteps: 8,
 	})

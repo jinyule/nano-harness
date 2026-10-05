@@ -49,6 +49,18 @@ make clean
 
 Git hook 只做快速检查：pre-commit 处理 staged whitespace/gofmt，pre-push 运行 `make quick`。hook 不替代交付前的一次 `make check`，其中包含逐产品文件 coverage 和定向 mutation。漏洞、跨平台和 release dry-run 按变更面运行，完整矩阵由 CI 执行。
 
+### 本机数据目录
+
+`nano-harness tui` 默认把私有数据放在 `<用户配置目录>/nano-harness` 下，均可用 flag 改变，路径在加载时解析为绝对路径：
+
+| flag | 默认 | 内容 |
+|---|---|---|
+| `--session-root` | `sessions` | JSONL 会话 |
+| `--spill-root` | `spill` | 超出内联预算的完整工具输出，30 天后启动时清理；不得与 workspace 互相包含 |
+| `--attachment-root` | `attachments` | `/attach` 与 `read_image` 的规范化图片，按内容寻址，从不自动删除；不得与 workspace 互相包含 |
+
+调试或测试时为这些 flag 指定临时目录，可以避免触碰真实会话与附件。会话只保存图片引用，复制会话复现问题时需要同时复制附件根，规则见 [ADR-0017](decisions/0017-content-addressed-image-attachments.md)。
+
 ## 包与文件
 
 - 一个包表达一个职责，目录名使用短单数名。

@@ -23,19 +23,19 @@ const (
 	jpegBytes = "\xff\xd8\xffrest"
 )
 
-// fakeImages records normalization requests and returns a fixed image; the
-// real normalizer is covered by its own package and the assembled tests.
+// fakeImages records store requests and returns a fixed reference; the real
+// attachment store is covered by its own package and the assembled tests.
 type fakeImages struct {
 	mu     sync.Mutex
 	names  []string
 	data   []string
 	err    error
 	source stdimage.Point
-	// during runs inside NormalizeBytes before it returns.
+	// during runs inside SaveImage before it returns.
 	during func()
 }
 
-func (images *fakeImages) NormalizeBytes(_ context.Context, name string, data []byte) (session.Image, stdimage.Point, error) {
+func (images *fakeImages) SaveImage(_ context.Context, name string, data []byte) (session.Image, stdimage.Point, error) {
 	images.mu.Lock()
 	images.names = append(images.names, name)
 	images.data = append(images.data, string(data))
@@ -44,7 +44,7 @@ func (images *fakeImages) NormalizeBytes(_ context.Context, name string, data []
 	if during != nil {
 		during()
 	}
-	normalized := session.Image{ID: "img-1", Name: name, MediaType: "image/jpeg", Data: "anBlZw==", SHA256: strings.Repeat("a", 64), Width: 4, Height: 2}
+	normalized := session.Image{ID: session.ImageID(strings.Repeat("a", 64)), Name: name, MediaType: "image/jpeg", Bytes: 4, Width: 4, Height: 2}
 	if source == (stdimage.Point{}) {
 		source = stdimage.Pt(4, 2)
 	}
@@ -280,12 +280,7 @@ func TestImageHelpers_MatchUpstreamSemantics(t *testing.T) {
 			t.Errorf("toFixed2(%v) = %q, want %q", value, got, want)
 		}
 	}
-	for data, want := range map[string]int{"": 0, "eA==": 1, "eHk=": 2, "eHl6": 3} {
-		if got := decodedLength(data); got != want {
-			t.Errorf("decodedLength(%q) = %d", data, got)
-		}
-	}
-	image := session.Image{MediaType: "image/jpeg", Data: "eHl6", Width: 2, Height: 1}
+	image := session.Image{MediaType: "image/jpeg", Bytes: 3, Width: 2, Height: 1}
 	if got := formatImageRead("/w/p.jpg", image, stdimage.Pt(5, 2)); !strings.Contains(got, "(downscaled from 5x2 px; multiply x coordinates by 2.50 and y coordinates by 2.00 to locate features in the original file)") {
 		t.Fatalf("per-axis = %q", got)
 	}

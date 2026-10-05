@@ -44,9 +44,9 @@ internal/platform
 所有运行时组件实现 `internal/core/plugin.Plugin`，由 `cmd/nano-harness` 以确定顺序启动：
 
 ```text
-settings → settings file → credential store → LLM runtime
+settings → settings file → credential store → attachments → LLM runtime
 → OpenAI/Anthropic/OpenRouter providers → approval → user questions
-→ tool runtime → spill store → images → prompt → plan mode → retry → compaction → web
+→ tool runtime → spill store → prompt → plan mode → retry → compaction → web
 → sessions → agent engine → subagents → goals
 → file/search/shell tools → jobs → job/subagent/todo/web/question/plan/skill/goal tools
 → agent registry → root bootstrap → goal driver → TUI
@@ -112,7 +112,7 @@ OpenAI Responses | Anthropic Messages | OpenRouter Chat Completions
 - provider 拥有自己的 model catalog、认证方法、OAuth 刷新和 wire/SSE 解析；agent 不判断 provider 类型。
 - `PrepareCall` 先冻结 provider/model/settings，再解析账户，并在 OAuth 即将过期时通过 credential store 的跨进程互斥事务刷新。一次 call 不会在流中途切换 route、endpoint 或 credential。
 - 请求由 system、replay surface、tool schema 和可选 max tokens 组成；模型目录还可冻结 provider-neutral `effort`。输出归一为按序 text/reasoning/tool chunk、assistant message、tool calls、usage 和 stop reason。
-- 发送前 provider 对 surface 做确定性的图片预算投影：每个请求最多 20 个图片、base64 合计 10 MiB，从最新的图片向前保留，更早的图片换成上游 offload 占位文本。工具结果图片的三种 wire 形态与预算规则见 [ADR-0015](decisions/0015-multimodal-tool-results.md)。
+- 会话中的图片只是附件引用。`Call.Stream` 先对 surface 做确定性的图片预算投影：每个请求最多 20 个图片、base64（按引用的 `bytes` 计算）合计 10 MiB，从最新的图片向前保留，更早的图片换成上游 offload 占位文本；模型声明 vision 时再经 `llm.ImageReader` 按 ID 读取一次保留下来的图片，校验通过的字节放进 `Request.Images`，缺失或校验失败的图片换成 unavailable 占位文本，其他读取错误使请求失败。provider 只做 base64 编码和 wire 映射，三种工具结果图片形态见 [ADR-0015](decisions/0015-multimodal-tool-results.md)，存储与占位规则见 [ADR-0017](decisions/0017-content-addressed-image-attachments.md)。
 - OpenAI API key 使用 Responses；导入或自有 ChatGPT OAuth 使用 Codex Responses 边界，两者把 `effort` 写入 `reasoning.effort`。Anthropic Messages 写入 `output_config.effort`，OpenRouter 的 OpenAI compatible Chat Completions 写入 `reasoning_effort`。未配置时省略字段；配置的取值无法由目标协议表达时，settings 校验失败，不降级或丢弃。
 - provider 只暴露稳定错误类别：认证、限流、服务端、超时、transport、protocol、非法请求、context window 和空响应。远端正文不进入安全错误。
 - `PreparedModel.Search` 用同一冻结的 endpoint、模型目录项（含 `effort`）和账户发起一次服务端 web 检索，归一为可选回答文本与按 provider 顺序去重的来源。三种 wire 见 [Web 检索与抓取](#web-检索与抓取)。
@@ -301,12 +301,14 @@ goal driver ──Followup(<goal_round>)──► agent worker ──► engine.
 
 ## 图片输入
 
-图片从两个入口进入会话，二者共用 `images` 插件（`internal/adapter/media/image`）的规范化：接受 PNG、JPEG、WebP 和 GIF（取第一帧），源文件最多 20 MiB、1600 万像素，最长边缩放到 2048，透明像素合成到白色，重新编码为不超过 4 MiB 的 JPEG，记录尺寸、SHA-256 和标准 base64。
+图片字节保存在会话日志之外的附件存储中，会话只保存内容寻址引用 `{id: "sha256:<hex>", name, media_type, bytes, width, height}`。`attachments` 插件（`internal/adapter/attachment`）同时负责规范化和本地存储，与上游 `attachment-local` 对应：
 
-- TUI 的 `/attach` 显式读取用户选择的本地文件，图片作为 `user/message` content block 持久化。
-- 模型调用 `read_image` 读取 workspace 图片。工具在执行点要求本 step 的模型声明图片输入，路径约束与 `read` 相同；规范化图片作为 `tool/result` 的 `image` 字段持久化，结果文本是上游信封（路径、尺寸、字节数和缩放倍数）。`fs-tools` 消费自己定义的 `ImageNormalizer` 接口，由 `cmd` 注入 `images` 插件。
+- 规范化接受 PNG、JPEG、WebP 和 GIF（取第一帧），源文件最多 20 MiB、1600 万像素，透明像素先合成到白色，再把最长边缩放到 2048，重新编码为不超过 4 MiB 的 JPEG。与上游相同，同一存储最多同时规范化两张图片，等待中的调用随 context 取消。
+- 存储根由 `--attachment-root` 配置（默认 `<用户配置目录>/nano-harness/attachments`），不得与 workspace 互相包含。对象位于 `v1/objects/<sha256 前两位>/<sha256>`：暂存、`fsync`、排他硬链接发布、只读 `0400`、同步目录后才返回引用；相同字节共享一个对象，从不自动删除。读取时校验长度、SHA-256、类型和宽高。
+- TUI 的 `/attach` 只规范化并在内存中保留待发送图片；消息提交（`Submit` 或 `Steer`）前先写入存储，再提交引用，未发送的附件不留下对象。
+- 模型调用 `read_image` 读取 workspace 图片。工具在执行点要求本 step 的模型声明图片输入，路径约束与 `read` 相同；规范化图片先写入存储，再作为 `tool/result` 的 `image` 引用提交，结果文本是上游信封（路径、尺寸、字节数和缩放倍数）。
 
-图片内联在会话日志中。engine 在提交带图片的记录前按 `transcript.Log.Remaining()` 检查容量，图片不得占用会话最后 8 MiB：放不下的工具结果图片变为错误结果，turn 继续；放不下的用户附件在排队前以 `agent.ErrImageCapacity` 拒绝，不写入任何记录。因而 resume、fork、compaction 和 vision provider 请求都从同一事实构建。模型不支持 vision 时 provider 在 wire 调用前拒绝含有任何图片的请求。格式、门禁、错误文案、provider wire 和与上游的差异见 [ADR-0015](decisions/0015-multimodal-tool-results.md)。
+`fs-tools`、TUI 与 `app/llm` 各自定义消费方接口，由 `cmd` 注入同一个插件。replay、resume、`Surface`、fork 种子、compaction 与 TUI 都只处理引用，fork child 与 parent 共享对象；只有 provider 请求读取字节。请求时发现对象缺失或校验失败，模型看到占位文本，TUI 显示一次不持久化的 `attachment>` 提示。模型不支持 vision 时 provider 在 wire 调用前拒绝含有任何图片的请求。格式、门禁与 provider wire 见 [ADR-0015](decisions/0015-multimodal-tool-results.md)，存储、引用格式、缺失处理与保留策略见 [ADR-0017](decisions/0017-content-addressed-image-attachments.md)。
 
 ## 事件、持久化与 replay
 
@@ -322,13 +324,13 @@ subagent/descriptor, subagent/catalog, todo/write, plan/mode, goal/change, step/
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、goal 停止语义（`goal-tools-v2`）与 spill 策略的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、goal 停止语义（`goal-tools-v2`）、spill 策略与附件引用格式（`attachments-v1`）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。`approval/asked` 的工具名必须等于 pending call 的名称；`approval/decided` 仅通过 approval ID 关联问题，不允许携带 `call_id`。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。
 - resume 会补写未决 approval 的 cancelled、未决 call 的 interrupted error、未结束 compaction/step/turn 的结束事实；不会截断 torn JSON、猜测未知格式或自动接受旧版本。
 - `session.Surface` 从 raw events 折叠消息、tool call/result 与 compaction replacements。TUI subscriber 只是可丢更新提示；磁盘 replay 仍是恢复来源。
-- `tool/result` 可以携带一张规范化图片（`image` 字段），校验与 user 图片相同；错误结果不能携带图片。图片随结果进入 surface。
+- 图片块（user message content block 与 `tool/result` 的 `image` 字段）只保存附件引用；严格 decoder 拒绝旧的内联 `data`/`sha256` 字段、非 `sha256:<64 位小写十六进制>` 的 ID 和越界的字节数或尺寸。错误结果不能携带图片。引用随结果进入 surface。
 - `todo/write` 必须位于活动 step，引用尚未得到 result 的 `todo_write` call，且每个 call 最多一条。它不进入 surface；模型只从自己的 tool call 参数和 tool result 看到列表。`session.StandingTodos` 把最新一条之后没有更晚 `turn/start` 的 `todo/write` 投影为当前计划。
 - `goal/change` 的 `turn` 与 `step` 都缺省，可出现在日志任意位置（人类命令可在 turn 进行中提交）。`session.GoalState.Apply` 校验 revision 连续、阶段迁移合法、时间戳不倒退、计数保持和目标 ID 不复用；`source.kind = "goal"` 的 `user/message` 必须携带 `goal_id`/`goal_revision`/`goal_round`，且恰为当前 active 目标当前 revision 的下一轮、不超过上限，其他来源不得携带这些字段。JSONL 在每次追加与读取时执行同一折叠，非法事实被拒绝且不写入。
 - 后台任务完成通知是 source kind 为 `tool-jobs` 的 `user/message`，agent 消息与子代理结算通知分别为 `agent-message` 和 `subagent-settled`，都没有专用记录类型；无工具调用的 step 之后可以出现 `user/message` 并继续 step。

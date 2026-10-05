@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -201,6 +202,10 @@ type Request struct {
 	Surface   []session.SurfaceNode
 	Tools     []session.ToolDefinition
 	MaxTokens int
+	// Images holds the verified bytes of every image the surface references,
+	// keyed by image ID. Call.Stream fills it after the request image budget
+	// is applied; providers encode only these bytes.
+	Images map[string][]byte
 }
 
 // StopMaxTokens identifies output truncated by the provider's token limit.
@@ -265,6 +270,7 @@ type Call struct {
 	provider   string
 	prepared   PreparedModel
 	credential Credential
+	images     ImageReader
 }
 
 // Info returns the frozen model metadata for this call.
@@ -275,7 +281,18 @@ func (call *Call) Stream(ctx context.Context, request Request, emit Emit) (Compl
 	if emit == nil {
 		return Completion{}, ErrInvalidConfig
 	}
-	return call.prepared.Stream(ctx, call.credential, cloneRequest(request), emit)
+	request = cloneRequest(request)
+	request.Surface = fitImages(request.Surface)
+	// A model without vision is refused by its provider before the network;
+	// reading images it cannot receive would only cost I/O.
+	if call.prepared.Info().Vision {
+		surface, images, err := resolveImages(ctx, call.images, request.Surface)
+		if err != nil {
+			return Completion{}, err
+		}
+		request.Surface, request.Images = surface, images
+	}
+	return call.prepared.Stream(ctx, call.credential, request, emit)
 }
 
 // Search runs one provider-side web search through the frozen provider snapshot.
@@ -288,8 +305,9 @@ func (call *Call) Search(ctx context.Context, request SearchRequest) (SearchResu
 
 // Runtime is the provider registry and authorization coordinator.
 type Runtime struct {
-	store CredentialStore
-	now   func() time.Time
+	store  CredentialStore
+	images ImageReader
+	now    func() time.Time
 
 	mu        sync.RWMutex
 	started   bool
@@ -297,12 +315,13 @@ type Runtime struct {
 	providers map[string]Provider
 }
 
-// New constructs an empty runtime over one account store.
-func New(store CredentialStore) (*Runtime, error) {
-	if store == nil {
+// New constructs an empty runtime over one account store and the image
+// store that holds the bytes behind session image references.
+func New(store CredentialStore, images ImageReader) (*Runtime, error) {
+	if store == nil || images == nil {
 		return nil, ErrInvalidConfig
 	}
-	return &Runtime{store: store, now: time.Now, providers: map[string]Provider{}}, nil
+	return &Runtime{store: store, images: images, now: time.Now, providers: map[string]Provider{}}, nil
 }
 
 // ID returns the stable LLM-runtime plugin identity.
@@ -399,7 +418,7 @@ func (runtime *Runtime) PrepareCall(ctx context.Context, providerID, modelID str
 			return nil, err
 		}
 	}
-	return &Call{provider: providerID, prepared: prepared, credential: credential}, nil
+	return &Call{provider: providerID, prepared: prepared, credential: credential, images: runtime.images}, nil
 }
 
 // Login runs one provider-owned interaction and atomically replaces its record.
@@ -522,6 +541,7 @@ func cloneRequest(request Request) Request {
 			node.Result = &result
 		}
 	}
+	request.Images = maps.Clone(request.Images)
 	request.Tools = slices.Clone(request.Tools)
 	for index := range request.Tools {
 		request.Tools[index].Parameters = slices.Clone(request.Tools[index].Parameters)

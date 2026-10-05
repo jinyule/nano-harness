@@ -101,7 +101,7 @@ func startSearchProviders(t *testing.T, endpoint string, client *http.Client) ma
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = settingsScope.Close(context.Background()) })
-	runtime, _ := llm.New(&providerStore{})
+	runtime, _ := llm.New(&providerStore{}, noImages{})
 	runtimeScope := &plugin.Scope{}
 	if err := runtime.Start(context.Background(), runtimeScope); err != nil {
 		t.Fatal(err)

@@ -296,7 +296,7 @@ func TestRuntime_ImageResultsStayInlineAndCarryTheRoute(t *testing.T) {
 	}
 	data := []byte("jpeg")
 	digest := sha256.Sum256(data)
-	image := &session.Image{ID: "img", Name: "x.png", MediaType: "image/jpeg", Data: "anBlZw==", SHA256: hex.EncodeToString(digest[:]), Width: 1, Height: 1}
+	image := &session.Image{ID: session.ImageID(hex.EncodeToString(digest[:])), Name: "x.png", MediaType: "image/jpeg", Bytes: len(data), Width: 1, Height: 1}
 	large := strings.Repeat("y", 60000)
 	var seen Route
 	scope := &plugin.Scope{}

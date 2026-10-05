@@ -100,7 +100,7 @@ func TestComposition_ShutdownQuiescesAgentsBeforeToolsAndTemporaryFiles(t *testi
 		t.Fatal(err)
 	}
 	config, err := normalizeConfig(applicationConfig{
-		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"), settingsPath: settingsPath,
+		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"), attachmentRoot: filepath.Join(data, "attachments"), settingsPath: settingsPath,
 		credentialPath: filepath.Join(data, "credentials.yaml"), skillsDir: filepath.Join(data, "skills"),
 		agentsSkillsDir: filepath.Join(data, "agents-skills"), sessionID: "session-shutdown", maxSteps: 8,
 	})
@@ -229,7 +229,7 @@ func rootRecords(t *testing.T, path string) (map[string]string, []session.TurnOu
 func TestComposition_StartOrderEncodesShutdownQuiescence(t *testing.T) {
 	root, data := t.TempDir(), t.TempDir()
 	config, err := normalizeConfig(applicationConfig{
-		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"),
+		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"), attachmentRoot: filepath.Join(data, "attachments"),
 		settingsPath: filepath.Join(data, "settings.yaml"), credentialPath: filepath.Join(data, "credentials.yaml"),
 		skillsDir: filepath.Join(data, "skills"), agentsSkillsDir: filepath.Join(data, "agents-skills"), sessionID: "order", maxSteps: 1,
 	})
@@ -252,6 +252,10 @@ func TestComposition_StartOrderEncodesShutdownQuiescence(t *testing.T) {
 	}
 	if position["jobs"] < position["shell-tools"] {
 		t.Fatalf("jobs must start after shell tools: %v", ids)
+	}
+	// The attachment store outlives every request image read and image write.
+	if position["attachments"] > position["llm"] || position["attachments"] > position["fs-tools"] {
+		t.Fatalf("attachments must start before the LLM runtime and the file tools: %v", ids)
 	}
 	tools := 0
 	for _, id := range ids {

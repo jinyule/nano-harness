@@ -1,6 +1,6 @@
 # ADR-0015：多模态工具结果与 read_image
 
-- 状态：Accepted
+- 状态：Accepted（持久化格式与会话容量部分被 ADR-0017 取代）
 - 日期：2026-10-05
 - 决策者：nano-harness maintainers
 
@@ -16,7 +16,9 @@
 
 ## 决策
 
-### 持久化格式
+> 本 ADR 的持久化格式（图片以 base64 内联在 JSONL）、“会话容量”一节与请求图片预算的实现位置已被 [ADR-0017](0017-content-addressed-image-attachments.md) 取代：图片现在是附件存储中的内容寻址引用，8 MiB 图片保留容量已删除，预算投影移到 `app/llm`。工具定义、门禁、信封、provider wire 形态与预算规则仍以本文为准。
+
+### 持久化格式（已被 ADR-0017 取代）
 
 `session.ToolResult` 增加可选字段 `image`，类型与 user message 的规范化图片相同（`id`、`name`、`media_type`、`data`、`sha256`、`width`、`height`），JSON 中在 `is_error` 之后，没有图片时省略：
 
@@ -71,7 +73,7 @@ image/jpeg image, 2048x682 px, 183245 bytes (downscaled from 3000x1000 px; multi
 
 与上游的差异：
 
-- 上游把干净的 PNG/JPEG/WebP 原样保存，GIF 和需要处理的图片重新编码为 WebP 或 JPEG，并保留透明度；本仓沿用既有规范化，一律输出 JPEG，透明像素合成到白色。Go 标准库与 `golang.org/x/image` 只提供 WebP 解码，没有编码器。
+- 上游把干净的 PNG/JPEG/WebP 原样保存，GIF 和需要处理的图片重新编码为 WebP 或 JPEG，并保留透明度；本仓沿用 `/attach` 既有的规范化，一律重新编码为 JPEG，透明像素合成到白色（缩放作用于已合成白底的图像）。这是为了沿用一条已有且有界的路径，而不是技术上做不到：Go 标准库可以原样保留干净的 PNG/JPEG，也可以用 PNG 编码保留透明度，只有 WebP 缺少编码器。原样直通和带透明度的 PNG 输出被暂缓，代价是干净的源图也会被重新压缩、透明背景变为白色；需要保留原始像素或透明度时重新评估。
 - 上游先按 2048×2048 的总像素预算缩放，再限制最长边 8192；本仓限制最长边 2048，因此超宽或超高的图片会缩得更小。上游的单边 8192 与 6400 万像素准入限制在本仓是 1600 万像素，没有单独的单边上限，`at least one image side exceeds` 文案因此不会出现。
 - GIF 取第一帧，与上游 sharp 的默认行为相同；动画 WebP 不被 `x/image/webp` 支持，按无法解码拒绝。EXIF 方向不校正。
 - 扩展名声明的格式与签名相同但解码失败时，上游原样抛出附件服务的 `Unsupported or malformed image data.`；本仓使用与无扩展名情况相同的说明文案。
@@ -98,7 +100,7 @@ image/jpeg image, 2048x682 px, 183245 bytes (downscaled from 3000x1000 px; multi
 - 投影只取决于 surface 和固定常量，同一份日志重建的每个请求省略同一组图片，不需要新的记录类型。compaction 移除旧前缀后，原先被省略、仍可见的图片可能重新发送；上游在这种情况下不恢复。
 - 20 张的上限同时避开 Anthropic 对超过 20 张图片请求的单图 2000 px 限制；10 MiB 为 system、历史文本、工具 schema 和 JSON 框架留出约 6 MiB。
 
-### 会话容量
+### 会话容量（已被 ADR-0017 取代）
 
 图片内联在会话 JSONL 中，而单会话上限是 64 MiB（单 record 6 MiB）。一张最大尺寸的规范化图片约占 5.6 MiB，模型又可以反复调用 `read_image`，因此图片可能比文本更快写满会话。写满后每次追加都会失败，会话无法继续。为此 engine 在提交任何带图片的记录前检查容量：
 
@@ -119,7 +121,7 @@ image/jpeg image, 2048x682 px, 183245 bytes (downscaled from 3000x1000 px; multi
 
 ## 后果
 
-模型在本仓和上游看到相同的 `read_image` 定义、门禁文案、信封和 provider 侧图片形态。工具结果图片与 user 图片共用校验、规范化和 replay，`Surface` 仍是唯一的请求来源，resume 无需额外存储。
+模型在本仓和上游看到相同的 `read_image` 定义、信封格式和 provider 侧图片形态；空路径、扩展名、route 与 vision 门禁的文案与上游相同，但规范化相关的拒绝与上游不同（像素上限是 1600 万、没有单边上限文案、解码失败统一使用一条说明），规范化结果也不同（一律 JPEG、透明变白），差异见上文。工具结果图片与 user 图片共用校验、规范化和 replay，`Surface` 仍是唯一的请求来源，resume 无需额外存储。
 
 代价与风险：
 

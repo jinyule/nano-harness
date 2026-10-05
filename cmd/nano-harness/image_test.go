@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -17,14 +16,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	sessionjsonl "github.com/jinyule/nano-harness/internal/adapter/session/jsonl"
-	"github.com/jinyule/nano-harness/internal/app/agent"
-	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
@@ -118,7 +115,7 @@ func imageConfig(t *testing.T, serverURL, root, data string, vision bool) applic
 		t.Fatal(err)
 	}
 	config, err := normalizeConfig(applicationConfig{
-		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"), settingsPath: settingsPath,
+		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"), attachmentRoot: filepath.Join(data, "attachments"), settingsPath: settingsPath,
 		credentialPath: filepath.Join(data, "credentials.yaml"), skillsDir: filepath.Join(data, "skills"),
 		agentsSkillsDir: filepath.Join(data, "agents-skills"), sessionID: "session-image", maxSteps: 4,
 	})
@@ -188,10 +185,31 @@ func imageResults(events []session.Event) []*session.ToolResult {
 	return results
 }
 
+// attachmentObject returns the stored bytes behind ref under the store root
+// and checks that the object is read-only.
+func attachmentObject(t *testing.T, root string, ref *session.Image) []byte {
+	t.Helper()
+	digest, ok := session.ImageDigest(ref.ID)
+	if !ok {
+		t.Fatalf("reference ID %q", ref.ID)
+	}
+	path := filepath.Join(root, "v1", "objects", digest[:2], digest)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || runtime.GOOS != "windows" && info.Mode().Perm() != 0o400 {
+		t.Fatalf("attachment object = %v %v", info, err)
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // the path is derived from the test-owned attachment root
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 // TestComposition_ReadImageEndToEnd drives read_image through the real
-// composition: the workspace PNG is normalized into the durable tool result,
-// the next provider request carries that exact image, and a resumed process
-// replays it from the log.
+// composition: the workspace PNG is normalized into the attachment store,
+// the transcript keeps only its reference, the next provider request carries
+// the stored bytes, a resumed process and a fork resolve the same object, and
+// a missing object degrades to a placeholder instead of failing the turn.
 func TestComposition_ReadImageEndToEnd(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	scripted := newImageServer(t)
@@ -210,17 +228,22 @@ func TestComposition_ReadImageEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	normalized, err := base64.StdEncoding.DecodeString(result.Image.Data)
-	if err != nil {
-		t.Fatal(err)
-	}
+	normalized := attachmentObject(t, config.attachmentRoot, result.Image)
 	digest := sha256.Sum256(normalized)
 	wantEnvelope := fmt.Sprintf("<path>%s</path>\n<type>image</type>\n<content>\nimage/jpeg image, 2048x682 px, %d bytes (downscaled from 3000x1000 px; multiply x coordinates by 1.46 and y coordinates by 1.47 to locate features in the original file)\n</content>", filepath.Join(resolved, "shots", "wide.png"), len(normalized))
-	if result.Output != wantEnvelope || result.Image.MediaType != "image/jpeg" || result.Image.Width != 2048 || result.Image.Height != 682 || result.Image.Name != "wide.png" || result.Image.SHA256 != hex.EncodeToString(digest[:]) {
+	if result.Output != wantEnvelope || result.Image.MediaType != "image/jpeg" || result.Image.Width != 2048 || result.Image.Height != 682 || result.Image.Name != "wide.png" || result.Image.ID != session.ImageID(hex.EncodeToString(digest[:])) || result.Image.Bytes != len(normalized) {
 		t.Fatalf("image result = %q %+v", result.Output, *result.Image)
 	}
 	if decoded, format, err := image.DecodeConfig(bytes.NewReader(normalized)); err != nil || format != "jpeg" || decoded.Width != 2048 {
 		t.Fatalf("normalized bytes = %v %q %v", decoded, format, err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(normalized)
+	transcript, err := os.ReadFile(filepath.Join(data, "sessions", "session-image.jsonl")) //nolint:gosec // the path is rooted in this test's private temporary directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(transcript, []byte(encoded[:64])) || !bytes.Contains(transcript, []byte(`"image":{"id":"`+result.Image.ID+`"`)) {
+		t.Fatal("the transcript holds image bytes instead of only the reference")
 	}
 	var schema bool
 	for _, event := range events {
@@ -235,7 +258,7 @@ func TestComposition_ReadImageEndToEnd(t *testing.T) {
 	}
 
 	// The next request carries the persisted image inside the tool output.
-	dataURL := "data:image/jpeg;base64," + result.Image.Data
+	dataURL := "data:image/jpeg;base64," + encoded
 	requests := scripted.requests()
 	if len(requests) != 2 || strings.Contains(requests[0], "input_image") {
 		t.Fatalf("requests = %d", len(requests))
@@ -281,6 +304,22 @@ func TestComposition_ReadImageEndToEnd(t *testing.T) {
 	if !strings.Contains(requests[4], "CHILD_SAW") {
 		t.Fatal("parent did not receive the fork result")
 	}
+	// The fork shares the parent's object instead of copying its bytes.
+	if entries, err := os.ReadDir(filepath.Join(config.attachmentRoot, "v1", "objects", strings.TrimPrefix(result.Image.ID, "sha256:")[:2])); err != nil || len(entries) != 1 {
+		t.Fatalf("objects after fork = %v %v", entries, err)
+	}
+
+	// A missing object becomes a placeholder; the turn still completes.
+	digestHex, _ := session.ImageDigest(result.Image.ID)
+	if err := os.Remove(filepath.Join(config.attachmentRoot, "v1", "objects", digestHex[:2], digestHex)); err != nil {
+		t.Fatal(err)
+	}
+	runImageTurn(t, config, scripted.server.Client(), "and again")
+	requests = scripted.requests()
+	last := requests[len(requests)-1]
+	if strings.Contains(last, "input_image") || !strings.Contains(last, `[image unavailable: \"wide.png\" (`+result.Image.ID+`) is missing or failed verification in the local attachment store]`) {
+		t.Fatalf("request after the object vanished: %.400s", last)
+	}
 }
 
 // TestComposition_ReadImageRefusesTextOnlyModels proves the route gate in
@@ -312,158 +351,84 @@ func TestCompositionID_BindsReadImageSemantics(t *testing.T) {
 	}
 }
 
-// imageReserve mirrors the agent's image reserve: images may never use the
-// last 8 MiB of a session's capacity.
-const imageReserve = 8 << 20
-
-// fillSession appends one closed turn of text input to the session until it
-// can accept only about imageReserve+headroom more bytes.
-func fillSession(t *testing.T, config applicationConfig, headroom int64) {
-	t.Helper()
-	manager, err := sessionjsonl.New(sessionjsonl.Config{Root: config.sessionRoot, CompositionID: compositionID(config)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	scope := &plugin.Scope{}
-	if err := manager.Start(t.Context(), scope); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = scope.Close(context.Background()) }()
-	log, err := manager.Open(t.Context(), sessionjsonl.OpenOptions{SessionID: config.sessionID, Cwd: config.workspaceRoot})
-	if err != nil {
-		t.Fatal(err)
-	}
-	events, err := log.Events(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	turn := nextTurnNumber(events)
-	if _, err := log.Append(t.Context(), session.Record{Type: session.RecordTurnStart, Turn: turn}); err != nil {
-		t.Fatal(err)
-	}
-	// A compaction summary shadows the filler, so requests stay small while
-	// the raw log keeps every byte. The filler stops early enough for the
-	// compaction and closing records to fit.
-	closing := int64(16 << 10)
-	target := int64(imageReserve) + headroom + closing
-	var filler []uint64
-	for {
-		gap := log.Remaining() - target
-		size := min(int64(session.MaxTextBytes), gap-256)
-		if size < 1 {
-			break
-		}
-		message := &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: strings.Repeat("x", int(size))}}}
-		event, err := log.Append(t.Context(), session.Record{Type: session.RecordUserMessage, Turn: turn, Message: message})
-		if err != nil {
-			t.Fatal(err)
-		}
-		filler = append(filler, event.Sequence)
-	}
-	summary := &session.CompactionData{ID: "filler", ShadowedSeqs: filler, ShadowedTokenCount: 1, Summary: []session.ContentBlock{{Type: session.ContentText, Text: "earlier filler"}}, Provider: "openai", Model: "test-model"}
-	for _, record := range []session.Record{
-		{Type: session.RecordCompactionStart, Turn: turn, Compaction: &session.CompactionData{ID: "filler"}},
-		{Type: session.RecordCompactionSummary, Turn: turn, Compaction: summary},
-		{Type: session.RecordCompactionEnd, Turn: turn, Compaction: &session.CompactionData{ID: "filler"}},
-		{Type: session.RecordTurnEnd, Turn: turn, Outcome: session.OutcomeCompleted},
-	} {
-		if _, err := log.Append(t.Context(), record); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if remaining := log.Remaining(); remaining < imageReserve+headroom || remaining > imageReserve+headroom+closing+1024 {
-		t.Fatalf("filled session has %d bytes left", remaining)
-	}
-	if err := log.Close(t.Context()); err != nil {
-		t.Fatal(err)
+func TestCompositionID_BindsAttachmentReferences(t *testing.T) {
+	config := applicationConfig{workspaceRoot: "/workspace"}
+	// The identity of the same composition while images were inline.
+	inline := sha256.Sum256([]byte("nano-harness-v2\x00/workspace\x00fs-tools-v3\x00search-tools-v3\x00shell-tools-v3\x00job-tools-v1\x00subagent-tools-v3\x00todo-tools-v1\x00web-tools-v1\x00question-tools-v1\x00plan-tools-v1\x00skill-tools-v1\x00goal-tools-v1\x00spill-v1\x00session-v2"))
+	if compositionID(config) == hex.EncodeToString(inline[:]) {
+		t.Fatal("sessions with inline images would resume under the attachment composition")
 	}
 }
 
-func nextTurnNumber(events []session.Event) uint64 {
-	var turn uint64
-	for _, event := range events {
-		turn = max(turn, event.Record.Turn)
-	}
-	return turn + 1
-}
-
-// TestComposition_ReadImageRefusesImagesTheSessionCannotHold proves that a
-// session near its size limit keeps working: an image that would eat into
-// the reserve becomes a tool error the model sees, a smaller image in the
-// same batch is kept, attachments are refused before anything is written,
-// and later text turns still commit.
-func TestComposition_ReadImageRefusesImagesTheSessionCannotHold(t *testing.T) {
+// TestComposition_DamagedAttachmentsBecomePlaceholders proves that an object
+// that is missing, truncated, rewritten with the same length, or of another
+// type than its reference never reaches the provider: the request carries
+// the placeholder instead, and the turn completes.
+func TestComposition_DamagedAttachmentsBecomePlaceholders(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	scripted := newImageServer(t)
 	root, data := t.TempDir(), t.TempDir()
 	writeWidePNG(t, filepath.Join(root, "shots", "wide.png"))
-	writePNG(t, filepath.Join(root, "shots", "tiny.png"), 2, 2)
 	config := imageConfig(t, scripted.server.URL, root, data, true)
-	runImageTurn(t, config, scripted.server.Client(), "hello")
+	runImageTurn(t, config, scripted.server.Client(), "describe shots/wide.png")
 	config.create = false
-	// The tiny image needs about 2 KB; the normalized wide image needs far
-	// more than the 30-46 KB left above the reserve.
-	fillSession(t, config, 30_000)
-	runImageTurn(t, config, scripted.server.Client(), "describe both")
-
 	transcript := filepath.Join(data, "sessions", "session-image.jsonl")
 	results := imageResults(readTranscript(t, transcript))
-	if len(results) != 2 || results[0].IsError || results[0].Image == nil || !results[1].IsError || results[1].Image != nil {
+	if len(results) != 1 || results[0].Image == nil {
 		t.Fatalf("tool results = %+v", results)
 	}
-	if want := "Error: the image was not kept: it needs about "; !strings.HasPrefix(results[1].Output, want) || !strings.HasSuffix(results[1].Output, "start a new session to read more images") {
-		t.Fatalf("refusal = %q", results[1].Output)
-	}
-	requests := scripted.requests()
-	followup := requests[len(requests)-1]
-	if strings.Count(followup, "input_image") != 1 || !strings.Contains(followup, "the image was not kept") {
-		t.Fatal("the model did not see the kept image and the refusal")
-	}
-
-	// An attachment that does not fit is refused before anything is written.
-	before, err := os.Stat(transcript)
+	ref := results[0].Image
+	digest, _ := session.ImageDigest(ref.ID)
+	object := filepath.Join(config.attachmentRoot, "v1", "objects", digest[:2], digest)
+	original := attachmentObject(t, config.attachmentRoot, ref)
+	log, err := os.ReadFile(transcript) //nolint:gosec // the path is rooted in this test's private temporary directory
 	if err != nil {
 		t.Fatal(err)
 	}
-	assembled, err := composeTUI(config, dependencies{httpClient: scripted.server.Client()})
-	if err != nil {
-		t.Fatal(err)
+	writeObject := func(content []byte) {
+		t.Helper()
+		_ = os.Chmod(object, 0o600)
+		if err := os.WriteFile(object, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := assembled.runtime.Start(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	rootAgent, err := assembled.root.Agent()
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload := bytes.Repeat([]byte{0xa5}, 64<<10)
-	digest := sha256.Sum256(payload)
-	attachment := &session.Image{ID: "img-large", Name: "large.jpg", MediaType: "image/jpeg", Data: base64.StdEncoding.EncodeToString(payload), SHA256: hex.EncodeToString(digest[:]), Width: 64, Height: 64}
-	message := session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: "look"}, {Type: session.ContentImage, Image: attachment}}}
-	if _, err := rootAgent.Submit(t.Context(), message); !errors.Is(err, agent.ErrImageCapacity) || !strings.Contains(err.Error(), "start a new session to attach them") {
-		t.Fatalf("attachment = %v", err)
-	}
-	shutdown, stop := context.WithTimeout(context.Background(), 5*time.Second)
-	defer stop()
-	if err := assembled.runtime.Shutdown(shutdown); err != nil {
-		t.Fatal(err)
-	}
-	if after, err := os.Stat(transcript); err != nil || after.Size() != before.Size() {
-		t.Fatalf("refused attachment changed the transcript: %v", err)
-	}
-
-	// Text turns still commit, and the log stays a valid session.
-	runImageTurn(t, config, scripted.server.Client(), "and now just text")
-	manager, err := sessionjsonl.New(sessionjsonl.Config{Root: config.sessionRoot, CompositionID: compositionID(config)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	inspectScope := &plugin.Scope{}
-	if err := manager.Start(t.Context(), inspectScope); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = inspectScope.Close(context.Background()) })
-	if _, events, err := manager.Inspect(t.Context(), config.sessionID); err != nil || events[len(events)-1].Record.Outcome != session.OutcomeCompleted {
-		t.Fatalf("inspect = %v", err)
+	flipped := append([]byte(nil), original...)
+	flipped[len(flipped)/2] ^= 0xff
+	placeholder := `[image unavailable: \"wide.png\" (` + ref.ID + `) is missing or failed verification in the local attachment store]`
+	for _, test := range []struct {
+		name   string
+		damage func()
+	}{
+		{"missing", func() {
+			if err := os.Remove(object); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"truncated", func() { writeObject(original[:len(original)-10]) }},
+		{"digest mismatch", func() { writeObject(flipped) }},
+		{"type mismatch", func() {
+			// The reference now claims PNG while the verified bytes are JPEG.
+			changed := bytes.Replace(log, []byte(`"media_type":"image/jpeg","bytes":`), []byte(`"media_type":"image/png","bytes":`), 1)
+			if bytes.Equal(changed, log) {
+				t.Fatal("the transcript has no image reference to change")
+			}
+			if err := os.WriteFile(transcript, changed, 0o600); err != nil { //nolint:gosec // the path is rooted in this test's private temporary directory
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			writeObject(original)
+			if err := os.WriteFile(transcript, log, 0o600); err != nil { //nolint:gosec // the path is rooted in this test's private temporary directory
+				t.Fatal(err)
+			}
+			test.damage()
+			runImageTurn(t, config, scripted.server.Client(), "and again")
+			requests := scripted.requests()
+			last := requests[len(requests)-1]
+			if strings.Contains(last, "input_image") || !strings.Contains(last, placeholder) {
+				t.Fatalf("request with a %s object: %.400s", test.name, last)
+			}
+		})
 	}
 }

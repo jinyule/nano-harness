@@ -40,7 +40,7 @@ type Config struct {
 	Settings  SettingsService
 	Approval  ApprovalRegistry
 	Questions QuestionRegistry
-	Images    ImageNormalizer
+	Images    ImageStore
 	Subagents SubagentService
 	Goals     GoalService
 }
@@ -86,9 +86,21 @@ type SubagentService interface {
 	List(string) ([]appSubagent.Info, error)
 }
 
-// ImageNormalizer is the local attachment boundary consumed by the TUI.
-type ImageNormalizer interface {
-	Normalize(context.Context, string) (session.Image, error)
+// ImageStore is the attachment boundary behind /attach. PrepareFile
+// normalizes the chosen file without storing it; Commit makes the bytes
+// durable and runs before the message that cites them is submitted, so an
+// attachment that is never sent leaves nothing in the store.
+// ObserveUnavailable reports images a model request could not read.
+type ImageStore interface {
+	PrepareFile(context.Context, string) (session.Image, []byte, error)
+	Commit(context.Context, session.Image, []byte) error
+	ObserveUnavailable(func(session.Image, error), *plugin.Scope) error
+}
+
+// pendingImage is a normalized attachment waiting for the next message.
+type pendingImage struct {
+	ref  session.Image
+	data []byte
 }
 
 type approvalEnvelope struct {
@@ -124,13 +136,22 @@ type operationMessage struct {
 }
 type turnMessage struct{ result agent.TurnResult }
 type attachmentMessage struct {
-	image session.Image
+	image pendingImage
 	err   error
 }
+
+// unavailableImageMessage reports an image a model request replaced with a
+// placeholder because its stored object was missing or did not verify.
+type unavailableImageMessage struct {
+	image   session.Image
+	missing bool
+}
+
 type planMessage struct {
 	text    string
 	err     error
 	message *session.Message
+	pending []pendingImage
 }
 
 // App is both a lifecycle plugin, approval broker, and auth interaction.
@@ -243,7 +264,22 @@ func (app *App) Start(ctx context.Context, scope *plugin.Scope) error {
 		_ = scope.Close(context.WithoutCancel(ctx))
 		return err
 	}
+	if err := app.config.Images.ObserveUnavailable(app.imageUnavailable, scope); err != nil {
+		_ = scope.Close(context.WithoutCancel(ctx))
+		return err
+	}
 	return nil
+}
+
+// imageUnavailable runs on the goroutine that built a model request, so it
+// never waits for the terminal: when the event queue is full the notice is
+// dropped, and a later request reports the same image again.
+func (app *App) imageUnavailable(image session.Image, err error) {
+	select {
+	case app.events <- unavailableImageMessage{image: image, missing: errors.Is(err, session.ErrAttachmentMissing)}:
+	case <-app.stop:
+	default:
+	}
 }
 
 // Run owns one alternate-screen Bubble Tea program until quit or cancellation.

@@ -1,8 +1,8 @@
 package main
 
 import (
+	"github.com/jinyule/nano-harness/internal/adapter/attachment"
 	credentialfile "github.com/jinyule/nano-harness/internal/adapter/credential/file"
-	mediaimage "github.com/jinyule/nano-harness/internal/adapter/media/image"
 	modelprovider "github.com/jinyule/nano-harness/internal/adapter/model/provider"
 	sessionjsonl "github.com/jinyule/nano-harness/internal/adapter/session/jsonl"
 	settingsfile "github.com/jinyule/nano-harness/internal/adapter/settings/file"
@@ -48,7 +48,7 @@ type application struct {
 	settings  *settings.Service
 	approval  *approval.Service
 	questions *question.Service
-	images    *mediaimage.Normalizer
+	images    *attachment.Store
 	subagents *subagent.Service
 	goals     *appGoal.Service
 }
@@ -56,6 +56,7 @@ type application struct {
 var (
 	newSettingsProvider  = settingsfile.New
 	newCredentialStore   = credentialfile.New
+	newAttachmentStore   = attachment.New
 	newModelRuntime      = llm.New
 	newModelProvider     = modelprovider.New
 	newToolRuntime       = appTool.New
@@ -95,7 +96,11 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
-	modelRuntime, err := newModelRuntime(credentials)
+	images, err := newAttachmentStore(attachment.Config{Root: config.attachmentRoot})
+	if err != nil {
+		return nil, err
+	}
+	modelRuntime, err := newModelRuntime(credentials, images)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +126,6 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
-	images := mediaimage.New()
 	assembler := prompt.New()
 	planMode := plan.New()
 	retryService, err := newRetryService(configuration)
@@ -229,10 +233,12 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	//   - jobs start after shell tools, so they stop every background process
 	//     before the shell temporary directory is removed;
 	//   - spill, sessions, and the engine outlive everything that writes them.
+	//   - attachments start before the LLM runtime, so they stop after the
+	//     last request image read and the last image write.
 	plugins := []plugin.Plugin{
-		configuration, settingsProvider, credentials, modelRuntime,
+		configuration, settingsProvider, credentials, images, modelRuntime,
 		providers[0], providers[1], providers[2], approvalService, questionService, toolRuntime, spillStore,
-		images, assembler, planMode, retryService, compactionService, webService, sessions, engine,
+		assembler, planMode, retryService, compactionService, webService, sessions, engine,
 		subagents, goals, fileTools, searchTools, shellTools, jobs, jobTools, subagentTools, todoTools, webTools,
 		questionTools, planTools, skillTools, goalTools, registry, root, goalDriver,
 	}
