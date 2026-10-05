@@ -145,5 +145,12 @@
     "before": "if node.Result != nil && node.Result.Image != nil {",
     "after": "if false && node.Result != nil && node.Result.Image != nil {",
     "test": "^TestStream_RefusesToolResultImagesForTextModelsBeforeNetwork$"
+  },
+  {
+    "id": "image-session-reserve",
+    "file": "internal/app/agent/capacity.go",
+    "before": "return need, available, need <= available",
+    "after": "return need, available, true",
+    "test": "^TestEngine_KeepsTurnsWorkingWhenImagesDoNotFit$"
   }
 ]

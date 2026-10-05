@@ -22,6 +22,8 @@ type memoryLog struct {
 	flushErr   error
 	closeErr   error
 	closed     bool
+	// remaining is the reported capacity; zero means effectively unbounded.
+	remaining int64
 }
 
 func (log *memoryLog) Header() session.Header { return log.header }
@@ -60,6 +62,15 @@ func (log *memoryLog) Events(context.Context) ([]session.Event, error) {
 	return events, nil
 }
 func (log *memoryLog) Flush(context.Context) error { return log.flushErr }
+
+func (log *memoryLog) Remaining() int64 {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if log.remaining == 0 {
+		return 1 << 40
+	}
+	return log.remaining
+}
 func (log *memoryLog) Close(context.Context) error {
 	log.closed = true
 	return log.closeErr

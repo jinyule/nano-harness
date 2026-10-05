@@ -25,6 +25,9 @@ type Log interface {
 	Path() string
 	Append(context.Context, session.Record) (session.Event, error)
 	Events(context.Context) ([]session.Event, error)
+	// Remaining reports how many more encoded bytes the log accepts before
+	// its size limit; an append beyond it fails without writing.
+	Remaining() int64
 	Flush(context.Context) error
 	Close(context.Context) error
 }

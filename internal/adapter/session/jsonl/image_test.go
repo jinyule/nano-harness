@@ -127,3 +127,24 @@ func TestSessionV2Image_RejectsChangedContract(t *testing.T) {
 		})
 	}
 }
+
+func TestLog_RemainingTracksTheSessionSizeLimit(t *testing.T) {
+	manager, scope := startManager(t)
+	t.Cleanup(func() { _ = scope.Close(context.Background()) })
+	log, err := manager.Open(t.Context(), OpenOptions{SessionID: "remaining", Create: true, Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = log.Close(context.Background()) })
+	info, err := os.Stat(log.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := log.Remaining(); got != maxSessionBytes-info.Size() {
+		t.Fatalf("remaining after header = %d, file = %d", got, info.Size())
+	}
+	appendRecord(t, log, coresession.Record{Type: coresession.RecordTurnStart, Turn: 1})
+	if info, err = os.Stat(log.Path()); err != nil || log.Remaining() != maxSessionBytes-info.Size() {
+		t.Fatalf("remaining after append = %d, file = %d (%v)", log.Remaining(), info.Size(), err)
+	}
+}

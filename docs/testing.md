@@ -102,7 +102,7 @@ TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event f
 
 `TestComposition_SkillCatalogToolAndGesture` 经真实 composition 和 loopback provider 证明：第一次请求带有目录且不含禁止模型调用的 skill 和任何正文，模型调用 `skill` 后下一次请求带有完整 `<skill_content>`，运行中新增的 skill 在下一 turn 产生替换目录，`/name` 注入 user-only skill，重启进程后从磁盘日志推导目录而不重复发布。
 
-`TestComposition_ReadImageEndToEnd` 经真实 CLI config、settings 文件和 composition 让 loopback 模型对 workspace 中 3000×1000 的 PNG 调用 `read_image`：从磁盘 transcript 断言结果信封（路径、规范化字节数、缩放倍数）、`image` 字段的 2048×682 JPEG 与 SHA-256，并比较下一次 provider 请求中 `function_call_output` 的 `input_text`/`input_image` 数组；随后以新 composition 恢复同一会话，证明 replay 请求携带同一张图片。`TestComposition_ReadImageRefusesTextOnlyModels` 证明模型未声明 vision 时结果是门禁错误、日志与请求都没有图片。
+`TestComposition_ReadImageEndToEnd` 经真实 CLI config、settings 文件和 composition 让 loopback 模型对 workspace 中 3000×1000 的 PNG 调用 `read_image`：从磁盘 transcript 断言结果信封（路径、规范化字节数、缩放倍数）、`image` 字段的 2048×682 JPEG 与 SHA-256，并比较下一次 provider 请求中 `function_call_output` 的 `input_text`/`input_image` 数组；随后以新 composition 恢复同一会话，证明 replay 请求携带同一张图片。`TestComposition_ReadImageRefusesTextOnlyModels` 证明模型未声明 vision 时结果是门禁错误、日志与请求都没有图片。`TestComposition_ReadImageRefusesImagesTheSessionCannotHold` 用真实 jsonl 把会话填到只剩约 8 MiB 加 30 KB（填充文本由 compaction summary 遮蔽，请求保持很小），然后在一个批次中读取一张小图和一张大图：小图保留，大图变为容量错误且模型在下一请求看到它，turn 正常完成；放不下的附件在 `Submit` 时被拒绝且 transcript 字节不变；之后的文本 turn 仍能提交，`Inspect` 读取的日志有效。
 
 命令级 failure matrix 覆盖路径归一化、create/resume、每个 constructor、runtime start、TUI run、shutdown、usage/version output 和 write failure；PATH 中没有 `rg` 时，`tui` 以退出码 1 结束并给出安装提示。发布 smoke 必须运行编译后的 `bin/nano-harness`，不能以 `go run` 或直接调用内部函数替代。
 
@@ -151,7 +151,7 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 
 ## 定向 mutation 与断言有效性
 
-`make mutation` 执行 `scripts/mutation-cases.json` 中二十一个已审查回归：Scope cleanup 顺序、approval never、会话序号、事件因果、read 字节上限、路径逃逸、写入跨 symlink、已提交输出后的 retry、web 抓取公网地址校验、同源重定向限制、后台 job 的 owner 隔离、delegated 提问拒绝、`plan/mode` 只在 step 边界、未读文件被 `write` 覆盖、spill 分区内预置链接、`send_message` 的直接父子授权、`interrupt_agent` 的后代授权、目标的人类权限排除 delegated agent、目标轮次必须属于当前 revision、`read_image` 的图片输入门禁，以及 provider 对工具结果图片的 vision 拒绝。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
+`make mutation` 执行 `scripts/mutation-cases.json` 中二十二个已审查回归：Scope cleanup 顺序、approval never、会话序号、事件因果、read 字节上限、路径逃逸、写入跨 symlink、已提交输出后的 retry、web 抓取公网地址校验、同源重定向限制、后台 job 的 owner 隔离、delegated 提问拒绝、`plan/mode` 只在 step 边界、未读文件被 `write` 覆盖、spill 分区内预置链接、`send_message` 的直接父子授权、`interrupt_agent` 的后代授权、目标的人类权限排除 delegated agent、目标轮次必须属于当前 revision、`read_image` 的图片输入门禁、provider 对工具结果图片的 vision 拒绝，以及图片不得占用会话保留容量。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
 
 执行器使用 Python 3 标准库，在 Unix 私有临时目录复制当前 cmd/internal、go.mod/go.sum（包含未提交源码与测试），拒绝源 symlink；不在工作树变异，不运行用户数据，不复用历史结果。每项先运行明确选择的真实测试且至少一个测试通过，再变异、独立编译、以 `-count=1` 重跑。只有 Go JSON 输出中的具名测试失败可认定 killed；build-error、timeout、infrastructure-error、no-tests、baseline failure、stale-site 和 survived 全部失败。当前列举的每个 site 都执行，不依赖 coverage 筛选，因此没有“缺失 coverage 就跳过”的成功路径。空集合、重复 ID 或找不到唯一替换位置均拒绝。超时终止并等待整个测试进程组；临时树最终清理。
 

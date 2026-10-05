@@ -51,6 +51,7 @@
 - `/attach` 只读取用户明确选择的本地普通文件，不扫描目录或跟随 symlink。
 - `read_image` 只读取 `workspace.Root.Readable` 允许的普通文件（规则与 `read` 相同），审批前先要求本 step 的模型声明图片输入，不满足时不读文件，图片也不会进入日志。读取中文件增长超过源上限时拒绝，不截断。
 - source 必须是 PNG、JPEG、WebP 或 GIF，最多 20 MiB、最多 1600 万像素；`read_image` 还要求文件签名与扩展名声明的格式一致。解码器只来自 Go 标准库与 `golang.org/x/image`；解码后最长边缩至 2048，透明像素合成到白色，并重新编码为最多 4 MiB 的 JPEG。
+- 图片不得占用会话 64 MiB 上限的最后 8 MiB：放不下的工具结果图片在提交前变为错误结果，放不下的附件在写入任何记录前被拒绝，追加失败不会让 turn 出错或损坏会话。
 - session 保存规范化字节的 standard base64、尺寸与 SHA-256；replay 时重新校验 digest、类型、尺寸和 decoded size，`user/message` 与 `tool/result` 中的图片规则相同，错误结果不能携带图片。
 - provider 请求只允许 user message 和成功的工具结果携带图片，assistant 消息中的图片被拒绝；所选模型没有 vision 能力时，含任何图片的请求在网络调用前被拒绝。每个请求最多发送 20 张、base64 合计 10 MiB 的图片，更早的图片替换为占位文本，见 [ADR-0015](decisions/0015-multimodal-tool-results.md)。
 

@@ -98,6 +98,15 @@ image/jpeg image, 2048x682 px, 183245 bytes (downscaled from 3000x1000 px; multi
 - 投影只取决于 surface 和固定常量，同一份日志重建的每个请求省略同一组图片，不需要新的记录类型。compaction 移除旧前缀后，原先被省略、仍可见的图片可能重新发送；上游在这种情况下不恢复。
 - 20 张的上限同时避开 Anthropic 对超过 20 张图片请求的单图 2000 px 限制；10 MiB 为 system、历史文本、工具 schema 和 JSON 框架留出约 6 MiB。
 
+### 会话容量
+
+图片内联在会话 JSONL 中，而单会话上限是 64 MiB（单 record 6 MiB）。一张最大尺寸的规范化图片约占 5.6 MiB，模型又可以反复调用 `read_image`，因此图片可能比文本更快写满会话。写满后每次追加都会失败，会话无法继续。为此 engine 在提交任何带图片的记录前检查容量：
+
+- `transcript.Log.Remaining()` 报告日志还能接受的字节数（jsonl 为 64 MiB 减去当前文件大小）。图片不得占用最后 8 MiB（`imageReserveBytes`），这部分留给之后的文本 step、compaction 和收尾记录；所需字节按记录的 JSON 编码加 64 字节序号框架估算。
+- 工具结果：engine 在追加前按 call 顺序逐条检查。放不下的图片结果改为错误结果 `Error: the image was not kept: it needs about <N> bytes, but this session can hold only <M> more bytes of images; start a new session to read more images`，图片不写入，turn 正常继续；同一批次中更早、更小的图片照常保留。
+- 用户输入：`Submit` 与 `Steer` 在排队前同步拒绝放不下的图片，错误 `agent.ErrImageCapacity` 说明所需与剩余字节并提示新开会话，TUI 显示为 `turn> error: …`；worker 在打开 turn 前再检查一次，拒绝时不写任何记录。turn 中途才排到、已放不下的 steer 去掉图片，保留文本并追加 `[images omitted: this session cannot hold more images; start a new session to attach them]`。
+- 按当前上限，图片最多可用约 56 MiB 减去已有文本：约 10 张最大尺寸图片，或一两百张常见截图。达到上限后会话仍可继续文本对话，直到 64 MiB 的通用上限。fork 的种子会复制 parent 已完成 turn 中的图片，child 起始时就可能接近上限，同样受此检查约束。
+
 ### TUI
 
 `result>` 行在结果文本之后显示 `[image <name> <宽>x<高> sha256:<前 12 位>]`，replay 与实时事件使用同一投影，终端不渲染图片本身。
@@ -114,14 +123,14 @@ image/jpeg image, 2048x682 px, 183245 bytes (downscaled from 3000x1000 px; multi
 
 代价与风险：
 
-- 图片内联在 JSONL 中，单会话 64 MiB 上限大约容纳十余张最大尺寸的图片或几十张常见截图；会话写满后需要新会话。
+- 图片内联在 JSONL 中，会话为文本保留 8 MiB 后，图片最多再容纳约 10 张最大尺寸或一两百张常见截图；超出时得到明确的错误并需要新开会话，fork 会再复制一份 parent 的图片。
 - 预算投影在图片过多时静默省略旧图，模型只能从占位文本得知；没有只读副本可供重新读取，模型需要再次调用 `read_image`。
 - JPEG 重编码丢失透明度和部分细节，长宽比悬殊的图片比上游缩得更小。
 - Codex Responses 对数组形态 `function_call_output` 的支持只有 loopback 协议证据，真实 ChatGPT 账户的 live 验证尚未进行。
 
 ## 被否决方案
 
-- **照搬上游的内容寻址附件存储**：日志之外的第二个持久化位置需要自己的权限、保留期、垃圾回收和恢复规则；当前内联格式已经满足重建与校验，等会话体积成为实际瓶颈再迁移。
+- **照搬上游的内容寻址附件存储**（会话只存引用）：可以让会话体积与图片无关，fork 也不再复制图片字节，但需要日志之外的第二个持久化位置及其权限、原子写入、保留期与垃圾回收、缺失附件时的恢复规则、请求构造时的读取与校验，以及新的记录格式和版本策略；会话文件也不再自包含。会话容量检查已经让超限变成可恢复的错误，因此暂不迁移，复审条件见下文。
 - **记录 `image/offload` 事件并在失败后重试**：没有 provider 返回可计数的预算错误，需要先构造失败才能触发；发送前投影得到同样稳定的结果且不浪费请求。
 - **工具结果图片放进 `ContentBlock` 列表**：一个结果最多一张图片，列表会引入无调用方需要的顺序与数量规则。
 - **Responses 也用追加 user 消息的方式**：上游 pi-ai 对 Responses 与 Codex 使用原生数组输出，只有 Chat Completions 退回 user 消息。
@@ -130,4 +139,4 @@ image/jpeg image, 2048x682 px, 183245 bytes (downscaled from 3000x1000 px; multi
 
 ## 复审触发条件
 
-上游改变 `read_image` 定义、信封或错误文案，或 pi-ai 改变工具结果图片的映射；单会话体积因图片成为实际限制；某个 provider 开始返回可计数的图片预算错误，或请求体上限变化；需要保留透明度、按 EXIF 方向校正或支持动画 WebP；产品需要文本模型继续使用含图片的会话；首次发布需要承诺旧会话迁移。
+上游改变 `read_image` 定义、信封或错误文案，或 pi-ai 改变工具结果图片的映射；用户在实际使用中经常触发 `ErrImageCapacity` 或图片结果的容量错误，或首次发布需要冻结会话格式（届时决定是否迁移到附件存储）；某个 provider 开始返回可计数的图片预算错误，或请求体上限变化；需要保留透明度、按 EXIF 方向校正或支持动画 WebP；产品需要文本模型继续使用含图片的会话；首次发布需要承诺旧会话迁移。

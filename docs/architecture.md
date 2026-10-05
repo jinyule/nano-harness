@@ -296,7 +296,7 @@ goal driver ──Followup(<goal_round>)──► agent worker ──► engine.
 - TUI 的 `/attach` 显式读取用户选择的本地文件，图片作为 `user/message` content block 持久化。
 - 模型调用 `read_image` 读取 workspace 图片。工具在执行点要求本 step 的模型声明图片输入，路径约束与 `read` 相同；规范化图片作为 `tool/result` 的 `image` 字段持久化，结果文本是上游信封（路径、尺寸、字节数和缩放倍数）。`fs-tools` 消费自己定义的 `ImageNormalizer` 接口，由 `cmd` 注入 `images` 插件。
 
-因而 resume、fork、compaction 和 vision provider 请求都从同一事实构建。模型不支持 vision 时 provider 在 wire 调用前拒绝含有任何图片的请求。格式、门禁、错误文案、provider wire 和与上游的差异见 [ADR-0015](decisions/0015-multimodal-tool-results.md)。
+图片内联在会话日志中。engine 在提交带图片的记录前按 `transcript.Log.Remaining()` 检查容量，图片不得占用会话最后 8 MiB：放不下的工具结果图片变为错误结果，turn 继续；放不下的用户附件在排队前以 `agent.ErrImageCapacity` 拒绝，不写入任何记录。因而 resume、fork、compaction 和 vision provider 请求都从同一事实构建。模型不支持 vision 时 provider 在 wire 调用前拒绝含有任何图片的请求。格式、门禁、错误文案、provider wire 和与上游的差异见 [ADR-0015](decisions/0015-multimodal-tool-results.md)。
 
 ## 事件、持久化与 replay
 

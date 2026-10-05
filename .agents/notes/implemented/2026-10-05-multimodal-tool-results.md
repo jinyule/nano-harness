@@ -23,6 +23,7 @@
 - TUI：`result>` 行追加 `[image <name> <W>x<H> sha256:<12 位>]`。
 - `cmd`：`fs-tools` 注入 `images`，composition token 改为 `fs-tools-v3`；两份工具 fixture 加入 `read_image`，上游定义数量断言加一（rebase 到 WP10 后为 24）。`scripts/tui-e2e.py` 增加一次 `read_image` 调用并检查请求中的图片；mutation 新增 `read-image-route-gate` 与 `provider-result-image-vision`。
 - 新增 `internal/adapter/session/jsonl/testdata/session-v2-image.jsonl` 固定样本。
+- 会话容量（整体审查后的修复）：`transcript.Log` 增加 `Remaining()`，`internal/app/agent/capacity.go` 让图片不得占用会话最后 8 MiB。工具结果图片放不下时改为错误结果、turn 继续；附件在 `Submit`/`Steer` 时以 `ErrImageCapacity` 同步拒绝，worker 打开 turn 前再查一次且不写记录；turn 中途放不下的 steer 去掉图片并附上说明。上游的独立附件存储经评估暂缓，理由与复审条件见 ADR-0015。
 
 ## Consequences
 
@@ -38,4 +39,5 @@ rebase 到 WP7（`00803e7`）与 WP10（`d8ba519`）后，fork child 以 parent 
 - `GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check`：通过，包括 golangci-lint、逐产品文件 100.0% coverage、architecture、agent notes、skills、21 个 mutation 全部 killed（含新增两项）以及 `make build` smoke。
 - `make tui-e2e`：`PASS: real binary/PTY, 19 root tool calls, read_image result image, …`，终端显示图片摘要，根会话第五个结果带 2×2 规范化 JPEG，下一次请求携带同一 data URL。
 - 关键场景：`TestComposition_ReadImageEndToEnd`（3000×1000 PNG → 2048×682 JPEG、信封、下一请求的数组输出、resume 后重放同一图片，以及 resume 后 `subagent_fork` 的 child 请求从继承的种子事件中发送同一图片）、`TestComposition_ReadImageRefusesTextOnlyModels`、`TestStream_SendsToolResultImagesInEachWireFormat`（三种协议请求字节）、`TestStream_RefusesToolResultImagesForTextModelsBeforeNetwork`、`TestFitImages_OmitsTheOldestOccurrencesBeyondTheBudget`、`TestSessionV2Image_FrozenContract`/`RejectsChangedContract`、`TestNormalizeBytes_AcceptsWebPAndFirstGIFFrameOnWhite`、`TestReadImage_*`。
+- 容量修复：`TestComposition_ReadImageRefusesImagesTheSessionCannotHold`（真实 jsonl 填到接近上限后，小图保留、大图成为模型可见的错误、附件被拒且 transcript 字节不变、后续文本 turn 正常）、`internal/app/agent` 的 `TestImageRoom_KeepsTheReserveFree`、`TestEngine_KeepsTurnsWorkingWhenImagesDoNotFit`、`TestAgent_RefusesAttachmentsTheSessionCannotHold`，jsonl 的 `TestLog_RemainingTracksTheSessionSizeLimit`；mutation `image-session-reserve` 证明去掉检查后测试失败。
 - 尚未获得：真实 ChatGPT Codex、Anthropic 和 OpenRouter 账户对工具结果图片的 live 验证；只有 loopback 协议证据。
