@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import shutil
 import signal
@@ -63,7 +64,14 @@ class Fixture(http.server.BaseHTTPRequestHandler):
                 self.emit("response.output_text.delta", delta="WAITING_FOR_INTERRUPT")
                 self.server.stopping.wait()
                 return
-            if "PLAN_TASK" in task:
+            if "<goal_complete>" in task:
+                call = None
+                text = "GOAL_CLOSED"
+            elif "<goal_round>" in task:
+                goal = re.search(r'"id":"(goal-[0-9a-f]+)"', " ".join(outputs))
+                call = ("get_goal", {}) if not outputs else ("update_goal", {"goal_id": goal.group(1), "revision": 1, "action": "complete"})
+                text = "GOAL_ROUND_DONE"
+            elif "PLAN_TASK" in task:
                 call = None if outputs else ("exit_plan_mode", {"plan": "# PTY plan\n\n- verify the review"})
                 text = "PLAN_DONE"
             elif task.startswith("CHILD_FORK"):
@@ -250,6 +258,17 @@ def verify(binary):
                 terminal.send("1\r")
                 terminal.expect("PLAN_DONE")
                 terminal.expect("turn> completed")
+                # A /goal objective arms the driver, whose round completes the goal.
+                terminal.send("/goal PTY_GOAL ship it\r")
+                terminal.expect("goal> Goal created")
+                terminal.expect("goal> round 1")
+                terminal.expect("goal> <goal_complete>")
+                terminal.expect("GOAL_CLOSED")
+                terminal.expect("turn> completed")
+                terminal.send("/goal\r")
+                terminal.expect("goal> Status: complete")
+                # The header is redrawn independently of the transcript.
+                assert b"goal=complete 1/256" in terminal.output
                 terminal.send("wait\r")
                 terminal.expect("WAITING_FOR_INTERRUPT")
                 terminal.send("/interrupt\r")
@@ -267,10 +286,10 @@ def verify(binary):
             calls = [entry["call"]["name"] for entry in root_records if entry["type"] == "tool/call"]
             assert calls == ["todo_write", "glob", "grep", "read", "subagent", "subagent_fork", "list_agents",
                              "send_message", "interrupt_agent", "write", "edit", "bash", "bash", "ask_user_question",
-                             "job_output", "exit_plan_mode"], calls
+                             "job_output", "exit_plan_mode", "get_goal", "update_goal"], calls
             results = [entry["result"] for entry in root_records if entry["type"] == "tool/result"]
             failed = [index for index, entry in enumerate(results) if entry.get("is_error", False)]
-            assert len(results) == 16 and failed == [7], results
+            assert len(results) == 18 and failed == [7], results
             assert results[0]["output"] == "Updated todo list: 1 pending, 1 in progress, 0 completed.", results[0]
             assert results[1]["output"] == "proof.txt", results[1]
             assert results[2]["output"] == "Found 1 match\n\nproof.txt\nLine 1: PTY_PROOF", results[2]
@@ -287,6 +306,14 @@ def verify(binary):
                                              '{"id":"note","selected":[],"custom":"PTY_ANSWER"}]}'), results[13]
             assert results[14]["output"] == "JOB_PROOF\n[status: completed, exit code: 0]", results[14]
             assert results[15]["output"].startswith("Plan approved"), results[15]
+            assert '"objective":"PTY_GOAL ship it","phase":"active","roundsStarted":1' in results[16]["output"], results[16]
+            assert '"phase":"complete","roundsStarted":1,"maxGoalRounds":256},"activation":"disarmed"' in results[17]["output"], results[17]
+            goals = [(entry["goal"]["operation"], entry.get("turn", 0)) for entry in root_records if entry["type"] == "goal/change"]
+            assert goals == [("create", 0), ("complete", 0)], goals
+            sources = [entry["message"]["source"] for entry in root_records if entry["type"] == "user/message"]
+            assert sum(1 for source in sources if source["kind"] == "goal" and source["goal_round"] == 1) == 1, sources
+            assert sum(1 for source in sources if source["kind"] == "tool-goal") == 1, sources
+            assert any("create_goal may infer goal intent" in system for _, _, system in server.instructions)
             notices = [entry for entry in root_records if entry["type"] == "user/message" and entry["message"]["source"]["kind"] == "tool-jobs"]
             assert len(notices) == 1 and notices[0]["message"]["content"][0]["text"].startswith("background job bash-2 (bash: "), notices
             todos = [entry["todo"] for entry in root_records if entry["type"] == "todo/write"]
@@ -330,7 +357,7 @@ def verify(binary):
                 assert terminal.process.wait(timeout=10) == 0
             finally:
                 terminal.close()
-            print("PASS: real binary/PTY, 16 root tool calls, todo plan, background job notice, question answers, plan review, spawn/fork children, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
+            print("PASS: real binary/PTY, 18 root tool calls, todo plan, background job notice, question answers, plan review, /goal round completion, spawn/fork children, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
 
 
 def main():
@@ -341,7 +368,7 @@ def main():
     if args.serve:
         with fixture(args.serve.resolve()) as (workspace, settings, _):
             print(f"fixture ready: root={workspace} settings={settings}; NANO_FIXTURE_KEY=fixture-key", flush=True)
-            print("TUI input: verify tools (approve four times, answer two questions), touch workspace/notify, /agents, /plan, PLAN_TASK (approve), wait, /interrupt, /quit", flush=True)
+            print("TUI input: verify tools (approve four times, answer two questions), touch workspace/notify, /agents, /plan, PLAN_TASK (approve), /goal OBJECTIVE, wait, /interrupt, /quit", flush=True)
             try:
                 threading.Event().wait()
             except KeyboardInterrupt:

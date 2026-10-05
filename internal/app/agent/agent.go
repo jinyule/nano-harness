@@ -129,7 +129,10 @@ func (agent *Agent) finishTurn(result TurnResult, submitted bool) {
 	if submitted {
 		agent.pending--
 	}
-	agent.last = result
+	// A turn its admission dropped committed nothing and is not the last turn.
+	if !errors.Is(result.Err, ErrNotAdmitted) {
+		agent.last = result
+	}
 	agent.woken = len(agent.notices) > 0 && agent.pending == 0 && result.Outcome != session.OutcomeCanceled
 	if agent.pending == 0 && !agent.woken {
 		agent.notifyIdleLocked()

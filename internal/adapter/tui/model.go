@@ -41,6 +41,7 @@ type model struct {
 	planActive bool
 	images     []session.Image
 	todos      []session.TodoItem
+	goal       session.GoalState
 	plan       []string
 	stream     string
 	streamText string
@@ -134,6 +135,18 @@ func (model model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.addLine("error> " + message.err.Error())
 		} else {
 			model.addLine("system> " + message.text)
+		}
+		return model, nil
+	case goalMessage:
+		switch {
+		case message.err != nil:
+			model.addLine("error> " + message.err.Error())
+		case message.failed:
+			model.addLine("error> " + strings.Join(message.lines, "\n"))
+		default:
+			for _, line := range message.lines {
+				model.addLine("goal> " + line)
+			}
 		}
 		return model, nil
 	case planMessage:
@@ -291,7 +304,7 @@ func (model model) View() tea.View {
 	if model.planActive {
 		mode = "mode=plan "
 	}
-	header := headerStyle.MaxWidth(model.width).Render(fmt.Sprintf(" nano-harness  %s/%s  session=%s  busy=%t %s", document.Route.Provider, document.Route.Model, status.SessionID, status.Busy, mode))
+	header := headerStyle.MaxWidth(model.width).Render(fmt.Sprintf(" nano-harness  %s/%s  session=%s  busy=%t %s%s", document.Route.Provider, document.Route.Model, status.SessionID, status.Busy, mode, goalStatus(model.goal)))
 	prompt := ""
 	switch model.mode {
 	case modeApproval:

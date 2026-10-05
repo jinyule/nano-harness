@@ -53,6 +53,7 @@ make build
 /compact
 /permission ask|never
 /plan [off|TEXT]
+/goal [OBJECTIVE|edit OBJECTIVE|pause|resume|clear]
 /agents
 /interrupt
 /steer TEXT
@@ -64,6 +65,8 @@ make build
 `/attach` 接受 JPEG 或 PNG；图片会缩放、规范化并随下一条消息持久化。`/permission ask` 是默认策略：`write`、`edit` 和 `bash` 在实际执行前请求一次性授权。`bash` 默认在 workspace sandbox 中运行；模型可以用 `sandbox_permissions: danger-full-access` 和理由请求让单条命令离开 sandbox，这仍需一次性授权，subagent 不能请求。
 
 `/plan` 进入规划模式，`/plan TEXT` 进入后把文本作为下一条输入，`/plan off` 离开。规划模式期间请求带上游 Base 的规划指引，模型用 `exit_plan_mode` 提交计划，由你批准或带反馈继续规划；它只是指引，写入与 shell 仍需一次性授权。模型用 `ask_user_question` 提问时，输入选项编号（多选用逗号分隔）、直接输入文字作答，或留空跳过；推荐选项会预先填入，Ctrl+C 取消。
+
+`/goal OBJECTIVE` 设定一个长期目标：agent 空闲时会以自动轮次继续推进，直到模型确认完成、连续受阻至少三轮后报告阻塞，或达到轮次上限（默认 256）。`/goal` 查看状态，`/goal edit`、`/goal pause`、`/goal resume`、`/goal clear` 修改它；暂停会中断正在运行的 turn。你也可以直接请模型为长期任务创建目标。目标随会话保存，恢复会话后需要 `/goal resume` 才会继续；轮次中的写入与 shell 仍需一次性授权。
 
 TUI 使用 Bubble Tea v2、Lip Gloss v2 和 Bubbles v2，并作为可回收插件接入共享应用。后续 GUI 可独立复用同一组装，见[前端插件决策](docs/decisions/0005-selectable-frontend-plugins.md)。
 
@@ -102,7 +105,7 @@ GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点�
 
 - provider-neutral 的 Models → Provider → wire API 路由；provider 拥有 catalog、认证、刷新和流协议。
 - OpenAI Responses/ChatGPT Codex Responses、Anthropic Messages、OpenRouter Chat Completions 的流式适配。
-- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`web_search`、`web_fetch`、`skill`、记录会话任务计划的 `todo_write` 和 `exit_plan_mode`，与 Web preset 一致的 `ask_user_question`，以及后台可继续的 `subagent`、继承会话的 `subagent_fork` 和 `send_message`、`interrupt_agent`、`list_agents`。
+- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`web_search`、`web_fetch`、`skill`、记录会话任务计划的 `todo_write`、`exit_plan_mode` 和长期目标的 `get_goal`、`create_goal`、`update_goal`，与 Web preset 一致的 `ask_user_question`，以及后台可继续的 `subagent`、继承会话的 `subagent_fork` 和 `send_message`、`interrupt_agent`、`list_agents`。
 - `bash` 可在后台运行，前台命令超时后转为后台 job 继续运行；job 完成后通知所属 agent，agent 空闲时自动开启新 turn。
 - 可持久化的规划模式与经用户审查的退出，以及失败关闭的用户提问接缝。
 - 运行时 skill 发现：skill 目录随会话持久化并在变化时替换，用户可用 `/name` 直接调用。

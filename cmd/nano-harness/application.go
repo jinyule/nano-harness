@@ -8,6 +8,7 @@ import (
 	settingsfile "github.com/jinyule/nano-harness/internal/adapter/settings/file"
 	"github.com/jinyule/nano-harness/internal/adapter/spill"
 	filetool "github.com/jinyule/nano-harness/internal/adapter/tool/file"
+	goaltool "github.com/jinyule/nano-harness/internal/adapter/tool/goal"
 	jobtool "github.com/jinyule/nano-harness/internal/adapter/tool/job"
 	plantool "github.com/jinyule/nano-harness/internal/adapter/tool/plan"
 	questiontool "github.com/jinyule/nano-harness/internal/adapter/tool/question"
@@ -22,6 +23,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/approval"
 	"github.com/jinyule/nano-harness/internal/app/compaction"
+	appGoal "github.com/jinyule/nano-harness/internal/app/goal"
 	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	"github.com/jinyule/nano-harness/internal/app/llm"
 	"github.com/jinyule/nano-harness/internal/app/plan"
@@ -48,6 +50,7 @@ type application struct {
 	questions *question.Service
 	images    *mediaimage.Normalizer
 	subagents *subagent.Service
+	goals     *appGoal.Service
 }
 
 var (
@@ -77,6 +80,9 @@ var (
 	newQuestionTools     = questiontool.New
 	newPlanTools         = plantool.New
 	newSkillTools        = skilltool.New
+	newGoalService       = appGoal.New
+	newGoalTools         = goaltool.New
+	newGoalDriver        = appGoal.NewDriver
 )
 
 func composeApplication(config applicationConfig, deps dependencies) (*application, error) {
@@ -146,6 +152,10 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
+	goals, err := newGoalService(registry, engine, appGoal.Config{})
+	if err != nil {
+		return nil, err
+	}
 	workspaceRoot, err := newWorkspace(config.workspaceRoot)
 	if err != nil {
 		return nil, err
@@ -203,15 +213,25 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
+	goalTools, err := newGoalTools(toolRuntime, goals, registry)
+	if err != nil {
+		return nil, err
+	}
+	goalDriver, err := newGoalDriver(goals, root)
+	if err != nil {
+		return nil, err
+	}
 	// Jobs start after shell tools so their cleanup stops every background
-	// process before the shell temporary directory is removed.
+	// process before the shell temporary directory is removed. The goal
+	// driver starts last, so its cleanup disarms and stops goal rounds before
+	// the goal service withdraws round admission.
 	plugins := []plugin.Plugin{
 		configuration, settingsProvider, credentials, modelRuntime,
 		providers[0], providers[1], providers[2], approvalService, questionService, toolRuntime, spillStore,
 		images, assembler, planMode, retryService, compactionService, webService, sessions, engine,
-		registry, root, subagents, fileTools, searchTools, shellTools, jobs, jobTools, subagentTools, todoTools, webTools,
-		questionTools, planTools, skillTools,
+		registry, root, subagents, goals, fileTools, searchTools, shellTools, jobs, jobTools, subagentTools, todoTools, webTools,
+		questionTools, planTools, skillTools, goalTools, goalDriver,
 	}
 	return &application{plugins: plugins, root: root, registry: registry, models: modelRuntime,
-		settings: configuration, approval: approvalService, questions: questionService, images: images, subagents: subagents}, nil
+		settings: configuration, approval: approvalService, questions: questionService, images: images, subagents: subagents, goals: goals}, nil
 }

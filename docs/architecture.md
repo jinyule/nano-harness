@@ -1,6 +1,6 @@
 # 架构规则
 
-本文定义 `nano-harness` 的当前产品架构和依赖规则。composition 已包含设置、账户、三个 LLM provider、图片、agent、会话、工具、后台任务、任务列表、approval、用户提问、规划模式、compaction、subagent、web 检索/抓取、运行时 skill 与 TUI；新增运行时能力必须扩展这些已记录接缝。
+本文定义 `nano-harness` 的当前产品架构和依赖规则。composition 已包含设置、账户、三个 LLM provider、图片、agent、会话、工具、后台任务、任务列表、approval、用户提问、规划模式、compaction、subagent、web 检索/抓取、运行时 skill、长期目标与 TUI；新增运行时能力必须扩展这些已记录接缝。
 
 ## 设计目标
 
@@ -47,8 +47,9 @@ internal/platform
 settings → settings file → credential store → LLM runtime
 → OpenAI/Anthropic/OpenRouter providers → approval → user questions
 → tool runtime → spill store → images → prompt → plan mode → retry → compaction → web
-→ sessions → agent engine → agent registry → root bootstrap → subagents
-→ file/search/shell tools → jobs → job/subagent/todo/web/question/plan/skill tools → TUI
+→ sessions → agent engine → agent registry → root bootstrap → subagents → goals
+→ file/search/shell tools → jobs → job/subagent/todo/web/question/plan/skill/goal tools
+→ goal driver → TUI
 ```
 
 纯值、DTO、算法和仓库工具没有运行时 effect，不包装为空插件。
@@ -134,7 +135,8 @@ Submit user message
 - 没有输出提交的 retryable provider 失败按热策略指数退避；一旦流内容已提交就不自动重试，避免重复事实。
 - 主动 compaction 在估算上下文超过阈值时运行；context-window 错误触发强制 compaction 后重试新 step。raw log 不删除，surface 用持久化 summary 替换旧 prefix。
 - `Followup` 排队新的 turn；`Steer` 只在活动 turn 的工具 step 边界注入；`Interrupt` 只取消活动 turn，保留已排队 followup；`WhenIdle` 等待队列、活动 turn 和已唤醒的通知 turn 都结算。
-- `Notify` 投递模型可见通知：后台任务完成通知、agent 之间的 `send_message` 消息和子代理结算通知。agent 忙时，通知在 turn 开始后、工具 step 结束后以及无工具调用的回答之后作为 `user/message` 追加；最后一种情况下 turn 继续一个 step 回应它，已到 step 上限时留待下一 turn。agent 空闲，或 turn 结束后仍有通知且没有排队的 turn 时，worker 以通知开启新 turn；被取消的 turn 留下的通知等待下一个 turn。待投递通知只在内存中，规则见 [ADR-0009](decisions/0009-background-jobs.md)。
+- 注册了 `Admission` 的 source kind（目前只有目标轮次 `goal`）在 worker 取出 turn 时先经 admission：它在排除并发状态变化的同时提交 `turn/start` 与开场 `user/message`，或以 `ErrNotAdmitted` 丢弃这个 turn，不写任何记录，也不更新 `Status().Last`。规则见[长期目标](#长期目标)。
+- `Notify` 投递模型可见通知：后台任务完成通知、agent 之间的 `send_message` 消息、子代理结算通知和目标收尾指令。agent 忙时，通知在 turn 开始后、工具 step 结束后以及无工具调用的回答之后作为 `user/message` 追加；最后一种情况下 turn 继续一个 step 回应它，已到 step 上限时留待下一 turn。agent 空闲，或 turn 结束后仍有通知且没有排队的 turn 时，worker 以通知开启新 turn；被取消的 turn 留下的通知等待下一个 turn。待投递通知只在内存中，规则见 [ADR-0009](decisions/0009-background-jobs.md)。
 - 调用取消、step limit、错误和恢复中断分别记录稳定 outcome。异常边界会尝试用不继承上游取消的 context 关闭 step/turn。
 - Registry 拥有每个动态 agent 的 Scope、worker 和 journal，关闭时先拒绝新 agent，再 interrupt 并等待所有 agent 回收。
 
@@ -153,7 +155,7 @@ Submit user message
 - `Runtime.UseSpill` 在插件 Scope 内发布唯一的 `SpillStore`。`Invocation.CreateSpill`/`SaveText` 按调用方会话打开或保存 spill 文件，没有 store 或会话时返回 `ErrSpillUnavailable`，工具据此使用上游的降级文案。
 - 未知工具、panic、拒绝、执行错误和取消都成为有界 tool result，文本使用上游的 `Error: <message>` 格式；resume 为未决调用补写的结果同样使用这一格式。
 
-内置工具与上游 Base 组合同名同定义（`ask_user_question` 取 Web preset 的默认阻塞定义），映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)，后台任务与 `bash` 后台变体见 [ADR-0009](decisions/0009-background-jobs.md)，提问与规划模式见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)：
+内置工具与上游 Base 组合同名同定义（`ask_user_question` 取 Web preset 的默认阻塞定义），映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)，后台任务与 `bash` 后台变体见 [ADR-0009](decisions/0009-background-jobs.md)，提问与规划模式见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)，长期目标见 [ADR-0016](decisions/0016-long-running-goals.md)：
 
 | 包 | 插件 ID | 工具 |
 |---|---|---|
@@ -167,6 +169,7 @@ Submit user message
 | `internal/adapter/tool/question` | `question-tools` | 阻塞式 `ask_user_question` |
 | `internal/adapter/tool/plan` | `plan-tools` | `exit_plan_mode` |
 | `internal/adapter/tool/skill` | `skill-tools` | `skill`，以及 step 前的 skill 目录与 `/name` 注入 |
+| `internal/adapter/tool/goal` | `goal-tools` | `get_goal`、`create_goal`、`update_goal` |
 
 `internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。`cmd` 用 `WithReadOnly` 把 spill 分区只读地交给 `read` 与 `grep`；`shell-tools` 收到不含该分区的 root。
 
@@ -267,6 +270,24 @@ list_agents                → parent 自己的 subagent/catalog；descendants �
 
 文件边界见[安全工程规则](security.md#运行时-skill-文件)，格式、上限与上游差异见 [ADR-0012](decisions/0012-runtime-skills.md)。
 
+## 长期目标
+
+一个 session 至多有一个当前目标：完成目标、轮次上限（默认 256，正安全整数）和阶段 `active`/`paused`/`blocked`/`complete`。决策与上游对照见 [ADR-0016](decisions/0016-long-running-goals.md)。
+
+```text
+create_goal / update_goal / TUI /goal ──► app/goal.Service ──goal/change──► session log
+                                              ▲   │ Admission（kind goal）
+goal driver ──Followup(<goal_round>)──► agent worker ──► engine.openTurn
+```
+
+- `internal/app/goal.Service`（插件 `goals`）是唯一写 `goal/change` 的组件。每次变更在服务锁内从日志折叠当前状态（`session.ProjectGoal`）、校验 compare-and-set 的 `{id, revision}` 与阶段迁移、追加完整快照，再通知 watcher。轮次 admission 持有同一把锁，所以变更不会与轮次的开场记录交错。
+- 是否允许自动继续（armed）只在进程内：create 与 resume 置 armed，pause、complete、block、clear 解除，edit 保持；driver 接管 session 时与退出时都解除。resume 或 fork 后恢复的 active 目标因此是 disarmed，需人类或模型（在人类的 turn 中）resume。
+- `goal-driver` 插件只驱动 root agent。它在整个 agent 空闲（`WhenIdle`）时先 `Settle` 自上次以来结束的 turn：被取消的目标轮次暂停其自身 revision（仍为当前、active、armed 时），其他被取消的 turn 或任何 error turn 解除 armed，之后的 create/resume 会抵消。随后若目标 active、armed 且未达上限，就以 `Followup` 排入一条 `source.kind = "goal"` 的轮次提示；达到上限时以 `round-limit` 阻塞，排队失败以 `queue-failed` 阻塞，admission 拒绝且无法由新 revision 或撤销解释时以 `prompt-rejected` 阻塞。step limit 不影响继续。
+- admission 只接纳当前 active、armed revision 的下一轮，且最近一次撤销性停止之后已有 create/resume；否则丢弃该 turn。人类的 `/goal pause` 会中断正在运行的 turn，模型自己的 pause 让本 turn 正常结束。
+- 轮次与普通 turn 一样服从当前规划模式、approval policy 与等待；审批等待中 driver 只等待该轮次结束。
+- 工具在执行点判定权限：create、edit、pause、resume 要求调用方 turn 中有 `source.kind = "user"` 的消息且调用方不是 delegated；complete 与 blocked 也接受当前目标 revision 的当前轮次，blocked 需已有至少 3 个准入轮次。模型不能 resume 一个 paused 目标。目标轮次中成功的 complete/blocked 通过 `Notify` 排入 `source.kind = "tool-goal"` 的收尾指令，模型在下一 step 回复用户。
+- 工具结果是紧凑 JSON `{"goal":null}` 或 `{"goal":{…},"activation":"armed|disarmed"}`，与上游一致；`update_goal` 携带上游 `tool:goal` 段落（order 2400）。
+
 ## 图片输入
 
 TUI 的 `/attach` 显式读取本地 JPEG/PNG。image plugin 限制源文件大小和像素数，最长边缩放到 2048，重新编码为有界 JPEG，记录尺寸、SHA-256 和标准 base64。规范化图片作为 `user/message` content block 持久化，因而 resume、fork、compaction 和 vision provider 请求都从同一事实构建。模型不支持 vision 时 provider 在 wire 调用前拒绝。
@@ -281,17 +302,18 @@ assistant/chunk, assistant/message, tool/call,
 approval/asked, approval/decided, approval/policy,
 tool/result, llm/retry, llm/retry-started,
 compaction/start, compaction/summary, compaction/end,
-subagent/descriptor, subagent/catalog, todo/write, plan/mode, step/end, turn/end
+subagent/descriptor, subagent/catalog, todo/write, plan/mode, goal/change, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill）与 spill 策略的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）与 spill 策略的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。
 - resume 会补写未决 approval 的 cancelled、未决 call 的 interrupted error、未结束 compaction/step/turn 的结束事实；不会截断 torn JSON、猜测未知格式或自动接受旧版本。
 - `session.Surface` 从 raw events 折叠消息、tool call/result 与 compaction replacements。TUI subscriber 只是可丢更新提示；磁盘 replay 仍是恢复来源。
 - `todo/write` 必须位于活动 step，引用尚未得到 result 的 call，且每个 call 最多一条。它不进入 surface；模型只从自己的 tool call 参数和 tool result 看到列表。`session.StandingTodos` 把最新一条之后没有更晚 `turn/start` 的 `todo/write` 投影为当前计划。
+- `goal/change` 的 `turn` 与 `step` 都缺省，可出现在日志任意位置（人类命令可在 turn 进行中提交）。`session.GoalState.Apply` 校验 revision 连续、阶段迁移合法、时间戳不倒退、计数保持和目标 ID 不复用；`source.kind = "goal"` 的 `user/message` 必须携带 `goal_id`/`goal_revision`/`goal_round`，且恰为当前 active 目标当前 revision 的下一轮、不超过上限，其他来源不得携带这些字段。JSONL 在每次追加与读取时执行同一折叠，非法事实被拒绝且不写入。
 - 后台任务完成通知是 source kind 为 `tool-jobs` 的 `user/message`，agent 消息与子代理结算通知分别为 `agent-message` 和 `subagent-settled`，都没有专用记录类型；无工具调用的 step 之后可以出现 `user/message` 并继续 step。
 - `subagent/descriptor` 为 v2，是 child 自己写的第一条记录：位于 `inherited + 1` 号序列且不在 turn 内，`inherited` 是 fork 种子复制的事件数（spawn 为 0）。种子在创建时与 header 一次写入并整体校验，复制的事件保留原序号。`session.OwnEvents` 以最后一个 descriptor 区分继承前缀。
 - `subagent/catalog` 必须位于活动 step，同一日志内 `session_id` 唯一，不进入 surface；`session.Children` 只从自有事件投影目录，fork 继承的 parent 目录不属于 child。
@@ -308,7 +330,7 @@ credential store 按 provider 保存一个 API key 或 OAuth grant，使用 stri
 
 ## TUI 与投影
 
-`internal/adapter/tui` 是使用 Bubble Tea v2、Lip Gloss v2 与 Bubbles v2 的 alternate-screen 插件。`tea.View` 声明终端模式，输入、viewport、命令与事件投影保留在 adapter；app/core 不依赖 Charm。它从 durable event replay 初始化，再订阅已提交事件，展示 route、streamed text/reasoning、tool call/result、approval、retry、compaction 和 turn outcome。当前计划固定显示在输入区上方，最多占 transcript 剩余行数的一半并保留至少一行 transcript；条目溢出时从第一个未完成项开始显示，标题保留各状态计数。TUI 同时实现本地 approval broker、用户提问 broker 与 auth interaction；secret prompt 使用 password echo。提问逐题显示标题、详情和编号选项，数字列表选择、其他文本作为自由回答、空输入跳过，推荐选项预填，Ctrl+C 取消整批。`/plan`、`/plan off` 和 `/plan TEXT` 调用 `Registry.SetPlanMode`，状态栏在规划模式下显示 `mode=plan`，模式变化与切换提示显示为 `mode>` 行。
+`internal/adapter/tui` 是使用 Bubble Tea v2、Lip Gloss v2 与 Bubbles v2 的 alternate-screen 插件。`tea.View` 声明终端模式，输入、viewport、命令与事件投影保留在 adapter；app/core 不依赖 Charm。它从 durable event replay 初始化，再订阅已提交事件，展示 route、streamed text/reasoning、tool call/result、approval、retry、compaction 和 turn outcome。当前计划固定显示在输入区上方，最多占 transcript 剩余行数的一半并保留至少一行 transcript；条目溢出时从第一个未完成项开始显示，标题保留各状态计数。TUI 同时实现本地 approval broker、用户提问 broker 与 auth interaction；secret prompt 使用 password echo。提问逐题显示标题、详情和编号选项，数字列表选择、其他文本作为自由回答、空输入跳过，推荐选项预填，Ctrl+C 取消整批。`/plan`、`/plan off` 和 `/plan TEXT` 调用 `Registry.SetPlanMode`，状态栏在规划模式下显示 `mode=plan`，模式变化与切换提示显示为 `mode>` 行。`/goal` 按上游语法显示、创建、编辑、暂停、恢复或清除根 session 的目标，输出只留在终端；待发送图片不能伴随 `/goal`。状态栏从日志折叠显示 `goal=<阶段> <轮次>/<上限>`，`goal/change`、目标轮次和收尾指令显示为 `goal>` 行。
 
 UI 命令调用 app 用例，不直接修改文件或 provider 内部状态。退出会 interrupt root 活动 turn；Scope cleanup 撤销 broker、停止 event forwarding，取消并等待终端程序与异步命令静止。Run 退出先取消命令 context，关闭命令执行入口，再等待已开始的操作；迟到命令不再调用 app。前端独立选择，当前只有所选 UI 注册 approval 与提问 broker；GUI 的扩展边界见 [ADR-0005](decisions/0005-selectable-frontend-plugins.md)。
 

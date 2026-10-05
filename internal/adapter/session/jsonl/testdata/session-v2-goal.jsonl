@@ -1,0 +1,38 @@
+{"type":"session","version":2,"header":{"session_id":"fixture","composition_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","created_at_unix_ms":1,"cwd":"/synthetic/workspace"}}
+{"seq":1,"record":{"type":"turn/start","turn":1}}
+{"seq":2,"record":{"type":"user/message","turn":1,"message":{"role":"user","content":[{"type":"text","text":"keep the docs green"}],"source":{"kind":"user"}}}}
+{"seq":3,"record":{"type":"step/start","turn":1,"step":1}}
+{"seq":4,"record":{"type":"request/header","turn":1,"step":1,"header":{"provider":"openai","model":"model","system":""}}}
+{"seq":5,"record":{"type":"assistant/message","turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"creating a goal"}],"source":{"kind":"provider"}}}}
+{"seq":6,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-create","name":"create_goal","arguments":{"objective":"keep the docs green","max_goal_rounds":3}}}}
+{"seq":7,"record":{"type":"goal/change","goal":{"operation":"create","snapshot":{"id":"goal-fixture","revision":1,"objective":"keep the docs green","phase":"active","max_goal_rounds":3},"created_at_unix_ms":1000,"updated_at_unix_ms":1000}}}
+{"seq":8,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-create","output":"created","is_error":false}}}
+{"seq":9,"record":{"type":"step/end","turn":1,"step":1}}
+{"seq":10,"record":{"type":"turn/end","turn":1,"outcome":"completed"}}
+{"seq":11,"record":{"type":"turn/start","turn":2}}
+{"seq":12,"record":{"type":"user/message","turn":2,"message":{"role":"user","content":[{"type":"text","text":"goal round 1"}],"source":{"kind":"goal","goal_id":"goal-fixture","goal_revision":1,"goal_round":1}}}}
+{"seq":13,"record":{"type":"step/start","turn":2,"step":1}}
+{"seq":14,"record":{"type":"request/header","turn":2,"step":1,"header":{"provider":"openai","model":"model","system":""}}}
+{"seq":15,"record":{"type":"assistant/message","turn":2,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"fixed one gate"}],"source":{"kind":"provider"}}}}
+{"seq":16,"record":{"type":"step/end","turn":2,"step":1}}
+{"seq":17,"record":{"type":"turn/end","turn":2,"outcome":"completed"}}
+{"seq":18,"record":{"type":"goal/change","goal":{"operation":"edit","snapshot":{"id":"goal-fixture","revision":2,"objective":"keep every docs gate green","phase":"active","max_goal_rounds":3},"rounds_started":1,"created_at_unix_ms":1000,"updated_at_unix_ms":2000}}}
+{"seq":19,"record":{"type":"goal/change","goal":{"operation":"pause","snapshot":{"id":"goal-fixture","revision":3,"objective":"keep every docs gate green","phase":"paused","max_goal_rounds":3},"rounds_started":1,"created_at_unix_ms":1000,"updated_at_unix_ms":3000}}}
+{"seq":20,"record":{"type":"goal/change","goal":{"operation":"resume","snapshot":{"id":"goal-fixture","revision":4,"objective":"keep every docs gate green","phase":"active","max_goal_rounds":3},"rounds_started":1,"created_at_unix_ms":1000,"updated_at_unix_ms":4000}}}
+{"seq":21,"record":{"type":"turn/start","turn":3}}
+{"seq":22,"record":{"type":"user/message","turn":3,"message":{"role":"user","content":[{"type":"text","text":"goal round 2"}],"source":{"kind":"goal","goal_id":"goal-fixture","goal_revision":4,"goal_round":2}}}}
+{"seq":23,"record":{"type":"step/start","turn":3,"step":1}}
+{"seq":24,"record":{"type":"request/header","turn":3,"step":1,"header":{"provider":"openai","model":"model","system":""}}}
+{"seq":25,"record":{"type":"assistant/message","turn":3,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"still blocked"}],"source":{"kind":"provider"}}}}
+{"seq":26,"record":{"type":"tool/call","turn":3,"step":1,"call":{"id":"call-block","name":"update_goal","arguments":{"goal_id":"goal-fixture","revision":4,"action":"blocked","blocked_reason":"the docs host is unreachable"}}}}
+{"seq":27,"record":{"type":"goal/change","goal":{"operation":"block","snapshot":{"id":"goal-fixture","revision":5,"objective":"keep every docs gate green","phase":"blocked","blocked_reason":{"code":"model-reported","message":"the docs host is unreachable"},"max_goal_rounds":3},"rounds_started":2,"created_at_unix_ms":1000,"updated_at_unix_ms":5000}}}
+{"seq":28,"record":{"type":"tool/result","turn":3,"step":1,"result":{"call_id":"call-block","output":"blocked","is_error":false}}}
+{"seq":29,"record":{"type":"step/end","turn":3,"step":1}}
+{"seq":30,"record":{"type":"user/message","turn":3,"message":{"role":"user","content":[{"type":"text","text":"goal blocked: write the closing message"}],"source":{"kind":"tool-goal"}}}}
+{"seq":31,"record":{"type":"step/start","turn":3,"step":2}}
+{"seq":32,"record":{"type":"request/header","turn":3,"step":2,"header":{"provider":"openai","model":"model","system":""}}}
+{"seq":33,"record":{"type":"assistant/message","turn":3,"step":2,"message":{"role":"assistant","content":[{"type":"text","text":"blocked on the docs host"}],"source":{"kind":"provider"}}}}
+{"seq":34,"record":{"type":"step/end","turn":3,"step":2}}
+{"seq":35,"record":{"type":"turn/end","turn":3,"outcome":"completed"}}
+{"seq":36,"record":{"type":"goal/change","goal":{"operation":"complete","snapshot":{"id":"goal-fixture","revision":6,"objective":"keep every docs gate green","phase":"complete","max_goal_rounds":3},"rounds_started":2,"created_at_unix_ms":1000,"updated_at_unix_ms":6000}}}
+{"seq":37,"record":{"type":"goal/change","goal":{"operation":"clear","cleared":{"id":"goal-fixture","revision":7},"cleared_at_unix_ms":7000}}}

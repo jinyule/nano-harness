@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
+	appGoal "github.com/jinyule/nano-harness/internal/app/goal"
 	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	"github.com/jinyule/nano-harness/internal/app/plan"
 	appSubagent "github.com/jinyule/nano-harness/internal/app/subagent"
@@ -16,7 +17,9 @@ func (model *model) applyEvent(event session.Event, live bool) {
 	record := event.Record
 	switch record.Type {
 	case session.RecordUserMessage:
-		switch record.Message.Source.Kind {
+		text := session.Text(*record.Message)
+		_ = model.goal.Apply(record)
+		switch source := record.Message.Source; source.Kind {
 		case skill.SourceCatalog:
 			model.addLine("skill> catalog updated")
 			return
@@ -24,10 +27,16 @@ func (model *model) applyEvent(event session.Event, live bool) {
 			model.addLine("skill> instructions injected")
 			return
 		case plan.NoticeSource:
-			model.addLine("mode> " + session.Text(*record.Message))
+			model.addLine("mode> " + text)
+			return
+		case session.GoalSource:
+			model.addLine(fmt.Sprintf("goal> round %d", source.GoalRound))
+			return
+		case appGoal.WrapUpSource:
+			first, _, _ := strings.Cut(text, "\n")
+			model.addLine("goal> " + first)
 			return
 		}
-		text := session.Text(*record.Message)
 		attachments := 0
 		for _, block := range record.Message.Content {
 			if block.Type == session.ContentImage {
@@ -92,6 +101,10 @@ func (model *model) applyEvent(event session.Event, live bool) {
 		} else {
 			model.addLine("mode> plan mode off")
 		}
+	case session.RecordGoalChange:
+		// The log was validated when it was committed; the fold only follows it.
+		_ = model.goal.Apply(record)
+		model.addLine(goalLine(*record.Goal))
 	case session.RecordTurnEnd:
 		model.streamText = ""
 		model.addLine("turn> " + string(record.Outcome))

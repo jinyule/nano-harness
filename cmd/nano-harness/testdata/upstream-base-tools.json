@@ -5,7 +5,7 @@
     "tag": "dsh-v0.2.1-alpha.1",
     "composition": "packages/bundle/base/cordis.patch.yml"
   },
-  "note": "Reviewed copy of the upstream model-visible definitions: the Base composition plus ask_user_question from the Web preset, and the Base plan-mode prompt section. Tests compare against this file and never read the submodule; refresh it only when the reference pointer moves.",
+  "note": "Reviewed copy of the upstream model-visible definitions: the Base composition plus ask_user_question from the Web preset, and the Base plan-mode and goal prompt sections. Tests compare against this file and never read the submodule; refresh it only when the reference pointer moves.",
   "tools": [
     {
       "name": "ask_user_question",
@@ -120,6 +120,28 @@
       }
     },
     {
+      "name": "create_goal",
+      "source": "docs/tool-catalog.md with packages/goal/tool-goal/src/index.ts",
+      "composition": "Base: packages/bundle/base/cordis.patch.yml mounts @deepseek-ai/dsh-tool-goal without config; the goal policy section uses the default blockedAfterConsecutiveRounds of 3",
+      "description": "Create a persisted goal that keeps this session working across automatic continuation rounds. Use it when the direct human request is a long-running objective, even if the user did not say \"goal\"; not for single-turn work.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "objective": {
+            "type": "string",
+            "description": "The concrete completion objective inferred from the direct human request."
+          },
+          "max_goal_rounds": {
+            "type": "number",
+            "description": "Optional positive safe-integer limit on automatic continuation rounds."
+          }
+        },
+        "required": [
+          "objective"
+        ]
+      }
+    },
+    {
       "name": "edit",
       "source": "docs/tool-catalog.md with packages/fs/tool-fs/src/sandbox.ts and packages/sandbox/sandbox/src/escalation.ts",
       "composition": "Base mounts @deepseek-ai/dsh-fs-sandbox, so packages/fs/tool-fs/src/sandbox.ts adds sandbox_permissions and justification",
@@ -179,6 +201,16 @@
         "required": [
           "plan"
         ]
+      }
+    },
+    {
+      "name": "get_goal",
+      "source": "docs/tool-catalog.md with packages/goal/tool-goal/src/index.ts",
+      "composition": "Base: packages/bundle/base/cordis.patch.yml mounts @deepseek-ai/dsh-tool-goal without config; the goal policy section uses the default blockedAfterConsecutiveRounds of 3",
+      "description": "Read the current session goal, including the id and revision that update_goal requires.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
       }
     },
     {
@@ -487,6 +519,53 @@
       }
     },
     {
+      "name": "update_goal",
+      "source": "docs/tool-catalog.md with packages/goal/tool-goal/src/index.ts",
+      "composition": "Base: packages/bundle/base/cordis.patch.yml mounts @deepseek-ai/dsh-tool-goal without config; the goal policy section uses the default blockedAfterConsecutiveRounds of 3",
+      "description": "Update the current goal.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "goal_id": {
+            "type": "string",
+            "description": "Exact id returned by get_goal."
+          },
+          "revision": {
+            "type": "number",
+            "description": "Exact positive revision returned by get_goal."
+          },
+          "action": {
+            "type": "string",
+            "description": "edit, pause, and resume require a direct top-level human request. complete and blocked are also allowed during an automatic continuation of this goal; blocked is rejected before the configured minimum round count.",
+            "enum": [
+              "edit",
+              "pause",
+              "resume",
+              "complete",
+              "blocked"
+            ]
+          },
+          "objective": {
+            "type": "string",
+            "description": "Replacement objective; valid only with action edit."
+          },
+          "max_goal_rounds": {
+            "type": "number",
+            "description": "Replacement cap; valid only with action edit."
+          },
+          "blocked_reason": {
+            "type": "string",
+            "description": "Required only with action blocked: the concrete condition that persisted across rounds and blocks progress."
+          }
+        },
+        "required": [
+          "goal_id",
+          "revision",
+          "action"
+        ]
+      }
+    },
+    {
       "name": "web_fetch",
       "source": "docs/tool-catalog.md with packages/web/tool-web/src/fetch.ts",
       "composition": "Base mounts @deepseek-ai/dsh-tool-web with fetch: true; the schema is independent of the fetch provider and timeout configuration",
@@ -567,6 +646,12 @@
       "source": "packages/bundle/base/cordis.patch.yml, plan-mode row, config.section parsed as YAML (block scalar with clip chomping keeps one final newline)",
       "composition": "Rendered by @deepseek-ai/dsh-plan-mode at section order PLAN_POLICY (500) while plan mode is active; inactive mode contributes no text",
       "text": "You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.\n\nExplore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.\n\nThe tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed only to keep the request shape stable. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.\n\nResolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.\n\nMake the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.\n\nWhen ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask \"should I proceed?\" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.\n"
+    },
+    {
+      "name": "tool:goal",
+      "source": "packages/goal/tool-goal/src/index.ts guidance() with the default blockedAfterConsecutiveRounds of 3, as shown in the package README \"Goal policy\" block",
+      "composition": "Rendered by @deepseek-ai/dsh-tool-goal at section order TOOL_GOAL (2400) while the plugin is in scope",
+      "text": "create_goal may infer goal intent from a direct human request in any language. After session resume or fork, an active goal is disarmed: when a human asks to continue or resume in any wording or language, use update_goal action resume to rearm it. Mark complete only when the objective is actually achieved. Mark blocked only after the same blocking condition persists for at least 3 consecutive goal rounds, and report that concrete condition in blocked_reason; difficulty, uncertainty, or useful remaining work is not blocked."
     }
   ]
 }

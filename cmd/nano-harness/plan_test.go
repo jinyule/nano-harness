@@ -195,24 +195,6 @@ func orderedToolResults(records []session.Record) []session.ToolResult {
 	return results
 }
 
-func upstreamPlanSection(t *testing.T) string {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", "upstream-base-tools.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document struct {
-		Sections []struct {
-			Name string `json:"name"`
-			Text string `json:"text"`
-		} `json:"prompt_sections"`
-	}
-	if err := json.Unmarshal(data, &document); err != nil || len(document.Sections) != 1 || document.Sections[0].Name != "plan:policy" {
-		t.Fatalf("prompt sections = %+v, %v", document.Sections, err)
-	}
-	return document.Sections[0].Text
-}
-
 func TestComposition_AskUserQuestionReturnsTheUserAnswer(t *testing.T) {
 	assembled, seen := startAssembled(t, []modelStep{
 		{tool: "ask_user_question", arguments: `{"questions":[{"id":"mode","question":"Which mode?","header":"Choose Mode","options":[{"label":"Fast (Recommended)","description":"Less work"},{"label":"Thorough"}]}]}`},
@@ -261,7 +243,7 @@ func TestComposition_PlanModeReviewKeepsPlanningThenApproves(t *testing.T) {
 	if len(assembled.frontend.seen) != 2 || review.ID != "plan-review" || review.Detail != "# Cache plan\n\n- add a cache" || review.Intent == nil || review.Intent.Approve != "Approve" {
 		t.Fatalf("review requests = %+v", assembled.frontend.seen)
 	}
-	section := upstreamPlanSection(t)
+	section := upstreamSection(t, "plan:policy")
 	requests := seen()
 	if len(requests) != 5 {
 		t.Fatalf("model requests = %d", len(requests))

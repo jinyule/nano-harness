@@ -25,8 +25,12 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 	seenApprovals := map[string]struct{}{}
 	todoCalls := map[string]struct{}{}
 	children := map[string]struct{}{}
+	var goals coresession.GoalState
 	for _, event := range events {
 		record := event.Record
+		if err := goals.Apply(record); err != nil {
+			return state, orderError("invalid goal history at event %d: %v", event.Sequence, err)
+		}
 		switch record.Type {
 		case coresession.RecordTurnStart:
 			if state.turn != 0 || record.Turn != state.lastTurn+1 {
@@ -155,8 +159,10 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 				return state, orderError("duplicate subagent/catalog for %q", record.Catalog.SessionID)
 			}
 			children[record.Catalog.SessionID] = struct{}{}
-		case coresession.RecordApprovalPolicy:
-			// Durable metadata is independent of the model surface.
+		case coresession.RecordApprovalPolicy, coresession.RecordGoalChange:
+			// Durable metadata is independent of the model surface. A goal
+			// change may be committed at any point by a person, a tool, or
+			// the round driver; the goal fold above orders it causally.
 		}
 	}
 	if _, err := coresession.Surface(events); err != nil {

@@ -35,10 +35,11 @@ type Engine struct {
 	settings   *settings.Service
 	maxSteps   int
 
-	mu       sync.RWMutex
-	started  bool
-	active   bool
-	contexts []*contextEntry
+	mu         sync.RWMutex
+	started    bool
+	active     bool
+	contexts   []*contextEntry
+	admissions map[string]*Admission
 }
 
 // NewEngine validates the full core-loop dependency graph.
@@ -103,11 +104,20 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 	}
 	turn := nextTurn(events)
 	result.Turn = turn
-	if _, err = input.journal.Append(ctx, session.Record{Type: session.RecordTurnStart, Turn: turn}); err != nil {
-		result.Err, result.Outcome = err, session.OutcomeError
+	opened := false
+	err = engine.openTurn(ctx, input, func(ctx context.Context) error {
+		if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordTurnStart, Turn: turn}); err != nil {
+			return err
+		}
+		opened = true
+		_, err := input.journal.Append(ctx, session.Record{Type: session.RecordUserMessage, Turn: turn, Message: &input.message})
+		return err
+	})
+	if errors.Is(err, ErrNotAdmitted) && !opened {
+		result.Turn, result.Err = 0, err
 		return result
 	}
-	if _, err = input.journal.Append(ctx, session.Record{Type: session.RecordUserMessage, Turn: turn, Message: &input.message}); err != nil {
+	if err != nil {
 		result.Err, result.Outcome = err, session.OutcomeError
 		return result
 	}

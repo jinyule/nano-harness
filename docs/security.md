@@ -121,6 +121,13 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 - 规划模式是提示词约束，不是授权边界：它不过滤工具，也不读取或改变 approval、sandbox 与 allowlist。需要强制只读时使用 `never` policy。评估与理由见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)。
 - 只有恰好选择 `Approve` 且没有自由回答的审查结果才会退出规划模式；退出在下一个 step 边界持久化为 `plan/mode`。
 
+## 长期目标
+
+- 目标操作的权限在工具执行点从调用方 turn 的已提交消息判定，不信任模型参数：create、edit、pause、resume 需要该 turn 中 `source.kind = "user"` 的消息，且调用方不是 delegated agent；complete 与 blocked 另接受当前目标 revision 的当前轮次，blocked 还需至少 3 个准入轮次。`user` 来源只由前端在人类输入时使用，通知、规划提示、skill 注入、委派任务与 agent 消息、目标轮次和收尾指令各有自己的来源，因此不能继承人类权限。守卫测试 `TestHumanSource_OnlyFrontendsAttributeHumanInput` 解析全部产品源码，只允许 `internal/adapter/tui` 与 `internal/adapter/media/image` 构造 `user` 来源，其他位置出现即失败。模型不能 resume 一个 paused 目标。
+- 目标与自动轮次不是授权：它们不改变 approval policy、sandbox、工具 allowlist 或规划模式，轮次中的写类工具同样在执行点请求一次性 approval，`never` 仍然拒绝。轮次上限只限制轮次数，不计量 token、费用或时间。
+- 是否自动继续只在进程内。resume、fork 或进程重启后目标一律 disarmed，driver 不会在无人授权时恢复工作；被取消或失败的 turn 会解除继续，人类的 pause 立即中断正在运行的 turn。
+- objective 与阻塞说明是不可信文本，限制为去除首尾空白后非空且不超过 16 KiB；进入轮次提示时按 JSON 字符串引用，不能闭合 `<goal_round>` 标签。进程内持有 session 写权限的组件仍可伪造 `goal/change`；严格折叠只检测畸形或不一致的事实并拒绝写入或恢复，不是插件隔离。规则见 [ADR-0016](decisions/0016-long-running-goals.md)。
+
 ## Session 与恢复
 
 - session root 使用 `0700`，JSONL transcript 和独占 writer lock 使用 `0600`。session ID 只能生成 root 内固定文件名。

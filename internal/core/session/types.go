@@ -70,6 +70,8 @@ const (
 	RecordTodoWrite RecordType = "todo/write"
 	// RecordPlanMode commits the plan mode in force from this point on.
 	RecordPlanMode RecordType = "plan/mode"
+	// RecordGoalChange commits one goal mutation or clear tombstone.
+	RecordGoalChange RecordType = "goal/change"
 	// RecordStepEnd closes an active step after all calls and approvals settle.
 	RecordStepEnd RecordType = "step/end"
 	// RecordTurnEnd closes an active turn with a stable outcome.
@@ -130,10 +132,15 @@ type ContentBlock struct {
 	Image *Image      `json:"image,omitempty"`
 }
 
-// MessageSource records provenance without granting authority.
+// MessageSource records provenance without granting authority. The goal
+// fields attribute an automatic goal round and are present exactly when
+// Kind is GoalSource.
 type MessageSource struct {
-	Kind   string `json:"kind"`
-	Plugin string `json:"plugin,omitempty"`
+	Kind         string `json:"kind"`
+	Plugin       string `json:"plugin,omitempty"`
+	GoalID       string `json:"goal_id,omitempty"`
+	GoalRevision uint64 `json:"goal_revision,omitempty"`
+	GoalRound    uint64 `json:"goal_round,omitempty"`
 }
 
 // Message is one replayable user or assistant message.
@@ -337,6 +344,7 @@ type Record struct {
 	Catalog    *SubagentCatalog    `json:"catalog,omitempty"`
 	Todo       *TodoWrite          `json:"todo,omitempty"`
 	Plan       *PlanMode           `json:"plan,omitempty"`
+	Goal       *GoalChange         `json:"goal,omitempty"`
 	Outcome    TurnOutcome         `json:"outcome,omitempty"`
 }
 

@@ -22,6 +22,7 @@ import (
 	settingsfile "github.com/jinyule/nano-harness/internal/adapter/settings/file"
 	"github.com/jinyule/nano-harness/internal/adapter/spill"
 	filetool "github.com/jinyule/nano-harness/internal/adapter/tool/file"
+	goaltool "github.com/jinyule/nano-harness/internal/adapter/tool/goal"
 	jobtool "github.com/jinyule/nano-harness/internal/adapter/tool/job"
 	plantool "github.com/jinyule/nano-harness/internal/adapter/tool/plan"
 	questiontool "github.com/jinyule/nano-harness/internal/adapter/tool/question"
@@ -35,6 +36,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/adapter/tui"
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/compaction"
+	appGoal "github.com/jinyule/nano-harness/internal/app/goal"
 	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	"github.com/jinyule/nano-harness/internal/app/llm"
 	"github.com/jinyule/nano-harness/internal/app/plan"
@@ -234,7 +236,7 @@ func TestComposition_MatchesUpstreamBaseTools(t *testing.T) {
 		frozen[definition.Name] = definition
 	}
 	upstream := loadCatalog(t, filepath.Join("testdata", "upstream-base-tools.json"))
-	if len(upstream) != 20 {
+	if len(upstream) != 23 {
 		t.Fatalf("upstream fixture lists %d tools", len(upstream))
 	}
 	for _, want := range upstream {
@@ -362,6 +364,7 @@ func restoreMainHooks(t *testing.T) {
 	webService, webTools := newWebService, newWebTools
 	jobService, jobTools := newJobService, newJobTools
 	questionTools, planTools := newQuestionTools, newPlanTools
+	goalService, goalTools, goalDriver := newGoalService, newGoalTools, newGoalDriver
 	t.Cleanup(func() {
 		newWebService, newWebTools = webService, webTools
 		currentWorkingDirectory, userConfigDirectory, userHomeDirectory, readRandom, inspectPath, absolutePath, evaluateLinks = cwd, config, home, random, inspect, absolute, links
@@ -373,6 +376,7 @@ func restoreMainHooks(t *testing.T) {
 		newSubagentTools, newTodoTools, newSkillTools, newTerminal = subagentTools, todoTools, skillTools, terminal
 		newJobService, newJobTools = jobService, jobTools
 		newQuestionTools, newPlanTools = questionTools, planTools
+		newGoalService, newGoalTools, newGoalDriver = goalService, goalTools, goalDriver
 	})
 }
 
@@ -591,6 +595,19 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 			newSkillTools = func(*appTool.Runtime, skilltool.Contexts, skilltool.Config) (*skilltool.Provider, error) {
 				return nil, failure
 			}
+		}},
+		{name: "goal service", set: func() {
+			newGoalService = func(appGoal.Journals, appGoal.Admissions, appGoal.Config) (*appGoal.Service, error) {
+				return nil, failure
+			}
+		}},
+		{name: "goal tools", set: func() {
+			newGoalTools = func(*appTool.Runtime, goaltool.Goals, goaltool.Notifier) (*goaltool.Provider, error) {
+				return nil, failure
+			}
+		}},
+		{name: "goal driver", set: func() {
+			newGoalDriver = func(appGoal.Goals, appGoal.RootSource) (*appGoal.Driver, error) { return nil, failure }
 		}},
 		{name: "terminal", set: func() { newTerminal = func(tui.Config) (*tui.App, error) { return nil, failure } }},
 	}

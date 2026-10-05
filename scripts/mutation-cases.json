@@ -117,5 +117,19 @@
     "before": "return fail(CodeUnauthorized, \"subagent %q is not a live descendant of agent %q\", targetID, callerID)",
     "after": "break",
     "test": "^TestService_InterruptReachesDescendantsAndParentWaitsForChildren$"
+  },
+  {
+    "id": "goal-direct-human",
+    "file": "internal/app/goal/goal.go",
+    "before": "authority.Human = authority.Human || !delegated && source.Kind == HumanSource",
+    "after": "authority.Human = authority.Human || source.Kind == HumanSource",
+    "test": "^TestService_AuthorityReadsOnlyTheCallersTurn$"
+  },
+  {
+    "id": "goal-round-revision",
+    "file": "internal/core/session/goal.go",
+    "before": "source.GoalID != current.ID || source.GoalRevision != current.Revision ||",
+    "after": "source.GoalID != current.ID ||",
+    "test": "^TestProjectGoal_RejectsIllegalHistories$"
   }
 ]

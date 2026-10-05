@@ -247,6 +247,7 @@ type appFixture struct {
 	questions  *fakeQuestionRegistry
 	images     *fakeImages
 	subagents  *fakeSubagents
+	goals      *fakeGoals
 }
 
 func newAppFixture() (*appFixture, Config) {
@@ -255,9 +256,10 @@ func newAppFixture() (*appFixture, Config) {
 		registry:   &fakePolicyRegistry{}, models: &fakeModelService{},
 		settings: &fakeSettings{document: settings.Defaults(), revision: 3},
 		approval: &fakeApprovalRegistry{}, questions: &fakeQuestionRegistry{}, images: &fakeImages{}, subagents: &fakeSubagents{},
+		goals: newFakeGoals(),
 	}
 	fixture.root = &fakeRoot{controller: fixture.controller}
-	return fixture, Config{Root: fixture.root, Registry: fixture.registry, LLM: fixture.models, Settings: fixture.settings, Approval: fixture.approval, Questions: fixture.questions, Images: fixture.images, Subagents: fixture.subagents}
+	return fixture, Config{Root: fixture.root, Registry: fixture.registry, LLM: fixture.models, Settings: fixture.settings, Approval: fixture.approval, Questions: fixture.questions, Images: fixture.images, Subagents: fixture.subagents, Goals: fixture.goals}
 }
 
 func TestNew_RequiresEveryUseCase(t *testing.T) {
@@ -270,6 +272,7 @@ func TestNew_RequiresEveryUseCase(t *testing.T) {
 		func(config *Config) { config.LLM = nil }, func(config *Config) { config.Settings = nil },
 		func(config *Config) { config.Approval = nil }, func(config *Config) { config.Images = nil },
 		func(config *Config) { config.Subagents = nil }, func(config *Config) { config.Questions = nil },
+		func(config *Config) { config.Goals = nil },
 	} {
 		config := valid
 		mutate(&config)

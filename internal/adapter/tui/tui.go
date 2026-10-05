@@ -42,6 +42,7 @@ type Config struct {
 	Questions QuestionRegistry
 	Images    ImageNormalizer
 	Subagents SubagentService
+	Goals     GoalService
 }
 
 // RootSource publishes the root controller after composition startup.
@@ -153,7 +154,7 @@ type App struct {
 
 // New validates an assembled TUI without starting terminal I/O.
 func New(config Config) (*App, error) {
-	if config.Root == nil || config.Registry == nil || config.LLM == nil || config.Settings == nil || config.Approval == nil || config.Questions == nil || config.Images == nil || config.Subagents == nil {
+	if config.Root == nil || config.Registry == nil || config.LLM == nil || config.Settings == nil || config.Approval == nil || config.Questions == nil || config.Images == nil || config.Subagents == nil || config.Goals == nil {
 		return nil, ErrInvalidConfig
 	}
 	return &App{config: config, events: make(chan any, 512), stop: make(chan struct{}), uiGone: make(chan struct{})}, nil

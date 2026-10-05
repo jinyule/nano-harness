@@ -31,6 +31,8 @@ const (
 	OrderWebSearch = 2000
 	// OrderWebFetch positions web-fetch guidance.
 	OrderWebFetch = 2100
+	// OrderGoal positions long-running goal guidance.
+	OrderGoal = 2400
 	// OrderSubagent positions background-delegation guidance.
 	OrderSubagent = 2800
 )

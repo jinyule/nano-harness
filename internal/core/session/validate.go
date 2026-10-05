@@ -53,6 +53,8 @@ func (record Record) Validate() error {
 		return record.requireTodo()
 	case RecordPlanMode:
 		return record.requirePlan()
+	case RecordGoalChange:
+		return record.requireGoal()
 	case RecordStepEnd:
 		return record.requireBare(true, true)
 	case RecordTurnEnd:
@@ -63,7 +65,7 @@ func (record Record) Validate() error {
 }
 
 func allowsZeroTurn(recordType RecordType) bool {
-	return recordType == RecordApprovalPolicy || recordType == RecordCompactionStart || recordType == RecordCompactionSummary || recordType == RecordCompactionEnd || recordType == RecordSubagentDescriptor || recordType == RecordPlanMode
+	return recordType == RecordApprovalPolicy || recordType == RecordCompactionStart || recordType == RecordCompactionSummary || recordType == RecordCompactionEnd || recordType == RecordSubagentDescriptor || recordType == RecordPlanMode || recordType == RecordGoalChange
 }
 
 func invalid(format string, values ...any) error {
@@ -74,7 +76,7 @@ func (record Record) requireBare(step, usage bool) error {
 	if step != (record.Step > 0) {
 		return invalid("%s has invalid step", record.Type)
 	}
-	if record.Message != nil || record.Chunk != nil || record.Call != nil || record.Result != nil || record.Header != nil || record.Retry != nil || record.Approval != nil || record.Compaction != nil || record.Subagent != nil || record.Catalog != nil || record.Todo != nil || record.Plan != nil || record.Outcome != "" || !usage && record.Usage != nil {
+	if record.Message != nil || record.Chunk != nil || record.Call != nil || record.Result != nil || record.Header != nil || record.Retry != nil || record.Approval != nil || record.Compaction != nil || record.Subagent != nil || record.Catalog != nil || record.Todo != nil || record.Plan != nil || record.Goal != nil || record.Outcome != "" || !usage && record.Usage != nil {
 		return invalid("%s has unrelated fields", record.Type)
 	}
 	return validateUsage(record.Usage)
@@ -89,15 +91,19 @@ func (record Record) requireMessage(role MessageRole) error {
 }
 
 func (record Record) hasExtras(keep string) bool {
-	return keep != "message" && record.Message != nil || keep != "chunk" && record.Chunk != nil || keep != "call" && record.Call != nil || keep != "result" && record.Result != nil || keep != "header" && record.Header != nil || keep != "usage" && record.Usage != nil || keep != "retry" && record.Retry != nil || keep != "approval" && record.Approval != nil || keep != "compaction" && record.Compaction != nil || keep != "subagent" && record.Subagent != nil || keep != "catalog" && record.Catalog != nil || keep != "todo" && record.Todo != nil || keep != "plan" && record.Plan != nil || keep != "outcome" && record.Outcome != ""
+	return keep != "message" && record.Message != nil || keep != "chunk" && record.Chunk != nil || keep != "call" && record.Call != nil || keep != "result" && record.Result != nil || keep != "header" && record.Header != nil || keep != "usage" && record.Usage != nil || keep != "retry" && record.Retry != nil || keep != "approval" && record.Approval != nil || keep != "compaction" && record.Compaction != nil || keep != "subagent" && record.Subagent != nil || keep != "catalog" && record.Catalog != nil || keep != "todo" && record.Todo != nil || keep != "plan" && record.Plan != nil || keep != "goal" && record.Goal != nil || keep != "outcome" && record.Outcome != ""
 }
 
-func validateMessage(message Message, requireContent bool) error {
-	if len(message.Content) > MaxContentBlocks || requireContent && len(message.Content) == 0 {
+// validateMessage checks a message; user messages must have content and alone may carry goal round attribution.
+func validateMessage(message Message, user bool) error {
+	if len(message.Content) > MaxContentBlocks || user && len(message.Content) == 0 {
 		return invalid("message content count is invalid")
 	}
 	if message.Source.Kind == "" || len(message.Source.Kind) > 64 || len(message.Source.Plugin) > 128 {
 		return invalid("message source is invalid")
+	}
+	if err := validateGoalSource(message.Source, user); err != nil {
+		return err
 	}
 	for index, block := range message.Content {
 		if err := validateContent(block); err != nil {
@@ -277,7 +283,7 @@ func (record Record) requireApproval() error {
 	case RecordTurnStart, RecordUserMessage, RecordStepStart, RecordRequestHeader,
 		RecordAssistantChunk, RecordAssistantMessage, RecordToolCall, RecordToolResult,
 		RecordRetry, RecordRetryStarted, RecordCompactionStart, RecordCompactionSummary,
-		RecordCompactionEnd, RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordPlanMode, RecordStepEnd, RecordTurnEnd:
+		RecordCompactionEnd, RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordPlanMode, RecordGoalChange, RecordStepEnd, RecordTurnEnd:
 		// Validate dispatches only approval record types to this shape-specific helper.
 	}
 	return nil
@@ -343,7 +349,7 @@ func (record Record) requireCompaction() error {
 	case RecordTurnStart, RecordUserMessage, RecordStepStart, RecordRequestHeader,
 		RecordAssistantChunk, RecordAssistantMessage, RecordToolCall, RecordApprovalAsked,
 		RecordApprovalDecided, RecordApprovalPolicy, RecordToolResult, RecordRetry,
-		RecordRetryStarted, RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordPlanMode, RecordStepEnd, RecordTurnEnd:
+		RecordRetryStarted, RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordPlanMode, RecordGoalChange, RecordStepEnd, RecordTurnEnd:
 		// Validate dispatches only compaction record types to this shape-specific helper.
 	}
 	return nil

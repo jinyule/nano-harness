@@ -19,7 +19,7 @@ func (model model) command(value string) (tea.Model, tea.Cmd) {
 		model.quitting = true
 		return model, tea.Quit
 	case "/help":
-		model.addLine("commands> /attach PATH · /accounts · /login PROVIDER METHOD · /logout PROVIDER · /models PROVIDER · /model PROVIDER MODEL · /compact · /permission ask|never · /plan [off|TEXT] · /agents · /interrupt · /steer TEXT · /SKILL TEXT · /quit")
+		model.addLine("commands> /attach PATH · /accounts · /login PROVIDER METHOD · /logout PROVIDER · /models PROVIDER · /model PROVIDER MODEL · /compact · /permission ask|never · /plan [off|TEXT] · /goal [OBJECTIVE|edit OBJECTIVE|pause|resume|clear] · /agents · /interrupt · /steer TEXT · /SKILL TEXT · /quit")
 		return model, nil
 	case "/interrupt":
 		model.app.agent.Interrupt()
@@ -74,6 +74,8 @@ func (model model) command(value string) (tea.Model, tea.Cmd) {
 		}
 	case "/plan":
 		return model.planCommand(strings.TrimSpace(strings.TrimPrefix(value, name)))
+	case "/goal":
+		return model.goalCommand(strings.TrimPrefix(value, name))
 	case "/agents":
 		return model, func() tea.Msg {
 			infos, err := model.app.config.Subagents.List("")
