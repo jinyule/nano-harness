@@ -38,15 +38,15 @@
 | WP | 内容 | 依赖 | ADR | 状态 |
 |---|---|---|---|---|
 | WP1 | 工具定义抽象、schema golden、`read`/`write`/`edit`/`glob`/`grep`/`bash` 改名与定义对齐 | — | 0007 | 已合入 `a2b565d`…`a9f93ea`（含 glob/grep 改用 ripgrep） |
-| WP2 | 文件工具完整能力：大文件窗口、glob 排序与上限、grep 分组、spill、先读后写保护 | WP1 | 0008 | 进行中 |
-| WP3 | 后台任务运行时与 `job_*`，`bash` 后台运行与超时转后台 | WP1 | 0009 | 进行中 |
-| WP4 | `todo_write`、`todo/write` 事件与 TUI 清单 | WP1 | 0010 | 完成，待合入 |
-| WP5 | `web_search`（provider 服务端检索）与 `web_fetch`（公网 HTTP） | WP1 | 0011 | 完成，待合入 |
-| WP6 | 运行时 skill 发现、目录注入与 `skill` 工具 | WP1 | 0012 | 进行中 |
-| WP7 | subagent 工具族对齐上游，后台可继续子代理与双向消息 | WP3 | 0013 | 待开始 |
-| WP8 | `ask_user_question` 与规划模式 `exit_plan_mode` | WP1 | 0014 | 进行中 |
-| WP9 | `read_image` 与多模态工具结果 | WP2 | 0015 | 待开始 |
-| WP10 | 长期目标 `create_goal`/`get_goal`/`update_goal` 与 round driver | WP3、WP8 | 0016 | 待开始 |
+| WP2 | 文件工具完整能力：大文件窗口、glob 排序与上限、grep 分组、spill、先读后写保护 | WP1 | 0008 | 已合入 `0c050ad` |
+| WP3 | 后台任务运行时与 `job_*`，`bash` 后台运行与超时转后台 | WP1 | 0009 | 已合入 `3b29e7a` |
+| WP4 | `todo_write`、`todo/write` 事件与 TUI 清单 | WP1 | 0010 | 已合入 `db7f6be` |
+| WP5 | `web_search`（provider 服务端检索）与 `web_fetch`（公网 HTTP） | WP1 | 0011 | 已合入 `095ff95` |
+| WP6 | 运行时 skill 发现、目录注入与 `skill` 工具 | WP1 | 0012 | 已合入 `699791d` |
+| WP7 | subagent 工具族对齐上游，后台可继续子代理与双向消息 | WP3 | 0013 | 进行中 |
+| WP8 | `ask_user_question` 与规划模式 `exit_plan_mode` | WP1 | 0014 | 已合入 `97cae63` |
+| WP9 | `read_image` 与多模态工具结果 | WP2 | 0015 | 进行中 |
+| WP10 | 长期目标 `create_goal`/`get_goal`/`update_goal` 与 round driver | WP3、WP8 | 0016 | 进行中 |
 
 ADR 编号预先分配，避免并行分支冲突；某个 WP 不需要 ADR 时编号作废，不复用。每个 WP 另写自己的 Agent Note，本 Note 只记录总体范围、映射和进度。
 
