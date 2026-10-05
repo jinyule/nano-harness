@@ -59,6 +59,8 @@ make build
 /quit
 ```
 
+以 `/name` 开头、但不是上面命令的输入按普通消息发送；`name` 是允许用户调用的 skill 时，它的完整说明随这条消息注入。
+
 `/attach` 接受 JPEG 或 PNG；图片会缩放、规范化并随下一条消息持久化。`/permission ask` 是默认策略：`write`、`edit` 和 `bash` 在实际执行前请求一次性授权。`bash` 默认在 workspace sandbox 中运行；模型可以用 `sandbox_permissions: danger-full-access` 和理由请求让单条命令离开 sandbox，这仍需一次性授权，subagent 不能请求。
 
 `/plan` 进入规划模式，`/plan TEXT` 进入后把文本作为下一条输入，`/plan off` 离开。规划模式期间请求带上游 Base 的规划指引，模型用 `exit_plan_mode` 提交计划，由你批准或带反馈继续规划；它只是指引，写入与 shell 仍需一次性授权。模型用 `ask_user_question` 提问时，输入选项编号（多选用逗号分隔）、直接输入文字作答，或留空跳过；推荐选项会预先填入，Ctrl+C 取消。
@@ -86,6 +88,10 @@ web:
 
 model 必须在该 provider 的模型目录中，否则设置加载失败。未配置时工具仍对模型可见，每次调用返回 `WEB_PROVIDER_UNAVAILABLE`。检索 route 独立于会话 route，修改后对下一次检索生效。
 
+## 运行时 Skill
+
+模型能看到并加载 skill：在 `.nano-harness/skills/` 或 `.agents/skills/` 下放 `<name>/SKILL.md` 或 `<name>.md`，文件以包含 `name` 和 `description` 的 YAML frontmatter 开头。项目目录位于包含 `.git` 的最近上级目录（没有时为 workspace）。用户级目录默认是用户配置目录下的 `nano-harness/skills` 和 `~/.agents/skills`，可用 `--skills-dir DIR` 与 `--agents-skills-dir DIR` 修改；同名时项目目录优先。增删或修改 skill 在下一次模型请求时生效，无需重启。`disable-model-invocation: true` 让 skill 只能由用户以 `/name` 调用，`user-invocable: false` 则只允许模型加载。规则与上限见[运行时 skill 决策](docs/decisions/0012-runtime-skills.md)。
+
 ## 终端验证与 GoLand 调试
 
 `make tui-e2e` 使用真实二进制和 PTY，配合本地模型协议 fixture，验证文件工具、任务计划、后台任务通知、Subagent、审批、提问、规划模式、打断和恢复，无需模型账户。需要 Python 3、Unix PTY、ripgrep 和本机 workspace sandbox。
@@ -96,9 +102,10 @@ GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点�
 
 - provider-neutral 的 Models → Provider → wire API 路由；provider 拥有 catalog、认证、刷新和流协议。
 - OpenAI Responses/ChatGPT Codex Responses、Anthropic Messages、OpenRouter Chat Completions 的流式适配。
-- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`web_search`、`web_fetch`、记录会话任务计划的 `todo_write` 和 `exit_plan_mode`，与 Web preset 一致的 `ask_user_question`，以及 spawn/followup/interrupt/report/list subagent 工具。
+- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`web_search`、`web_fetch`、`skill`、记录会话任务计划的 `todo_write` 和 `exit_plan_mode`，与 Web preset 一致的 `ask_user_question`，以及 spawn/followup/interrupt/report/list subagent 工具。
 - `bash` 可在后台运行，前台命令超时后转为后台 job 继续运行；job 完成后通知所属 agent，agent 空闲时自动开启新 turn。
 - 可持久化的规划模式与经用户审查的退出，以及失败关闭的用户提问接缝。
+- 运行时 skill 发现：skill 目录随会话持久化并在变化时替换，用户可用 `/name` 直接调用。
 - 失败关闭的 approval、相邻只读工具并发、写入与 shell 的独占 barrier。
 - 指数退避 retry、主动/被动 context compaction、followup、steer、interrupt 和恢复。
 - v2 严格 JSONL 事件日志；流式 text/reasoning/tool、审批、重试、压缩、任务计划和 subagent 身份均可审计。

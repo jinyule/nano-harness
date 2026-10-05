@@ -67,9 +67,10 @@ loopback HTTP 证明协议实现，不声称证明远端服务部署。真实 pr
 - 完成通知在 turn 开始后、工具 step 边界和无工具调用的回答之后作为 `user/message` 提交，回答之后的通知让 turn 继续，最后一步留待下一 turn；空闲 agent 被通知唤醒，排队的 turn 优先投递，被取消的 turn 不自动续开；
 - subagent spawn/fork/wait/followup/interrupt/report/list、parent identity、depth、publication race 和 cleanup failure；
 - 后台任务的 owner 隔离、每 owner 上限、增量读取与 UTF-8 拼接、保留窗口与丢失提示、wait 超时/取消/收走、kill reason、值结果只交出一次、producer panic，以及关闭时取消、等待且不发通知；
-- 规划模式选择在 turn 之间立即提交、turn 内只在下一个 step 边界提交，用户切换提示只在最近请求描述另一种模式时出现，获批退出在下一个边界生效，边界写入失败使 turn 失败并保留选择。
+- 规划模式选择在 turn 之间立即提交、turn 内只在下一个 step 边界提交，用户切换提示只在最近请求描述另一种模式时出现，获批退出在下一个边界生效，边界写入失败使 turn 失败并保留选择；
+- step 上下文 provider 的贡献在规划模式边界之后、`step/start` 之前按注册顺序提交，后注册者能看到前者的贡献，Scope 关闭后不再运行；provider、日志读写、工具目录失败和取消都结束 turn 且不打开 step。
 
-工具定义抽象用表驱动测试证明 schema 键序、参数违规列表、未知成员拒绝、类型化解码、并发分组、审批前校验和 panic containment。workspace 工具通过真实 runtime 调用并使用真实临时目录，覆盖路径允许/拒绝矩阵（相对、绝对、`..`、symlink 读取与写入）、read 窗口与行/字节上限、UTF-8/BOM/CRLF、原子写入与权限、edit 唯一匹配与 `replace_all`、通过真实 ripgrep 验证 glob 模式、修改时间排序、VCS 排除与上限，以及 grep 的 hidden/ignore/include 规则与上限（ripgrep 不保证跨文件顺序，测试只排序分组后比较），另用脚本化 runner 覆盖退出码 2、信号、超时、启动失败、输出超限、畸形 `--json` 和版本过低、`rg` 缺失时的启动失败、sandbox escalation 的成对规则、delegated denial、timeout、process group 和 tail 截断，以及 `bash` 的后台运行、超时转后台的消费式交接、取消与关闭时终止 job、达到上限时的退回执行。`bash` 另有真实 host 进程测试，包括后台 job 的双流输出和 `job_kill` 终止整个进程组；本机存在 OS sandbox 时还验证 workspace 内可写、workspace 外被拒绝并返回拒绝标记。写工具须从测试进程重新读取文件，不能只断言工具返回文案。
+工具定义抽象用表驱动测试证明 schema 键序、参数违规列表、未知成员拒绝、类型化解码、并发分组、审批前校验和 panic containment。workspace 工具通过真实 runtime 调用并使用真实临时目录，覆盖路径允许/拒绝矩阵（相对、绝对、`..`、symlink 读取与写入）、read 窗口与行/字节上限、UTF-8/BOM/CRLF、原子写入与权限、edit 唯一匹配与 `replace_all`、通过真实 ripgrep 验证 glob 模式、修改时间排序、VCS 排除与上限，以及 grep 的 hidden/ignore/include 规则与上限（ripgrep 不保证跨文件顺序，测试只排序分组后比较），另用脚本化 runner 覆盖退出码 2、信号、超时、启动失败、输出超限、畸形 `--json` 和版本过低、`rg` 缺失时的启动失败、sandbox escalation 的成对规则、delegated denial、timeout、process group 和 tail 截断，以及 `bash` 的后台运行、超时转后台的消费式交接、取消与关闭时终止 job、达到上限时的退回执行。运行时 skill 用真实临时目录覆盖四个根的优先级与同名去重、`.git` 祖先选择、`.system` 跳过、根内 symlink/特殊文件/超限/非 UTF-8 的拒绝矩阵、frontmatter 与布尔文法、条目与 skill 上限、根和文件 I/O 失败、检查后被替换或删除的文件；`skill` 工具经真实 runtime 证明正文每次重读、发现与加载两次检查调用策略、名称变化视为不可用；step 上下文证明目录的初始、替换、废止和隐藏工具语义，发现不完整时保留旧目录，以及 `/name` 只注入 user-invocable skill。`internal/core/skill` 用上游测试中的原文逐行比较目录与 `<skill_content>` 模板，并证明最大目录仍是合法 record。`bash` 另有真实 host 进程测试，包括后台 job 的双流输出和 `job_kill` 终止整个进程组；本机存在 OS sandbox 时还验证 workspace 内可写、workspace 外被拒绝并返回拒绝标记。写工具须从测试进程重新读取文件，不能只断言工具返回文案。
 
 `todo_write` 的定义由下文的上游 Base 固定样本约束。工具测试经真实 tool runtime 验证 schema 违规、去空白、空项、重复、数量与长度上限、无所有者调用、取消和追加失败都不写日志；成功调用按 call 顺序写入完整快照并返回固定计数文案。engine 测试证明执行上下文携带调用方自己的 journal、turn、step 和 call ID。
 
@@ -91,6 +92,8 @@ TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event f
 `cmd/nano-harness` assembled e2e 使用真实 CLI config、Plugin Runtime、设置/账户/LLM/tool/agent/session/TUI 构造链和 loopback OpenAI SSE。模型第一步发出 `read`，真实工具读取 workspace，第二步返回最终文本；测试从磁盘重新读取 v2 transcript 并断言 call/result/final assistant 和工具 guidance。todo 场景让模型调用 `todo_write`，从磁盘断言 request header schema、`todo/write` 快照与结果文案，再以新 composition 恢复同一会话并从 replay 得到同一计划。`TestComposition_BackgroundJobsEndToEnd` 走同一 composition 与真实 host 进程，用文件确定因果顺序，覆盖后台启动、`job_list`、带 reason 的 `job_kill`、`job_output` 的 wait 超时与读取，以及空闲 root agent 被完成通知唤醒；断言来自磁盘 transcript 和 provider 收到的请求。提问与规划模式的 assembled 测试复用 `composeApplication`，只用脚本前端替换终端 broker：模型调用 `ask_user_question` 后答案从磁盘 transcript 和下一次 provider 请求中验证；规划模式测试从真实 `Registry.SetPlanMode` 进入，依次验证带反馈的继续规划、批准、批准后不再携带 Base 规划段落（与 `upstream-base-tools.json` 中的原文逐字比较）以及规划模式外的拒绝，并检查 `plan/mode` 记录的位置。另一个测试让默认 Bubble Tea runner 接收终止键，证明真实 terminal lifecycle 可以启动和关闭。独立测试前端复用 `composeApplication` 的共同插件链，验证无需构造 TUI 即可消费 durable 事件并先于 app 服务关闭；这不是 GUI 实现证据。
 
 `TestComposition_WebSearchAndFetchEndToEnd` 经真实 CLI config、settings 文件和 composition，让 loopback 模型在一步内调用 `web_search` 与 `web_fetch`：检索请求打到同一 Responses endpoint，抓取经注入 resolver 映射到 loopback 页面且只拨号已校验 IP；测试从磁盘 transcript 断言冻结的 schema、system prompt 指引、检索来源与 HTML 转换结果。`TestComposition_WebSearchUnconfiguredFailsClosed` 证明默认未配置时 `web_search` 返回 `WEB_PROVIDER_UNAVAILABLE` 且不联系 provider。
+
+`TestComposition_SkillCatalogToolAndGesture` 经真实 composition 和 loopback provider 证明：第一次请求带有目录且不含禁止模型调用的 skill 和任何正文，模型调用 `skill` 后下一次请求带有完整 `<skill_content>`，运行中新增的 skill 在下一 turn 产生替换目录，`/name` 注入 user-only skill，重启进程后从磁盘日志推导目录而不重复发布。
 
 命令级 failure matrix 覆盖路径归一化、create/resume、每个 constructor、runtime start、TUI run、shutdown、usage/version output 和 write failure；PATH 中没有 `rg` 时，`tui` 以退出码 1 结束并给出安装提示。发布 smoke 必须运行编译后的 `bin/nano-harness`，不能以 `go run` 或直接调用内部函数替代。
 
@@ -153,13 +156,15 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 
 `testdata/session-v2-plan.jsonl` 以同样方式冻结 `plan/mode`：`TestSessionV2Plan_FrozenContract` 覆盖 turn 之间进入、切换提示、审查调用和 turn 内退出，`TestSessionV2Plan_RejectsChangedContract` 拒绝未知字段、缺失负载、step 内记录、错误 turn 和重复当前模式；resume 测试证明修复中断尾部不改动已提交的模式。
 
+`testdata/session-v2-skill.jsonl` 固定目录、`/name` 注入和 `skill` call/result 作为普通 v2 `user/message` 的形态。`TestSessionV2Skill_FrozenContract` 用同样的读取、投影和独立 writer 比较，并证明恢复后的日志不会重复发布同一目录、删除全部 skill 时产生空目录、已消费的 `/name` 不再待处理；`TestSessionV2Skill_RejectsMisplacedContext` 拒绝 turn 外、错位 step、空内容和来源多余字段的变体。
+
 修改持久化字段、枚举、顺序、版本或恢复语义时，PR 明确选择同版本兼容、严格拒绝旧版或迁移，给出样本与因果/事务证据并更新架构和 ADR。固定样本不是全部记录类型的 schema catalog，也不代替现有图片、compaction、subagent、错误恢复和 I/O rollback 测试。CI 不重写样本，nano v2 严格拒绝旧格式的承诺不变。
 
 ## 模型可见工具目录
 
 `cmd/nano-harness/testdata/tool-catalog.json` 冻结真实 composition 的全部工具定义。`TestComposition_ToolCatalogGolden` 经 `cmd` 跑完一轮，从磁盘 transcript 的第一个 `request/header` 取出 tools，逐项比较名称、描述和紧凑化后的参数 JSON（保留键序），并确认 loopback provider 收到的 wire 定义与 header 相同。fixture 是人工审查的期望值，CI 只比较；有意变化时手工修改 fixture 并在同一变更中提升 composition 版本。
 
-`cmd/nano-harness/testdata/upstream-base-tools.json` 记录上游 Base 组合中 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`todo_write`、`web_search`、`web_fetch`、`exit_plan_mode` 和 Web preset 的 `ask_user_question` 定义，以及 Base 规划段落原文（`prompt_sections`），标注上游提交、来源文件和组合推导，测试不读取 submodule。`TestComposition_MatchesUpstreamBaseTools` 要求同名工具逐字节一致；规划模式 assembled 测试要求请求中的规划段落与 fixture 原文一致。更新参考指针时按 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md) 重新推导这份数据。
+`cmd/nano-harness/testdata/upstream-base-tools.json` 记录上游 Base 组合中 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`skill`、`todo_write`、`web_search`、`web_fetch`、`exit_plan_mode` 和 Web preset 的 `ask_user_question` 定义，以及 Base 规划段落原文（`prompt_sections`），标注上游提交、来源文件和组合推导，测试不读取 submodule。`TestComposition_MatchesUpstreamBaseTools` 要求同名工具逐字节一致；规划模式 assembled 测试要求请求中的规划段落与 fixture 原文一致。更新参考指针时按 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md) 重新推导这份数据。
 
 ## 性能观测与预算
 

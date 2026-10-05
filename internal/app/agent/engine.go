@@ -35,9 +35,10 @@ type Engine struct {
 	settings   *settings.Service
 	maxSteps   int
 
-	mu      sync.RWMutex
-	started bool
-	active  bool
+	mu       sync.RWMutex
+	started  bool
+	active   bool
+	contexts []*contextEntry
 }
 
 // NewEngine validates the full core-loop dependency graph.
@@ -147,6 +148,10 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		planPolicy, err := engine.plan.Step(ctx, input.journal, turn)
 		if err != nil {
 			result.Err, result.Outcome = fmt.Errorf("plan mode boundary: %w", err), outcomeFor(err)
+			return result
+		}
+		if err := engine.stepContext(ctx, input, turn); err != nil {
+			result.Err, result.Outcome = fmt.Errorf("step context: %w", err), outcomeFor(err)
 			return result
 		}
 		if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordStepStart, Turn: turn, Step: step}); err != nil {

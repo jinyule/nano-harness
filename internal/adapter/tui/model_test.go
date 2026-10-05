@@ -222,7 +222,7 @@ func TestModelCommand_LocalImmediateAndUsageBranches(t *testing.T) {
 	fixture, current := modelFixture(t)
 	for _, commandText := range []string{
 		"/models", "/models one two", "/login", "/login one", "/logout", "/logout one two",
-		"/model", "/model one", "/permission", "/permission always", "/unknown",
+		"/model", "/model one", "/permission", "/permission always", "/Unknown",
 	} {
 		next, command := current.command(commandText)
 		current = next.(model)

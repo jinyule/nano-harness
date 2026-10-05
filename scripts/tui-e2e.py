@@ -159,6 +159,7 @@ class Terminal:
         self.process = subprocess.Popen(
             [str(binary), "tui", "--root", str(workspace), "--settings", str(settings),
              "--credentials", str(directory / "credentials.yaml"), "--session-root", str(directory / "sessions"),
+             "--skills-dir", str(directory / "skills"), "--agents-skills-dir", str(directory / "agents-skills"),
              "--session", "session-pty"],
             stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
             env={"PATH": tool_path(), "HOME": os.environ["HOME"], "TERM": "xterm-256color", "NANO_FIXTURE_KEY": "fixture-key"},

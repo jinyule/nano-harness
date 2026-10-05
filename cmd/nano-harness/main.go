@@ -31,6 +31,7 @@ var exitProcess = os.Exit
 var (
 	currentWorkingDirectory = os.Getwd
 	userConfigDirectory     = os.UserConfigDir
+	userHomeDirectory       = os.UserHomeDir
 	readRandom              = rand.Read
 	inspectPath             = os.Lstat
 	absolutePath            = filepath.Abs
@@ -39,14 +40,16 @@ var (
 )
 
 type applicationConfig struct {
-	workspaceRoot  string
-	sessionRoot    string
-	settingsPath   string
-	credentialPath string
-	sessionID      string
-	codexHome      string
-	maxSteps       int
-	create         bool
+	workspaceRoot   string
+	sessionRoot     string
+	settingsPath    string
+	credentialPath  string
+	skillsDir       string
+	agentsSkillsDir string
+	sessionID       string
+	codexHome       string
+	maxSteps        int
+	create          bool
 }
 
 type dependencies struct {
@@ -157,6 +160,11 @@ func parseTUIConfig(args []string, stderr io.Writer) (applicationConfig, error) 
 		return applicationConfig{}, err
 	}
 	applicationRoot := filepath.Join(configRoot, "nano-harness")
+	homeRoot, err := userHomeDirectory()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "resolve home directory: %v\n", err)
+		return applicationConfig{}, err
+	}
 	sessionID, err := newSessionID()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "generate session ID: %v\n", err)
@@ -164,9 +172,11 @@ func parseTUIConfig(args []string, stderr io.Writer) (applicationConfig, error) 
 	}
 	config := applicationConfig{
 		workspaceRoot: workspaceRoot, sessionRoot: filepath.Join(applicationRoot, "sessions"),
-		settingsPath:   filepath.Join(applicationRoot, "settings.yaml"),
-		credentialPath: filepath.Join(applicationRoot, "credentials.yaml"),
-		sessionID:      sessionID, maxSteps: 32,
+		settingsPath:    filepath.Join(applicationRoot, "settings.yaml"),
+		credentialPath:  filepath.Join(applicationRoot, "credentials.yaml"),
+		skillsDir:       filepath.Join(applicationRoot, "skills"),
+		agentsSkillsDir: filepath.Join(homeRoot, ".agents", "skills"),
+		sessionID:       sessionID, maxSteps: 32,
 	}
 	flags := flag.NewFlagSet("tui", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -174,6 +184,8 @@ func parseTUIConfig(args []string, stderr io.Writer) (applicationConfig, error) 
 	flags.StringVar(&config.sessionRoot, "session-root", config.sessionRoot, "private directory for JSONL sessions")
 	flags.StringVar(&config.settingsPath, "settings", config.settingsPath, "hot-reloadable owner-only settings YAML")
 	flags.StringVar(&config.credentialPath, "credentials", config.credentialPath, "owner-only provider account YAML")
+	flags.StringVar(&config.skillsDir, "skills-dir", config.skillsDir, "user skill directory scanned after the project skill directories")
+	flags.StringVar(&config.agentsSkillsDir, "agents-skills-dir", config.agentsSkillsDir, "skill directory shared with other agent tools, scanned last")
 	flags.StringVar(&config.sessionID, "session", config.sessionID, "session ID to create or resume")
 	flags.StringVar(&config.codexHome, "codex-home", "", "Codex home used only by explicit codex-import login")
 	flags.IntVar(&config.maxSteps, "max-steps", config.maxSteps, "maximum model steps per turn (1-256)")
@@ -195,6 +207,7 @@ func normalizeConfig(config applicationConfig) (applicationConfig, error) {
 	for name, value := range map[string]*string{
 		"workspace": &config.workspaceRoot, "session root": &config.sessionRoot,
 		"settings": &config.settingsPath, "credentials": &config.credentialPath,
+		"skills": &config.skillsDir, "agents skills": &config.agentsSkillsDir,
 	} {
 		absolute, err := absolutePath(*value)
 		if err != nil {
@@ -258,7 +271,7 @@ func composeTUI(config applicationConfig, deps dependencies) (*composition, erro
 // each tool provider, and the session format. Bump a provider token whenever
 // its model-visible definitions or behavior change incompatibly.
 func compositionID(config applicationConfig) string {
-	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00fs-tools-v1\x00search-tools-v2\x00shell-tools-v2\x00job-tools-v1\x00subagent-tools-v2\x00todo-tools-v1\x00web-tools-v1\x00question-tools-v1\x00plan-tools-v1\x00session-v2"
+	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00fs-tools-v1\x00search-tools-v2\x00shell-tools-v2\x00job-tools-v1\x00subagent-tools-v2\x00todo-tools-v1\x00web-tools-v1\x00question-tools-v1\x00plan-tools-v1\x00skill-tools-v1\x00session-v2"
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
 }

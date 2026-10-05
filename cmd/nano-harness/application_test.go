@@ -56,6 +56,7 @@ func TestApplication_SupportsIndependentFrontendPlugin(t *testing.T) {
 	config, err := normalizeConfig(applicationConfig{
 		workspaceRoot: root, sessionRoot: filepath.Join(root, "sessions"),
 		settingsPath: filepath.Join(root, "settings.yaml"), credentialPath: filepath.Join(root, "credentials.yaml"),
+		skillsDir: filepath.Join(root, "skills"), agentsSkillsDir: filepath.Join(root, "agents-skills"),
 		sessionID: "frontend-probe", maxSteps: 2,
 	})
 	if err != nil {

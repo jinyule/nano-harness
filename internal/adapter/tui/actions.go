@@ -8,6 +8,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/app/plan"
 	"github.com/jinyule/nano-harness/internal/app/settings"
 	"github.com/jinyule/nano-harness/internal/core/session"
+	"github.com/jinyule/nano-harness/internal/core/skill"
 )
 
 func (model model) command(value string) (tea.Model, tea.Cmd) {
@@ -18,7 +19,7 @@ func (model model) command(value string) (tea.Model, tea.Cmd) {
 		model.quitting = true
 		return model, tea.Quit
 	case "/help":
-		model.addLine("commands> /attach PATH · /accounts · /login PROVIDER METHOD · /logout PROVIDER · /models PROVIDER · /model PROVIDER MODEL · /compact · /permission ask|never · /plan [off|TEXT] · /agents · /interrupt · /steer TEXT · /quit")
+		model.addLine("commands> /attach PATH · /accounts · /login PROVIDER METHOD · /logout PROVIDER · /models PROVIDER · /model PROVIDER MODEL · /compact · /permission ask|never · /plan [off|TEXT] · /agents · /interrupt · /steer TEXT · /SKILL TEXT · /quit")
 		return model, nil
 	case "/interrupt":
 		model.app.agent.Interrupt()
@@ -95,6 +96,12 @@ func (model model) command(value string) (tea.Model, tea.Cmd) {
 			return operationMessage{text: "steer queued", err: err}
 		}
 	default:
+		// A kebab-case /name that is not a TUI command is a skill gesture: the
+		// agent injects the named skill when it is user-invocable, and otherwise
+		// the text stays ordinary input.
+		if skill.ValidName(strings.TrimPrefix(name, "/")) {
+			return model.send(value)
+		}
 		return model.withError("unknown command; use /help")
 	}
 }

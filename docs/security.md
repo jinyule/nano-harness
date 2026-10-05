@@ -74,6 +74,17 @@
 
 这些检查约束 harness 自身，不宣称抵御同一用户下主动制造 TOCTOU 的恶意进程。需要更强对手模型时应使用独立容器/VM 或基于 descriptor 的安全打开，并新增 ADR。
 
+## 运行时 skill 文件
+
+skill 正文是交给模型的指令。项目根 `<project>/.nano-harness/skills` 与 `<project>/.agents/skills` 属于 workspace 或其 Git 仓库内容，可信度与 workspace 文件相同；`--skills-dir` 与 `--agents-skills-dir` 是操作者配置的用户目录，可以位于 workspace 外。发现和加载只读取下列文件，从不写入：
+
+- 根路径本身及其祖先可以是 symlink。根内的直接子项和 bundle 中的 `SKILL.md` 一律用 `lstat` 判定，symlink、FIFO、设备和 socket 都被跳过；打开后用 `os.SameFile` 比较检查时与打开后的文件，不一致则跳过。
+- 只认 `<root>/<name>/SKILL.md` 与 `<root>/<name>.md`，不递归，不读取 bundle 内的其他资源。查找 `<project>` 时只探测各级祖先是否存在 `.git`。
+- 单个文件最多 128 KiB，必须是不含 NUL 的有效 UTF-8；每个根最多 1024 个条目；去重后最多 100 个 skill。
+- 根不存在视为空。配置的用户根已存在但不是目录时启动失败。运行中根不可读、条目或 skill 数超限、文件 I/O 失败都使本次发现不完整：不更新模型已看到的目录，`skill` 工具返回错误。frontmatter 或文本无效的单个 skill 被跳过。
+
+`skill` 不需要 approval，subagent（包括 `never` 策略）也能加载 skill，但只能得到满足上述规则的 instruction 文件。工具结果给出 skill 的基址目录，不扩大 workspace 文件工具的路径约束：目录在 workspace 外时，模型只能通过受 approval 约束的 `bash` 访问其中的资源。加载或注入的正文进入会话日志，transcript 因此可能包含 skill 内容。
+
 ## Approval、shell 与进程
 
 - `write`、`edit` 和 `bash` 在真正执行操作的位置请求一次性 approval，原因由类型化参数生成（目标路径、命令描述或升级理由）。问题与结果均写入 session；UI 不存在、取消、unknown outcome 或持久化失败都不会授权。参数无效或路径不安全的调用不会进入审批。
@@ -102,7 +113,7 @@
 - strict decoder 拒绝未知字段、多 JSON value、未来 version、torn record、unsafe 文件、越界大小、错误 digest、非法因果顺序和 composition mismatch。
 - append 先写、`fsync`，再更新内存状态；失败尝试 truncate 回已知 durable prefix。回滚失败会和原错误一起返回。
 - resume 只对 schema 与因果均有效的完整记录做追加式 repair：取消未决 approval、补 tool error，并关闭 compaction/step/turn。它不截断 torn line、不删除未知内容、不迁移旧格式。
-- model-visible stream chunk、message、call/result、approval、retry、compaction summary、image、规划模式切换与切换提示均进入日志；credential、OAuth notice 和内部 provider DTO 不进入。问题与答案只作为 `tool/call` 参数和 `tool/result` 存在。
+- model-visible stream chunk、message、call/result、approval、retry、compaction summary、image、skill 目录与注入正文、规划模式切换与切换提示均进入日志；credential、OAuth notice 和内部 provider DTO 不进入。问题与答案只作为 `tool/call` 参数和 `tool/result` 存在。
 - `todo/write` 只由调用方 session 中尚未得到 result 的 `todo_write` call 写入，最多 256 项、每项 `content` 2048 字节。decoder 拒绝未知字段、未知状态、未去空白或重复的内容，以及不引用 pending call 的记录。
 
 ## Subagent 与生命周期

@@ -232,6 +232,11 @@ func (model model) submit() (tea.Model, tea.Cmd) {
 	if strings.HasPrefix(value, "/") {
 		return model.command(value)
 	}
+	return model.send(value)
+}
+
+// send submits value and every attached image as one user message.
+func (model model) send(value string) (tea.Model, tea.Cmd) {
 	content := make([]session.ContentBlock, 0, len(model.images)+1)
 	content = append(content, session.ContentBlock{Type: session.ContentText, Text: value})
 	for index := range model.images {

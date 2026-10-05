@@ -113,7 +113,8 @@ func runWebTurn(t *testing.T, searchSettings string) ([]session.Record, *webMode
 	}
 	config, err := normalizeConfig(applicationConfig{
 		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), settingsPath: settingsPath,
-		credentialPath: filepath.Join(data, "credentials.yaml"), sessionID: "session-web", maxSteps: 4,
+		credentialPath: filepath.Join(data, "credentials.yaml"), skillsDir: filepath.Join(data, "skills"),
+		agentsSkillsDir: filepath.Join(data, "agents-skills"), sessionID: "session-web", maxSteps: 4,
 	})
 	if err != nil {
 		t.Fatal(err)

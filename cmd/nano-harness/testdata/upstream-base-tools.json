@@ -314,6 +314,24 @@
       }
     },
     {
+      "name": "skill",
+      "source": "docs/tool-catalog.md (packages/skill/tool-skill/src/index.ts)",
+      "composition": "identical to the catalog; Base mounts @deepseek-ai/dsh-tool-skill with its default config and contributes no system-prompt section",
+      "description": "Load the full instructions for a skill. Call it before acting on a task that names or clearly matches a skill in the session skill catalog.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The exact skill name from the available skills list."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    {
       "name": "todo_write",
       "source": "docs/tool-catalog.md with packages/todo/tool-todo/src/index.ts",
       "composition": "Base sets allowParallelInProgress: true, which selects the description clause inviting several in_progress todos",

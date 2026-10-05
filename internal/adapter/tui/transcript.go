@@ -8,17 +8,25 @@ import (
 	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	"github.com/jinyule/nano-harness/internal/app/plan"
 	"github.com/jinyule/nano-harness/internal/core/session"
+	"github.com/jinyule/nano-harness/internal/core/skill"
 )
 
 func (model *model) applyEvent(event session.Event, live bool) {
 	record := event.Record
 	switch record.Type {
 	case session.RecordUserMessage:
-		text := session.Text(*record.Message)
-		if record.Message.Source.Kind == plan.NoticeSource {
-			model.addLine("mode> " + text)
+		switch record.Message.Source.Kind {
+		case skill.SourceCatalog:
+			model.addLine("skill> catalog updated")
+			return
+		case skill.SourceInvocation:
+			model.addLine("skill> instructions injected")
+			return
+		case plan.NoticeSource:
+			model.addLine("mode> " + session.Text(*record.Message))
 			return
 		}
+		text := session.Text(*record.Message)
 		attachments := 0
 		for _, block := range record.Message.Content {
 			if block.Type == session.ContentImage {

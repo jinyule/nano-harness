@@ -12,6 +12,7 @@ import (
 	questiontool "github.com/jinyule/nano-harness/internal/adapter/tool/question"
 	searchtool "github.com/jinyule/nano-harness/internal/adapter/tool/search"
 	shelltool "github.com/jinyule/nano-harness/internal/adapter/tool/shell"
+	skilltool "github.com/jinyule/nano-harness/internal/adapter/tool/skill"
 	subagenttool "github.com/jinyule/nano-harness/internal/adapter/tool/subagent"
 	todotool "github.com/jinyule/nano-harness/internal/adapter/tool/todo"
 	webtool "github.com/jinyule/nano-harness/internal/adapter/tool/web"
@@ -73,6 +74,7 @@ var (
 	newWebTools          = webtool.New
 	newQuestionTools     = questiontool.New
 	newPlanTools         = plantool.New
+	newSkillTools        = skilltool.New
 )
 
 func composeApplication(config applicationConfig, deps dependencies) (*application, error) {
@@ -187,6 +189,12 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
+	skillTools, err := newSkillTools(toolRuntime, engine, skilltool.Config{
+		Workspace: workspaceRoot.Path(), UserDir: config.skillsDir, AgentsDir: config.agentsSkillsDir,
+	})
+	if err != nil {
+		return nil, err
+	}
 	// Jobs start after shell tools so their cleanup stops every background
 	// process before the shell temporary directory is removed.
 	plugins := []plugin.Plugin{
@@ -194,7 +202,7 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 		providers[0], providers[1], providers[2], approvalService, questionService, toolRuntime,
 		images, assembler, planMode, retryService, compactionService, webService, sessions, engine,
 		registry, root, subagents, fileTools, searchTools, shellTools, jobs, jobTools, subagentTools, todoTools, webTools,
-		questionTools, planTools,
+		questionTools, planTools, skillTools,
 	}
 	return &application{plugins: plugins, root: root, registry: registry, models: modelRuntime,
 		settings: configuration, approval: approvalService, questions: questionService, images: images, subagents: subagents}, nil

@@ -1,6 +1,6 @@
 # 架构规则
 
-本文定义 `nano-harness` 的当前产品架构和依赖规则。composition 已包含设置、账户、三个 LLM provider、图片、agent、会话、工具、后台任务、任务列表、approval、用户提问、规划模式、compaction、subagent、web 检索/抓取与 TUI；新增运行时能力必须扩展这些已记录接缝。
+本文定义 `nano-harness` 的当前产品架构和依赖规则。composition 已包含设置、账户、三个 LLM provider、图片、agent、会话、工具、后台任务、任务列表、approval、用户提问、规划模式、compaction、subagent、web 检索/抓取、运行时 skill 与 TUI；新增运行时能力必须扩展这些已记录接缝。
 
 ## 设计目标
 
@@ -48,7 +48,7 @@ settings → settings file → credential store → LLM runtime
 → OpenAI/Anthropic/OpenRouter providers → approval → user questions
 → tool runtime → images → prompt → plan mode → retry → compaction → web
 → sessions → agent engine → agent registry → root bootstrap → subagents
-→ file/search/shell tools → jobs → job/subagent/todo/web/question/plan tools → TUI
+→ file/search/shell tools → jobs → job/subagent/todo/web/question/plan/skill tools → TUI
 ```
 
 纯值、DTO、算法和仓库工具没有运行时 effect，不包装为空插件。
@@ -116,6 +116,7 @@ Submit user message
   → turn/start + user/message
   → optional proactive compaction
   → plan boundary: pending plan/mode + optional switch notice
+  → step context (user/message from registered providers)
   → step/start + frozen request/header
   → provider stream → durable assistant/chunk
   → assistant/message + all tool/call
@@ -127,6 +128,7 @@ Submit user message
 
 - 一个 agent 串行处理 turn；一个 turn 最多 256 个 step，产品默认 32。一个 step 是一次模型调用与其产生的全部工具执行。
 - 每个 step 在 `step/start` 之前经过规划模式边界：提交待生效的 `plan/mode` 选择、必要时追加用户切换提示，并取得本 step 的规划段落，见[用户提问与规划模式](#用户提问与规划模式)。
+- 规划模式边界之后、`step/start` 之前运行 step 上下文扩展点：`Engine.RegisterContext` 注册的 `ContextProvider` 随注册方 Scope 存在，按注册顺序收到该 step 可见的工具名和已提交日志，返回的消息作为本 turn 的 `user/message`（step 为 0）先提交再进入请求。provider 错误结束 turn，取消映射为 `canceled`。当前唯一的 provider 是运行时 skill；后台任务通知仍由 engine 在 turn 开始和工具 step 边界直接提交。
 - 每个 step 从权威 log 重新折叠 model surface。request header 在调用前固定 provider、model、effort、system、tool schema 和 context window；compaction summary 同样记录其冻结的 provider、model 和 effort。
 - streaming chunk 按 provider 顺序持久化。完成的 assistant message 和全部 tool call 先提交，工具才能执行；每个 call 最终得到唯一 tool result。
 - 没有输出提交的 retryable provider 失败按热策略指数退避；一旦流内容已提交就不自动重试，避免重复事实。
@@ -162,12 +164,13 @@ Submit user message
 | `internal/adapter/tool/web` | `web-tools` | `web_search`、`web_fetch` |
 | `internal/adapter/tool/question` | `question-tools` | 阻塞式 `ask_user_question` |
 | `internal/adapter/tool/plan` | `plan-tools` | `exit_plan_mode` |
+| `internal/adapter/tool/skill` | `skill-tools` | `skill`，以及 step 前的 skill 目录与 `/name` 注入 |
 
 `internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。
 
 `search-tools` 与 `shell-tools` 共用 `cmd` 构造的同一个 platform process runner。search provider 在构造时从 PATH 解析 `rg`，找不到时组装失败；`Start` 运行 `rg --version`，低于 15.0.0 时启动失败，不注册降级工具。`glob` 与 `grep` 按上游参数调用 ripgrep，并解析它的路径列表或 `--json` 输出；进程边界见[安全工程规则](security.md#approvalshell-与进程)，版本前提见[开发规范](development.md#ripgrep)。
 
-`read`、`glob`、`grep`、`web_search`、`web_fetch` 可并行；`write`、`edit`、`bash` 和 `job_*` 是 exclusive；`write`、`edit`、`bash` 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。`bash` 的 `sandbox_permissions: danger-full-access` 是唯一离开 workspace sandbox 的方式，规则见[安全工程规则](security.md#approvalshell-与进程)。
+`read`、`glob`、`grep`、`web_search`、`web_fetch`、`skill` 可并行；`write`、`edit`、`bash` 和 `job_*` 是 exclusive；`write`、`edit`、`bash` 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。`bash` 的 `sandbox_permissions: danger-full-access` 是唯一离开 workspace sandbox 的方式，规则见[安全工程规则](security.md#approvalshell-与进程)。
 
 subagent 工具为 `spawn_subagent`、`subagent_followup`、`subagent_interrupt`、`subagent_report` 和 `list_subagents`。它们调用进程内 `app/subagent`，不启动 Codex、Claude 或另一个 harness 进程。
 
@@ -238,6 +241,17 @@ producer Launch(kind, label, owner, Run)
 
 待生效选择只在进程内。规划模式不改变工具目录、approval、sandbox 或 allowlist，写类工具仍在执行点请求一次性 approval，评估见 ADR-0014。
 
+## 运行时 Skill
+
+`skill-tools` 插件在启动时注册 `skill` 工具，随后向 engine 注册 step 上下文 provider，cleanup 逆序撤销两者。它不持有 goroutine、缓存或监听器：每个 step 和每次工具调用都重新扫描 skill 根，因此增删、改名和策略变化在下一个 step 生效，正文修改在下一次加载生效。`internal/core/skill` 是纯函数包，拥有名称文法、上游目录与 `<skill_content>` 模板、从日志推导目录状态的规则和 `/name` 令牌提取；adapter 负责发现、frontmatter 解析和插件生命周期。
+
+- 根按顺序为 `<project>/.nano-harness/skills`、`<project>/.agents/skills`、`--skills-dir`（默认 `<用户配置目录>/nano-harness/skills`）和 `--agents-skills-dir`（默认 `<home>/.agents/skills`）；`<project>` 是包含 `.git` 的最近祖先或 workspace root。同名取先出现者。
+- `skill` 对 agent 可见时，provider 比较当前 model-invocable skill 与日志中最新可见的目录消息，变化时追加上游初始或完整替换目录（来源 `skill-catalog`）。不可见时按空列表处理；发现不完整时不追加，保留模型已看到的目录。
+- 最近一次 `turn/start` 或 `step/start` 之后的直接用户输入中，`/name` 指向 user-invocable skill 时，其 `<skill_content>` 作为来源 `skill-invocation` 的消息追加在目录之后。TUI 把以 kebab-case `/name` 开头、但不是 TUI 命令的输入作为普通消息发送。
+- 目录和注入都是普通 `user/message`，来源 kind `skill-catalog` 与 `skill-invocation` 不同于直接输入 `user`、后台任务通知 `tool-jobs` 和规划切换提示 `plan-mode`；只有 `user` 来源的文本参与 `/name` 识别，目录基准只看 `skill-catalog`。subagent 使用自己的 session 和 allowlist 独立获得目录；fork 的文本快照会包含 parent 当时的目录文本。
+
+文件边界见[安全工程规则](security.md#运行时-skill-文件)，格式、上限与上游差异见 [ADR-0012](decisions/0012-runtime-skills.md)。
+
 ## 图片输入
 
 TUI 的 `/attach` 显式读取本地 JPEG/PNG。image plugin 限制源文件大小和像素数，最长边缩放到 2048，重新编码为有界 JPEG，记录尺寸、SHA-256 和标准 base64。规范化图片作为 `user/message` content block 持久化，因而 resume、fork、compaction 和 vision provider 请求都从同一事实构建。模型不支持 vision 时 provider 在 wire 调用前拒绝。
@@ -256,7 +270,7 @@ subagent/descriptor, todo/write, plan/mode, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。
