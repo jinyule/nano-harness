@@ -107,7 +107,9 @@ type Fetcher interface {
 }
 
 // Service runs web operations until scope cleanup, which cancels and waits for
-// every operation still in flight.
+// every operation still in flight. The wait ends once each operation's provider
+// calls have returned and it has unregistered; the caller then receives the
+// result on its own goroutine, after cleanup may already have returned.
 type Service struct {
 	models        *llm.Runtime
 	settings      *settings.Service

@@ -197,7 +197,7 @@ app/web.Service ──Search──► llm.Runtime.PrepareCall(web.search route) 
         └────────Fetch───► Fetcher ← adapter/web/fetch（公网 HTTP(S)）
 ```
 
-- `app/web.Service` 是插件：启动后接受操作，cleanup 先拒绝新操作，再取消并等待全部在途检索和抓取。
+- `app/web.Service` 是插件：启动后接受操作，cleanup 先拒绝新操作，再取消全部在途检索和抓取，并等待它们的 provider 调用返回、操作注销。调用方在自己的 goroutine 上收到结果，这可能晚于 cleanup 返回。
 - 检索 route 由 settings 的 `web.search.provider/model` 显式选择，默认未配置。工具始终注册，因此热切换设置不改变模型可见 schema；未配置时每次调用返回 `WEB_PROVIDER_UNAVAILABLE`。
 - 一次 `web_search` 接受 1–4 个非空查询，精确重复项按首次出现折叠；只准备一次账户，多个查询并发执行，首个失败取消其余并在全部结束后返回。每个查询的来源先截到 8 条，再按 rank 轮转合并、按 URL 去重并截到 8 条；有回答文本时以 `### <查询>` 标注。整个调用限时 60 s。
 - OpenAI Responses 与 Codex Responses 发送 `{"type":"web_search"}` 工具并读取 SSE 输出项，必须出现 `web_search_call`；来源取自 `url_citation`。Anthropic Messages 以非流式请求发送 `web_search_20250305`（`max_uses: 5`，`max_tokens: 4096`），必须出现 `web_search_tool_result`，片段取自 citation 的 `cited_text`，工具错误码映射为限流、服务端或非法请求。OpenRouter Chat Completions 以非流式请求发送 `openrouter:web_search` server tool（`max_results: 8`），来源取自 `url_citation`。每个响应最多保留 64 个来源。

@@ -177,18 +177,36 @@ func TestService_LifecycleRejectsWorkOutsideScope(t *testing.T) {
 	}
 }
 
+// blockingOperation is a provider call that reports its start, reports when it
+// observes cancellation, then holds until released before reporting its return.
+type blockingOperation struct {
+	started, cancelled, release, returned chan struct{}
+}
+
+func newBlockingOperation() *blockingOperation {
+	return &blockingOperation{started: make(chan struct{}), cancelled: make(chan struct{}), release: make(chan struct{}), returned: make(chan struct{})}
+}
+
+func (operation *blockingOperation) run(ctx context.Context) error {
+	close(operation.started)
+	<-ctx.Done()
+	close(operation.cancelled)
+	<-operation.release
+	close(operation.returned)
+	return ctx.Err()
+}
+
+// Quiescence covers the service's own work: Close returns only after every
+// provider call has returned and its operation is unregistered. Callers observe
+// their results after that point, on their own goroutines, so the test waits for
+// those results instead of expecting them to be ready when Close returns.
 func TestService_ShutdownCancelsAndWaitsForInFlightOperations(t *testing.T) {
-	fetchStarted := make(chan struct{})
+	fetch, search := newBlockingOperation(), newBlockingOperation()
 	current := newFixture(t, configured, webStore{}, fetcherFunc(func(ctx context.Context, _ string) (FetchResult, error) {
-		close(fetchStarted)
-		<-ctx.Done()
-		return FetchResult{}, ctx.Err()
+		return FetchResult{}, fetch.run(ctx)
 	}))
-	searchStarted := make(chan struct{})
 	current.model.search = func(ctx context.Context, _ llm.SearchRequest) (llm.SearchResult, error) {
-		close(searchStarted)
-		<-ctx.Done()
-		return llm.SearchResult{}, ctx.Err()
+		return llm.SearchResult{}, search.run(ctx)
 	}
 	searchDone := make(chan error, 1)
 	fetchDone := make(chan error, 1)
@@ -200,28 +218,43 @@ func TestService_ShutdownCancelsAndWaitsForInFlightOperations(t *testing.T) {
 		_, err := current.service.Fetch(context.Background(), "https://go.dev")
 		fetchDone <- err
 	}()
-	<-searchStarted
-	<-fetchStarted
-	if err := current.scope.Close(context.Background()); err != nil {
+	<-search.started
+	<-fetch.started
+	closed := make(chan error, 1)
+	go func() { closed <- current.scope.Close(context.Background()) }()
+	<-search.cancelled
+	<-fetch.cancelled
+	// Both provider calls are cancelled but held, so their operations are still
+	// registered and Close must still be waiting.
+	select {
+	case <-closed:
+		t.Fatal("shutdown returned while provider calls were still running")
+	default:
+	}
+	if _, err := current.service.Search(context.Background(), []string{"late"}); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("search during shutdown=%v", err)
+	}
+	close(search.release)
+	close(fetch.release)
+	if err := <-closed; err != nil {
 		t.Fatal(err)
 	}
-	// Close returned only after both operations settled, so both results are ready.
-	select {
-	case err := <-searchDone:
-		expectCode(t, err, CodeAborted)
-	default:
-		t.Fatal("shutdown returned before search settled")
-	}
-	select {
-	case err := <-fetchDone:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("fetch after shutdown=%v", err)
+	for name, operation := range map[string]*blockingOperation{"search": search, "fetch": fetch} {
+		select {
+		case <-operation.returned:
+		default:
+			t.Fatalf("shutdown returned before the %s provider call returned", name)
 		}
-	default:
-		t.Fatal("shutdown returned before fetch settled")
 	}
-	if len(current.service.operations) != 0 {
-		t.Fatal("operation registry retained cancelled work")
+	current.service.mu.Lock()
+	registered := len(current.service.operations)
+	current.service.mu.Unlock()
+	if registered != 0 {
+		t.Fatalf("operation registry retained %d cancelled operations", registered)
+	}
+	expectCode(t, <-searchDone, CodeAborted)
+	if err := <-fetchDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("fetch after shutdown=%v", err)
 	}
 }
 

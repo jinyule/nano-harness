@@ -15,7 +15,7 @@
 
 长期决定见 [ADR-0011](../../../docs/decisions/0011-provider-web-search-and-public-fetch.md)，事实归 [架构](../../../docs/architecture.md#web-检索与抓取)与[安全规则](../../../docs/security.md#网络边界)。本次实施：
 
-- **插件与 composition。** `internal/app/web.Service`（ID `web`）位于 compaction 之后、sessions 之前；cleanup 先拒绝新操作，再取消全部在途操作并等待结束。`internal/adapter/tool/web.Provider`（ID `web-tools`）位于 subagent tools 之后，Start 依次登记两个 `tool.Define` 编译的工具，每次登记由 tool runtime 在同一 Scope 中挂 cleanup；第二次登记失败时关闭该 Scope 会回收第一项。`internal/adapter/web/fetch.Client` 没有生命周期 effect（每跳 transport 在返回前关闭），作为依赖注入 `app/web`，不是插件。`cmd` 的 `dependencies` 增加 `webResolver`/`webDial`，生产为 nil。
+- **插件与 composition。** `internal/app/web.Service`（ID `web`）位于 compaction 之后、sessions 之前；cleanup 先拒绝新操作，再取消全部在途操作，并等待每个操作的 provider 调用返回、操作注销。调用方在自己的 goroutine 上收到结果，可能晚于 cleanup 返回；静止保证只覆盖 service 拥有的工作。`internal/adapter/tool/web.Provider`（ID `web-tools`）位于 subagent tools 之后，Start 依次登记两个 `tool.Define` 编译的工具，每次登记由 tool runtime 在同一 Scope 中挂 cleanup；第二次登记失败时关闭该 Scope 会回收第一项。`internal/adapter/web/fetch.Client` 没有生命周期 effect（每跳 transport 在返回前关闭），作为依赖注入 `app/web`，不是插件。`cmd` 的 `dependencies` 增加 `webResolver`/`webDial`，生产为 nil。
 - **llm 与 provider。** `llm.PreparedModel` 增加 `Search`，`llm.Call.Search` 校验非空查询和正的结果上限后委托 provider。`internal/adapter/model/provider/search.go` 实现三种 wire；`responsesTarget`、`anthropicHeaders` 从对话路径抽出供两者共用；通用 `send` 取代原 `streamRequest` 主体，对所有 provider 请求拒绝重定向（protocol 错误）。
 - **settings。** `Document.Web.Search{Provider,Model}` 默认为空，YAML/JSON 在为空时省略；两者必须同时给出且 model 在 provider 目录中。
 - **工具定义。** 两个工具用 `tool.Spec` 声明，`Concurrent` 恒为 true，没有 `Approval`，也没有 `Check`（语义校验只在 `app/web`）。根对象未声明参数按 ADR-0007 被拒绝且不触达 service。`internal/app/tool/define.go` 增加参考 section 表的 `OrderWebSearch = 2000`、`OrderWebFetch = 2100`；guidance 由 `Runtime.Catalog` 渲染，prompt assembler 没有 web 专用分支。
@@ -52,5 +52,19 @@
 - 目录：`TestComposition_ToolCatalogGolden` 与 `TestComposition_MatchesUpstreamBaseTools` 从真实 composition 的 `request/header` 和 provider 收到的请求比较 14 个工具，其中 9 个与参考 Base 逐字节一致。
 - assembled：`TestComposition_WebSearchAndFetchEndToEnd` 经真实 settings 文件与 composition 让模型一步调用两个工具，从磁盘 transcript 断言 request header 中冻结的 schema、system prompt 指引、检索来源与转换后的页面（脚本被删除），抓取只拨号 `93.184.216.34:80`；`TestComposition_WebSearchUnconfiguredFailsClosed` 证明默认配置返回 `WEB_PROVIDER_UNAVAILABLE` 且不联系 provider。
 - settings 文件：未配置时不写入 `web:`；配置值往返；README 示例可解析；未知子字段被 strict YAML 拒绝。
+
+### 关闭测试的偶发失败（2026-10-05）
+
+WP7 在集成分支上跑全量 race 测试时，`TestService_ShutdownCancelsAndWaitsForInFlightOperations` 偶发失败，首个稳定失败特征是 `shutdown returned before search settled`；之后单独重跑时通过。
+
+根因在测试的观察方式，不在产品代码。`Search`/`Fetch` 用 `defer done()` 在返回时执行 `group.Done()`，cleanup 的 `group.Wait()` 随之返回；旧测试在 cleanup 返回后用带 `default` 的 `select` 读取调用方 goroutine 的结果 channel，而那次发送发生在 `Search` 返回之后。`group.Done()` 与发送之间没有 happens-before，测试 goroutine 可以在另一个 P 上先到达 `select`。被测的产品保证成立：`done()` 之前，provider 调用和 `runQueries` 的子 goroutine 都已结束，结果映射也已完成，service 不再执行任何代码。
+
+复现：在 `00803e7` 上执行 `go test -race -c -o /tmp/wp5-web.test ./internal/app/web/`，再运行 `/tmp/wp5-web.test -test.run '^TestService_ShutdownCancelsAndWaitsForInFlightOperations$' -test.count 3000 -test.cpu N`。不加外部负载时，`-cpu 1` 为 0/3000，`-cpu 2` 为 12/3000，`-cpu 8` 为 66/3000，search 和 fetch 两处断言都出现过；同时运行 `go test -race ./internal/...` 时，`-cpu 8` 为 17/1000。单 P 时被唤醒的 goroutine 通常要等发送方让出才运行，所以单独重跑难以复现。
+
+修复只改测试：provider 替身在观察到取消后报告 `cancelled`，再阻塞到测试 `release` 才报告 `returned` 并返回。测试在另一个 goroutine 中关闭 scope，确认两个调用都已取消且 cleanup 仍未返回，并确认关闭期间的新检索被拒绝；释放后等待 cleanup 返回，再断言两个 `returned` 都已发生、操作表为空，最后阻塞读取调用方结果并检查 `WEB_ABORTED` 与 `context.Canceled`。对正确实现，每个断言都由 channel 的 happens-before 关系决定，不依赖调度。文档和 `Service` 注释写明，静止只覆盖 service 自身的工作。
+
+修复后的证据：同一命令下，新测试在 `-cpu 1,2,8` 各 3000 次共 9000 次运行中全部通过；在同时运行 `go test -race ./internal/...` 的负载下，另外 9000 次也全部通过，而旧测试在同一负载下仍为 17/1000 失败。在私有副本中删除 cleanup 的 `group.Wait()` 后，新测试在 `-count=200 -cpu 1,2,8` 的 600 次运行中全部失败：598 次报 “still running”，2 次报 provider 调用尚未返回。这一变异的检出依赖调度，没有加入 `make mutation`，以免产生偶发的 survived。
+
+使用私有 `GOLANGCI_LINT_CACHE` 第一次运行 `make check` 时，失败只出现在 coverage 阶段的 `TestComposition_SubagentsEndToEnd`（WP7，`subagent_test.go:270` 期望 continuable child 排在 catalog 首位）。该失败与本修复无关，在未改动的 `00803e7` 上同样出现：编译测试二进制后，`-test.count 100 -test.cpu 1,4,8` 失败 38/300，`-cpu 1` 失败 46/100。原因是模型在同一步中并发调用 `subagent` 与 `subagent_fork`，两条 `subagent/catalog` 记录写入根会话的顺序不确定，已交给 WP7 处理。第二次运行 `make check` 通过：coverage 逐文件 100%，lint `0 issues`，17 个 mutation 全部 killed，build smoke 正常。
 
 未获得的证据：没有对 OpenAI、Codex、Anthropic 或 OpenRouter 的 live 检索调用，也没有访问真实公网页面；`make tui-e2e` 与跨平台构建未在本 WP 运行。
