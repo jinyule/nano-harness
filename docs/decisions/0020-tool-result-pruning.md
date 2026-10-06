@@ -29,7 +29,7 @@
 4. 强制请求分两种。context-window 错误触发的恢复先裁剪、再无条件摘要，与上游 overflow 一致；只能裁剪而没有可摘要前缀时仍报告 surface 已改变，engine 随之重试新的 step，下一次没有可裁剪内容时按原规则失败。用户的 `/compact` 设置 `Request.Manual`，跳过裁剪，与上游手动 compaction 一致。
 5. 任何一条 `compaction/prune` 追加失败都返回带序号的错误（`%w` 保留原因），之前已提交的裁剪保留，turn 按既有规则以 error 结束。
 
-`Maybe` 的布尔结果表示 surface 是否改变（裁剪或摘要），engine 对 context-window 恢复只依赖这一含义。
+`Maybe` 的布尔结果表示 surface 是否改变（裁剪或摘要），返回错误时也是如此：摘要在任何阶段失败（开始记录、准备调用、流式请求、空摘要、写摘要）时，结果等于此前是否提交了裁剪；摘要已提交而收尾记录写入失败时为 true，因为已提交的摘要已经替换前缀，未结束的事务由 resume repair 关闭。engine 对 context-window 恢复只依赖这一含义，出错时不读取它。
 
 ### 摘要发布与失败
 
@@ -61,7 +61,7 @@
 - `seq` 是被替换的 `tool/result` 事件序号；`output` 是替换文本，不超过单块文本上限。`step` 必须缺省；`turn` 为 0 表示在 turn 之间记录，否则必须等于当前打开的 turn；记录不能位于打开的 step 或 compaction 事务内。
 - `session.Surface` 遇到它时找到序号为 `seq`、仍可见的工具结果节点，要求 `output` 恰好等于 `PruneToolOutput(原输出)`，然后只替换该节点的文本，节点序号、call ID、错误标记和图片保持不变，所以之后的 compaction summary 照常按原序号遮蔽它。指向不存在或已被摘要遮蔽的节点、指向非工具结果、原输出不超过阈值、文本与确定性裁剪不符（包括对同一结果第二次裁剪）都使折叠失败；JSONL 的 order validator 因而拒绝整份日志，追加时拒绝该记录。
 - 与上游的差异：本仓不追加替换用的 `tool/result`，因为工具结果必须属于打开的 step 与 pending call；替换文本放在 `compaction/prune` 自身，同一事实既是遮蔽也是替换。上游的影子计价字段（被遮蔽 token 估算）只服务它的增量 token meter，本仓每次从 surface 重新估算，所以不记录。
-- 原 `tool/result` 不删除、不改写；TUI 转录照常显示原结果，并为裁剪显示 `compact>` 行。fork 种子复制已完成 turn 的全部记录，child 的 surface 与 parent 一致；resume 从日志重新折叠，得到相同 surface。
+- 原 `tool/result` 不删除、不改写；TUI 转录照常显示原结果，并为裁剪显示 `compact>` 行。fork 种子复制到 parent 最后一个 `turn/end` 为止的全部记录，child 的 surface 与 parent 最后一个已完成 turn 时一致；parent 在进行中的 turn 里提交的裁剪不在种子中，child 先看到未裁剪的输出，在自己的压力检查越过阈值时按同一规则裁剪。这与上游 fork 只继承已完成 turn 的种子一致，不另外复制进行中的裁剪：这些裁剪记录属于 parent 进行中的 turn，单独复制会把它们放到闭合前缀之外，破坏种子只含已完成 turn 的不变量；resume 从日志重新折叠，得到相同 surface。
 
 ### 版本识别、拒绝旧格式与恢复
 

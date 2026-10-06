@@ -104,15 +104,17 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	return nil
 }
 
-// Maybe reduces the surface when pressure crosses the hot threshold or the
-// request is forced. It first records a compaction/prune for every visible
-// tool result over the pruning budget; a pressure request that the pruned
-// surface relieves stops there, and otherwise the oldest prefix is
-// summarized. It reports whether the surface changed. Prunes recorded before
-// a failure stay in the log. Once compaction/start is committed the
-// transaction is always closed: a failure, including cancellation, records
-// an error compaction/end, and a committed summary records its end even if
-// the context is cancelled meanwhile.
+// Maybe reduces the surface when pressure crosses the request route's
+// threshold or the request is forced. It first records a compaction/prune
+// for every visible tool result over the pruning budget; a pressure request
+// that the pruned surface relieves stops there, and otherwise the oldest
+// prefix is summarized. It reports whether the surface changed, also when it
+// returns an error: prunes recorded before a failure stay in the log, and a
+// summary committed before its closing record failed already replaces the
+// prefix. Once compaction/start is committed the transaction is always
+// closed: a failure, including cancellation, records an error
+// compaction/end, and a committed summary records its end even if the
+// context is cancelled meanwhile.
 func (service *Service) Maybe(ctx context.Context, request Request) (bool, error) {
 	if request.Journal == nil {
 		return false, ErrInvalidRequest
@@ -160,11 +162,11 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 	}
 	id := fmt.Sprintf("compact-%d", service.nextID.Add(1))
 	if _, err := request.Journal.Append(ctx, session.Record{Type: session.RecordCompactionStart, Turn: request.Turn, Compaction: &session.CompactionData{ID: id}}); err != nil {
-		return false, err
+		return pruned, err
 	}
 	call, err := service.llm.PrepareCall(ctx, route.Provider, route.Model)
 	if err != nil {
-		return false, service.finishError(ctx, request, id, err)
+		return pruned, service.finishError(ctx, request, id, err)
 	}
 	modelInfo := call.Info()
 	var completion llm.Completion
@@ -182,14 +184,14 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 		}
 	}
 	if err != nil {
-		return false, service.finishError(ctx, request, id, err)
+		return pruned, service.finishError(ctx, request, id, err)
 	}
 	if completion.Stop == llm.StopMaxTokens {
 		return pruned, service.finishError(ctx, request, id, fmt.Errorf("compaction %s: %w", id, errSummaryTruncated))
 	}
 	text := session.Text(completion.Message)
 	if text == "" || len(completion.Calls) != 0 {
-		return false, service.finishError(ctx, request, id, errors.New("summary response was empty or attempted a tool"))
+		return pruned, service.finishError(ctx, request, id, errors.New("summary response was empty or attempted a tool"))
 	}
 	sequences := make([]uint64, len(shadowed))
 	for index, node := range shadowed {
@@ -204,10 +206,12 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 		Provider: modelInfo.Provider, Model: modelInfo.ID, Effort: route.Effort,
 	}
 	if _, err := request.Journal.Append(ctx, session.Record{Type: session.RecordCompactionSummary, Turn: request.Turn, Compaction: data}); err != nil {
-		return false, service.finishError(ctx, request, id, err)
+		return pruned, service.finishError(ctx, request, id, err)
 	}
+	// The committed summary already replaces the prefix; resume repair
+	// closes the transaction if the closing record cannot be written.
 	if _, err := request.Journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordCompactionEnd, Turn: request.Turn, Compaction: &session.CompactionData{ID: id}}); err != nil {
-		return false, err
+		return true, err
 	}
 	return true, nil
 }
