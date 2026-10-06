@@ -240,9 +240,9 @@ func TestFetch_TruncatesStreamedBytesDecompressedBytesAndRunes(t *testing.T) {
 		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		switch request.URL.Path {
 		case "/exact-runes":
-			_, _ = io.WriteString(writer, strings.Repeat("界", maxBodyRunes))
+			_, _ = io.WriteString(writer, strings.Repeat("界", maxBodyUnits))
 		case "/extra-rune":
-			_, _ = io.WriteString(writer, strings.Repeat("界", maxBodyRunes)+"!")
+			_, _ = io.WriteString(writer, strings.Repeat("界", maxBodyUnits)+"!")
 		case "/stream":
 			// Chunked encoding hides the size until the body exceeds the byte cap.
 			writer.(http.Flusher).Flush()
@@ -255,7 +255,7 @@ func TestFetch_TruncatesStreamedBytesDecompressedBytesAndRunes(t *testing.T) {
 		}
 	})
 	exact, err := current.client.Fetch(context.Background(), "http://docs.example.test/exact-runes")
-	if err != nil || exact.Truncated || len([]rune(exact.Content)) != maxBodyRunes {
+	if err != nil || exact.Truncated || len([]rune(exact.Content)) != maxBodyUnits {
 		t.Fatalf("exact runes truncated=%v len=%d err=%v", exact.Truncated, len([]rune(exact.Content)), err)
 	}
 	extra, err := current.client.Fetch(context.Background(), "http://docs.example.test/extra-rune")
@@ -264,7 +264,7 @@ func TestFetch_TruncatesStreamedBytesDecompressedBytesAndRunes(t *testing.T) {
 	}
 	for _, path := range []string{"/stream", "/bomb"} {
 		result, err := current.client.Fetch(context.Background(), "http://docs.example.test"+path)
-		if err != nil || !result.Truncated || len([]rune(result.Content)) != maxBodyRunes {
+		if err != nil || !result.Truncated || len([]rune(result.Content)) != maxBodyUnits {
 			t.Fatalf("%s truncated=%v len=%d err=%v", path, result.Truncated, len(result.Content), err)
 		}
 	}
@@ -304,7 +304,7 @@ func TestFetch_FollowsSameOriginRedirectsWithFreshValidation(t *testing.T) {
 		}
 	})
 	result, err := current.client.Fetch(context.Background(), "http://docs.example.test/start")
-	if err != nil || result.Content != "arrived" || result.URL != "http://DOCS.example.test:80/final" {
+	if err != nil || result.Content != "arrived" || result.URL != "http://docs.example.test/final" {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
 	if lookups := current.resolver.lookups(); len(lookups) != 3 {
@@ -570,8 +570,8 @@ func TestFetch_VerifiesTLSAgainstURLHostname(t *testing.T) {
 	client.roots = roots
 	// The test certificate names example.com, so verification must use the URL
 	// hostname even though the connection is pinned to an IP address.
-	result, err := client.Fetch(context.Background(), "https://example.com/")
-	if err != nil || result.Content != "secure" {
+	result, err := client.Fetch(context.Background(), "HTTPS://EXAMPLE.com:443/")
+	if err != nil || result.Content != "secure" || result.URL != "https://example.com/" {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
 	if dialed := dialer.destinations(); dialed[0] != publicIP+":443" {
@@ -616,7 +616,7 @@ func TestRedirectStatus(t *testing.T) {
 			t.Errorf("status %d", status)
 		}
 	}
-	if truncated, cut := truncateRunes("é", 1); truncated != "é" || cut {
+	if truncated, cut := truncateUTF16("é", 1); truncated != "é" || cut {
 		t.Fatal("rune boundary")
 	}
 }

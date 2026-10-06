@@ -1,0 +1,58 @@
+[
+  {
+    "id": "fetch-decompressed-byte-cap",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "source: source, remaining: maxResponseBytes",
+    "after": "source: source, remaining: maxResponseBytes * 3",
+    "test": "^TestFetch_StopsDecompressionBeforeBombTrailer$"
+  },
+  {
+    "id": "fetch-bypass-decompression",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "source: source, remaining: maxResponseBytes",
+    "after": "source: io.MultiReader(io.LimitReader(source, 0), response.Body), remaining: maxResponseBytes",
+    "test": "^TestFetch_DecodesSupportedContentEncodings$"
+  },
+  {
+    "id": "fetch-utf16-budget",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "if scalar > 0xffff {",
+    "after": "if false && scalar > 0xffff {",
+    "test": "^TestFetch_TruncatesUTF16WithoutSplittingEmoji$"
+  },
+  {
+    "id": "fetch-url-idna-mapping",
+    "file": "internal/adapter/web/fetch/policy.go",
+    "before": "idna.Lookup.ToASCII(host)",
+    "after": "idna.Lookup.ToASCII(\"example.com\")",
+    "test": "^TestParseURL_NormalizesNormalURLs$"
+  },
+  {
+    "id": "fetch-address-family-interleave",
+    "file": "internal/adapter/web/fetch/dial.go",
+    "before": "pending := interleaveAddresses(addresses)",
+    "after": "pending := addresses",
+    "test": "^TestDialPinned_InterleavesAndJoinsLateConnections$"
+  },
+  {
+    "id": "fetch-close-late-connections",
+    "file": "internal/adapter/web/fetch/dial.go",
+    "before": "if result.connection != nil {",
+    "after": "if false && result.connection != nil {",
+    "test": "^TestDialPinned_InterleavesAndJoinsLateConnections$"
+  },
+  {
+    "id": "fetch-cancelled-winner",
+    "file": "internal/adapter/web/fetch/dial.go",
+    "before": "winner != nil && ctx.Err() != nil",
+    "after": "winner != nil && false && ctx.Err() != nil",
+    "test": "^TestDialPinned_InterleavesAndJoinsLateConnections$"
+  },
+  {
+    "id": "fetch-block-fallback",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "client.dialPinned(ctx, \"tcp\", addresses, port, ticker.C)",
+    "after": "client.dialPinned(ctx, \"tcp\", addresses, port, nil)",
+    "test": "^TestFetch_FallsBackWhileFirstValidatedAddressIsBlocked$"
+  }
+]

@@ -29,7 +29,8 @@ const (
 	dialTimeout      = 10 * time.Second
 	maxRedirects     = 5
 	maxResponseBytes = 5_000_000
-	maxBodyRunes     = 100_000
+	maxBodyUnits     = 100_000
+	fallbackDelay    = 250 * time.Millisecond
 	maxHeaderBytes   = 64 << 10
 	userAgent        = "nano-harness (+https://github.com/jinyule/nano-harness)"
 	acceptHeader     = "text/html,application/xhtml+xml,text/*;q=0.9,application/json;q=0.8"
@@ -42,7 +43,8 @@ type Resolver interface {
 	LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
 }
 
-// DialFunc opens one TCP connection to a validated IP:port.
+// DialFunc opens one TCP connection to a validated IP:port. It must support
+// concurrent calls and return promptly when ctx is cancelled.
 type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
 
 // Config injects the network boundary. Nil fields select the system resolver and
@@ -150,21 +152,22 @@ func (client *Client) request(ctx context.Context, target *url.URL) (*http.Respo
 		return nil, nil, err
 	}
 	port := portOf(target)
+	// Dial synchronously under the fetch owner. Transport may return from a
+	// cancelled request before its own DialContext callback has finished.
+	ticker := time.NewTicker(fallbackDelay)
+	connection, err := client.dialPinned(ctx, "tcp", addresses, port, ticker.C)
+	ticker.Stop()
+	if err != nil {
+		return nil, nil, client.failure(ctx, "web fetch failed", err)
+	}
 	transport := &http.Transport{
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			var failures []error
-			for _, address := range addresses {
-				connection, err := client.dial(ctx, network, netip.AddrPortFrom(address, port).String())
-				if err == nil {
-					return connection, nil
-				}
-				failures = append(failures, err)
-			}
-			return nil, errors.Join(failures...)
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return connection, nil
 		},
 		TLSClientConfig:        &tls.Config{RootCAs: client.roots, MinVersion: tls.VersionTLS12},
 		TLSHandshakeTimeout:    dialTimeout,
 		DisableKeepAlives:      true,
+		DisableCompression:     true,
 		MaxResponseHeaderBytes: maxHeaderBytes,
 	}
 	httpClient := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -172,10 +175,11 @@ func (client *Client) request(ctx context.Context, target *url.URL) (*http.Respo
 	}}
 	request := (&http.Request{
 		Method: http.MethodGet, URL: target, Host: target.Host,
-		Header: http.Header{"User-Agent": {userAgent}, "Accept": {acceptHeader}},
+		Header: http.Header{"User-Agent": {userAgent}, "Accept": {acceptHeader}, "Accept-Encoding": {"gzip, deflate"}},
 	}).WithContext(ctx)
 	response, err := httpClient.Do(request)
 	if err != nil {
+		_ = connection.Close()
 		transport.CloseIdleConnections()
 		return nil, nil, client.failure(ctx, "web fetch failed", err)
 	}
@@ -263,13 +267,22 @@ func (client *Client) read(ctx context.Context, response *http.Response, final *
 	if response.ContentLength > maxResponseBytes {
 		return web.FetchResult{}, &web.Error{Code: web.CodeFetchTooLarge, Message: fmt.Sprintf("response exceeds the maximum of %d bytes", maxResponseBytes)}
 	}
-	body := &cappedReader{source: response.Body, remaining: maxResponseBytes}
+	source, decoders, err := decompress(response.Body, strings.Join(response.Header.Values("Content-Encoding"), ","))
+	defer func() {
+		for _, decoder := range decoders {
+			_ = decoder.Close()
+		}
+	}()
+	if err != nil {
+		return web.FetchResult{}, client.failure(ctx, "web fetch decompression failed", err)
+	}
+	body := &cappedReader{source: source, remaining: maxResponseBytes}
 	decoded, err := io.ReadAll(transform.NewReader(body, encoding.NewDecoder()))
 	if err != nil {
 		return web.FetchResult{}, client.failure(ctx, "web fetch body read failed", err)
 	}
 	content := strings.TrimPrefix(string(decoded), "\ufeff")
-	content, cut := truncateRunes(content, maxBodyRunes)
+	content, cut := truncateUTF16(content, maxBodyUnits)
 	return web.FetchResult{URL: final.String(), StatusCode: response.StatusCode, Kind: kind, Content: content, Truncated: body.truncated || cut}, nil
 }
 
@@ -340,14 +353,17 @@ func charsetLabel(contentType string) string {
 	return ""
 }
 
-// truncateRunes keeps at most limit runes and reports whether any were dropped.
-func truncateRunes(value string, limit int) (string, bool) {
+// truncateUTF16 bounds UTF-16 code units without splitting a Unicode scalar.
+func truncateUTF16(value string, limit int) (string, bool) {
 	count := 0
-	for index := range value {
-		if count == limit {
+	for index, scalar := range value {
+		count++
+		if scalar > 0xffff {
+			count++
+		}
+		if count > limit {
 			return value[:index], true
 		}
-		count++
 	}
 	return value, false
 }

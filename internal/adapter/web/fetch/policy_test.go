@@ -89,14 +89,13 @@ func TestParseURL_EnforcesNetworkIndependentPolicy(t *testing.T) {
 		value string
 		code  web.Code
 	}{
-		{"https://example.com/" + strings.Repeat("a", maxURLBytes), web.CodeInvalidURL},
+		{"https://example.com/" + strings.Repeat("a", maxURLUnits), web.CodeInvalidURL},
 		{"http://%zz", web.CodeInvalidURL},
 		{"ftp://example.com/", web.CodeInvalidURL},
 		{"file:///etc/passwd", web.CodeInvalidURL},
 		{"javascript:alert(1)", web.CodeInvalidURL},
 		{"example.com", web.CodeInvalidURL},
 		{"http:///path", web.CodeInvalidURL},
-		{"http:example.com", web.CodeInvalidURL},
 		{"http://example.com:0/", web.CodeInvalidURL},
 		{"http://example.com:70000/", web.CodeInvalidURL},
 		{"https://user:secret@example.com/", web.CodeBlockedURL},

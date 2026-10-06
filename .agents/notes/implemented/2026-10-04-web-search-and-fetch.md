@@ -15,6 +15,8 @@
 
 长期决定见 [ADR-0011](../../../docs/decisions/0011-provider-web-search-and-public-fetch.md)，事实归 [架构](../../../docs/architecture.md#web-检索与抓取)与[安全规则](../../../docs/security.md#网络边界)。本次实施：
 
+抓取的压缩、URL/IDNA、UTF-16 预算和并发连接回退实施证据由[传输对齐 Note](2026-10-06-web-fetch-transport-alignment.md)拥有；本 Note 保留 web 服务、工具、provider 与 composition 的实施证据。
+
 - **插件与 composition。** `internal/app/web.Service`（ID `web`）位于 compaction 之后、sessions 之前；cleanup 先拒绝新操作，再取消全部在途操作，并等待每个操作的 provider 调用返回、操作注销。调用方在自己的 goroutine 上收到结果，可能晚于 cleanup 返回；静止保证只覆盖 service 拥有的工作。`internal/adapter/tool/web.Provider`（ID `web-tools`）位于 subagent tools 之后，Start 依次登记两个 `tool.Define` 编译的工具，每次登记由 tool runtime 在同一 Scope 中挂 cleanup；第二次登记失败时关闭该 Scope 会回收第一项。`internal/adapter/web/fetch.Client` 没有生命周期 effect（每跳 transport 在返回前关闭），作为依赖注入 `app/web`，不是插件。`cmd` 的 `dependencies` 增加 `webResolver`/`webDial`，生产为 nil。
 - **llm 与 provider。** `llm.PreparedModel` 增加 `Search`，`llm.Call.Search` 校验非空查询和正的结果上限后委托 provider。`internal/adapter/model/provider/search.go` 实现三种 wire；`responsesTarget`、`anthropicHeaders` 从对话路径抽出供两者共用；通用 `send` 取代原 `streamRequest` 主体；对话、检索和 OAuth 请求都经 `Provider.do` 发出，拒绝重定向（protocol 错误）。
 - **settings。** `Document.Web.Search{Provider,Model}` 默认为空，YAML/JSON 在为空时省略；两者必须同时给出且 model 在 provider 目录中。
