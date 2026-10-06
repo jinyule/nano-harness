@@ -53,7 +53,7 @@
 | WP13 | compaction 先做上游 tool-result-pruner 的无模型裁剪（首 4096、尾 1024 码点，持久化裁剪事实），再决定是否摘要 | — | 0020 | 进行中（opus，自 Codex 队列改派） |
 | WP14 | 会话级 sandbox 模式：read-only、workspace-write、danger-full-access 三档，持久化 `sandbox/mode` 与策略上下文；Linux sandbox 与上游一致放开网络 | WP11 后的路径与 runner 修复 | 0021 | 待开始 |
 | WP15 | web_search 发送前持久化检索请求（route、endpoint、预算），写入失败不发送 | — | 0022 | 已实现，见[实施证据](../implemented/2026-10-06-web-search-request-audit.md) |
-| WP16 | job 完成通知持久化（对齐上游 durable inbox），重启后未送达的完成事实不丢失 | WP3 engine 修复 | 0023 | 进行中（opus，WP3 agent） |
+| WP16 | job 完成通知持久化（对齐上游 durable inbox），重启后未送达的完成事实不丢失 | WP3 engine 修复 | 0023 | 已合入 `27a6e8f` |
 
 ### 跨工作包决策记录
 
@@ -120,7 +120,7 @@
 | subagent 工具族（`0073dfb`） | 默认分支与常规文案对齐 | 正确性：并发创建重复计数、已取消 send_message 仍投递、中断后新消息不唤醒、清理失败仍宣告成功、后台 fork 准入顺序、closing output 选择、description 截断（已派 Codex-K1）。设计：child 未固定并持久化继承的 route、委派说明放在 system prompt 破坏 fork 前缀、发送者身份未持久化（待 H2 合入后派发）；生命周期事件与回执暂缓（无消费者） |
 | 交互与会话状态（`0073dfb`） | todo、提问、规划、goal、skill 主路径对齐 | todo/goal/plan 与 `/goal edit` 的 ECMAScript 空白、skill 描述按 UTF-16 计数、todo 重复项引用格式、TUI 多选不能补充自由回答、发现不完整时 `/name` 被静默吞掉；结构化错误（WP12）。待 Codex-E（共享空白判断）合入后派发 |
 
-审计小修合入进度：文件工具（Codex-H1）`7269f8f`；搜索、spill 与共享 ECMAScript 空白判断（Codex-E）`3fa09d6`；job 前台交接与回退归属（Codex-C）`596ed4d`。web 传输层（Codex-F）`27eb355`；HTML 转换语义与抓取输出预算（Codex-G）`5acbfac`；运行时（Codex-H2 `37358cb`）已提交、rebase 冲突较多，交回 Codex 处理；运行时（Codex-H2）`726a95f`；settings 锁偶发失败 `ae02f02`；WP15 已合入。K1、审计 3/5 修复与 credentials 锁排查进行中。
+审计小修合入进度：文件工具（Codex-H1）`7269f8f`；搜索、spill 与共享 ECMAScript 空白判断（Codex-E）`3fa09d6`；job 前台交接与回退归属（Codex-C）`596ed4d`。web 传输层（Codex-F）`27eb355`；HTML 转换语义与抓取输出预算（Codex-G）`5acbfac`；运行时（Codex-H2 `37358cb`）已提交、rebase 冲突较多，交回 Codex 处理；运行时（Codex-H2）`726a95f`；settings 锁偶发失败 `ae02f02` 与 credentials 锁同类缺陷 `f36621c`；WP15 `0eb3586`；subagent 正确性 K1 `1a3568a`；WP16 `27a6e8f`；审计 5 的 Unicode 与交互修复 `8f7ef08`。审计 3 的 shell 修复、WP13、WP14、WP12 设计进行中。2026-10-06 晚 opus 子 agent 撞上每周限额（10/12 恢复），其未完成工作已转交 Codex。
 
 ### 第二轮审查（`25a304d..bbfd8a5`，Codex）
 
