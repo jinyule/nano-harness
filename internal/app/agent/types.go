@@ -28,6 +28,9 @@ type TurnResult struct {
 	Outcome   session.TurnOutcome
 	Text      string
 	Err       error
+	// opened reports that turn/start committed, so the opening message
+	// left its queue for good.
+	opened bool
 }
 
 // Status is a secret-free live-agent snapshot.

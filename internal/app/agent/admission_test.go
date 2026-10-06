@@ -117,9 +117,11 @@ func TestEngine_RejectedAdmissionCommitsNothing(t *testing.T) {
 		err       error
 		events    int
 	}{
-		"stale":            {&scriptedAdmission{err: ErrNotAdmitted}, 0, "", ErrNotAdmitted, 0},
-		"gate failure":     {&scriptedAdmission{err: failure}, 1, session.OutcomeError, failure, 0},
-		"stale after open": {&scriptedAdmission{admit: true, err: ErrNotAdmitted}, 1, session.OutcomeError, ErrNotAdmitted, 2},
+		"stale":        {&scriptedAdmission{err: ErrNotAdmitted}, 0, "", ErrNotAdmitted, 0},
+		"gate failure": {&scriptedAdmission{err: failure}, 1, session.OutcomeError, failure, 0},
+		// An admission that opens and then reports staleness breaks its
+		// contract; the turn it opened is still closed.
+		"stale after open": {&scriptedAdmission{admit: true, err: ErrNotAdmitted}, 1, session.OutcomeError, ErrNotAdmitted, 3},
 	} {
 		scope := &plugin.Scope{}
 		if err := harness.engine.RegisterAdmission("round", test.admission, scope); err != nil {

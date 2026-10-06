@@ -37,8 +37,8 @@ session 格式号保持 v2。composition ID 中的 `job-tools-v1` 升为 `job-to
 ### 写入与投递
 
 - job settle 时，若通知规则（[ADR-0009](0009-background-jobs.md#完成通知)：没有 wait 收走、不是 kill、不是 teardown）要求通知，job 服务调用 `Notifier.QueueNotice`。agent `Registry` 实现它：找到 owner 的 live agent，调用 `Agent.QueueNotice`。
-- `Agent.QueueNotice` 先确认 agent 能接收通知（活动中；one-shot agent 只在它唯一的 turn 运行时接收），再在 agent 的通知锁内读取日志、分配下一个 ID、提交 `notice/queued`，最后才放入内存队列。提交失败时不入队、不消耗 ID。先持久化事实、再更新投影。
-- 投递沿用现有队列语义：忙碌 agent 在下一个边界追加，空闲 agent 被唤醒开启 turn；最后一个允许的 step、`max_tokens` 截断和被取消的 turn 都不取通知。投递就是 engine 追加的那条带 `notice_id` 的 `user/message`，已取出的通知以不继承取消的 context 提交。
+- `Agent.QueueNotice` 先确认 agent 能接收通知（活动中；one-shot agent 只在它唯一的 turn 运行时接收），再在 agent 的通知锁内读取日志、分配下一个 ID、提交 `notice/queued`，最后才放入内存队列。提交失败时不入队、不消耗 ID。先持久化事实、再更新投影。判定与入队之间不持有 agent 锁：one-shot agent 的唯一 turn 可能恰在提交期间结束，这时 `QueueNotice` 返回 `ErrInvalidConfig`，而通知已经提交、在日志中欠着；在最后一个边界之后到达的通知同样如此。one-shot 不会开启新 turn，这些通知永远不会投递，也没有 reader 等待它们；对 root 和 continuable 会话，同一窗口里唯一的拒绝原因是 agent 已停止，由恢复重放投递。
+- 投递沿用现有队列语义：忙碌 agent 在下一个边界追加，空闲 agent 被唤醒开启 turn；最后一个允许的 step、`max_tokens` 截断和被取消的 turn 都不取通知。投递就是 engine 追加的那条带 `notice_id` 的 `user/message`，已取出的通知以不继承取消的 context 提交。唤醒 turn 以最早的通知作为开场消息：取消发生在 `turn/start` 提交之前时什么都不写入，这条通知放回队首，等下一个 turn；`turn/start` 一旦提交，开场消息与它一起不受取消影响地提交，这个 turn 随后以 `canceled` 结束，通知算作已投递。每个已提交的 `turn/start` 都有对应的 `turn/end`。
 - job 服务以不继承取消的 context 提交通知，所以 settle 与 shutdown 竞态时通知仍然写入。job 服务渲染的通知总在单个文本块上限内（截断规则见 [ADR-0009](0009-background-jobs.md#完成通知)），`QueueNotice` 剩下的失败都来自 owner：owner 不再 live、one-shot owner 已不在唯一的 turn 内，或者通知无法写入日志。前两种情况与 teardown 相同，通知没有 reader。job 服务不区分这些情况，失败一律以 `completion notice not delivered: <错误>` 并入该 job 的 detail，`job_output` 与 `job_kill` 的状态行会显示它；仍能读取的 owner 因此可以发现日志写入失败，而不是静默丢失完成事实。该诊断不写入日志，也不重试。
 
 ### 恢复

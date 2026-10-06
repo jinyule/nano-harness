@@ -13,6 +13,10 @@ import (
 
 var beforeAgentDrain = func() {}
 
+// beforeAgentWait lets tests hold a worker between claiming wakes and
+// waiting for its next input.
+var beforeAgentWait = func(*Agent) {}
+
 type turnRequest struct {
 	message session.Message
 	result  chan TurnResult
@@ -94,9 +98,16 @@ func (agent *Agent) run(ctx context.Context) {
 	}()
 	for {
 		if notice, ok := agent.claimWake(); ok {
-			agent.finishTurn(agent.turn(ctx, notice), false)
+			result := agent.turn(ctx, notice)
+			// A turn cancelled before it opened took nothing: its notice
+			// waits at the head of the queue for the next turn.
+			if !result.opened && result.Outcome == session.OutcomeCanceled {
+				agent.restoreNotice(notice)
+			}
+			agent.finishTurn(result, false)
 			continue
 		}
+		beforeAgentWait(agent)
 		select {
 		case <-ctx.Done():
 			return
@@ -110,11 +121,13 @@ func (agent *Agent) run(ctx context.Context) {
 	}
 }
 
-// turn runs one interruptible turn.
+// turn runs one interruptible turn. A wake requested before it started is
+// spent: the turn takes every queued notice at its start, and those it
+// cannot take because it is cancelled wait for the next turn.
 func (agent *Agent) turn(ctx context.Context, message session.Message) TurnResult {
 	turnContext, cancel := context.WithCancel(ctx)
 	agent.mu.Lock()
-	agent.busy, agent.currentCancel, agent.currentDone = true, cancel, turnContext.Done()
+	agent.busy, agent.currentCancel, agent.currentDone, agent.woken = true, cancel, turnContext.Done(), false
 	agent.mu.Unlock()
 	result := agent.engine.runTurn(turnContext, runInput{
 		journal: agent.journal, message: message, persona: agent.persona,
@@ -162,6 +175,13 @@ func (agent *Agent) claimWake() (session.Message, bool) {
 	return notice, true
 }
 
+// restoreNotice puts back the opening notice of a turn that never opened.
+func (agent *Agent) restoreNotice(notice session.Message) {
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	agent.notices = append([]session.Message{notice}, agent.notices...)
+}
+
 // Notify delivers a model-facing notice, such as a subagent message. A busy
 // agent appends it as a user message at the next step boundary of its
 // active turn, which then cannot close before answering it; the last
@@ -199,7 +219,11 @@ func (agent *Agent) NotifyContext(ctx context.Context, message session.Message) 
 // completion. It first commits the notice as a notice/queued fact carrying
 // a new notice ID, then queues it like Notify; its delivery is a
 // user/message with the same ID. A notice still owed when the agent stops
-// is queued again when the session resumes, without opening a turn.
+// is queued again when the session resumes, without opening a turn. The
+// agent lock is not held across the commit, so a one-shot agent's only
+// turn may end in between: the notice stays owed in the log, is never
+// delivered because a one-shot agent opens no further turn, and the caller
+// gets ErrInvalidConfig.
 func (agent *Agent) QueueNotice(ctx context.Context, message session.Message) error {
 	if !validUserMessage(message) {
 		return ErrInvalidConfig

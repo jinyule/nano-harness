@@ -108,26 +108,11 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 	}
 	turn := nextTurn(events)
 	result.Turn = turn
-	opened := false
-	err = engine.openTurn(ctx, input, func(ctx context.Context) error {
-		if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordTurnStart, Turn: turn}); err != nil {
-			return err
-		}
-		opened = true
-		_, err := input.journal.Append(ctx, session.Record{Type: session.RecordUserMessage, Turn: turn, Message: &input.message})
-		return err
-	})
-	if errors.Is(err, ErrNotAdmitted) && !opened {
-		result.Turn, result.Err = 0, err
-		return result
-	}
-	if err != nil {
-		result.Err, result.Outcome = err, outcomeFor(err)
-		return result
-	}
-	turnOpen := true
+	turnOpen := false
 	stepOpen := false
 	var openStep uint64
+	// Like upstream's finally block, this closes every turn whose
+	// turn/start committed, whatever ends it, including its opening.
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			result.Err = errors.New("agent loop panicked")
@@ -142,6 +127,29 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			result.Err = errors.Join(result.Err, closeErr)
 		}
 	}()
+	err = engine.openTurn(ctx, input, func(ctx context.Context) error {
+		// The opening is decided once. A cancellation before this point
+		// commits nothing; a later one lets turn/start and the opening
+		// message commit together, and the next boundary observes it.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		commit := context.WithoutCancel(ctx)
+		if _, err := input.journal.Append(commit, session.Record{Type: session.RecordTurnStart, Turn: turn}); err != nil {
+			return err
+		}
+		turnOpen, result.opened = true, true
+		_, err := input.journal.Append(commit, session.Record{Type: session.RecordUserMessage, Turn: turn, Message: &input.message})
+		return err
+	})
+	if errors.Is(err, ErrNotAdmitted) && !turnOpen {
+		result.Turn, result.Err = 0, err
+		return result
+	}
+	if err != nil {
+		result.Err, result.Outcome = err, outcomeFor(err)
+		return result
+	}
 	// Every boundary that takes queued input checks cancellation first, so
 	// a cancelled turn leaves notices queued and steers pending.
 	if err := ctx.Err(); err != nil {
@@ -174,8 +182,14 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			result.Err, result.Outcome = fmt.Errorf("step context: %w", err), outcomeFor(err)
 			return result
 		}
+		// Step context commits regardless of cancellation; a cancellation
+		// that arrived meanwhile ends the turn before the step opens.
+		if err := ctx.Err(); err != nil {
+			result.Err, result.Outcome = err, session.OutcomeCanceled
+			return result
+		}
 		if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordStepStart, Turn: turn, Step: step}); err != nil {
-			result.Err, result.Outcome = err, session.OutcomeError
+			result.Err, result.Outcome = err, outcomeFor(err)
 			return result
 		}
 		stepOpen = true
