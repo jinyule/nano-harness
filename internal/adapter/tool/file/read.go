@@ -105,7 +105,7 @@ func (provider *Provider) read(ctx context.Context, invocation appTool.Invocatio
 	}
 	info, err := statFile(path)
 	if err != nil {
-		return appTool.Result{}, classifyIO(fmt.Errorf("cannot read %q: %w", display, err))
+		return appTool.Result{}, classifyPath(display, fmt.Errorf("cannot read %q: %w", display, err))
 	}
 	if !info.Mode().IsRegular() {
 		return appTool.Result{}, fsFailure("FS_NOT_REGULAR_FILE", fmt.Errorf("cannot read %q: not a regular file", display))
@@ -119,13 +119,13 @@ func (provider *Provider) read(ctx context.Context, invocation appTool.Invocatio
 	}
 	reader, err := openFile(path)
 	if err != nil {
-		return appTool.Result{}, classifyIO(fmt.Errorf("cannot read %q: %w", display, err))
+		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot read %q: %w", display, err))
 	}
 	defer func() { _ = reader.Close() }() // read-only; close cannot lose data
 	hasher := &countingHash{Hash: sha256.New()}
 	window, err := readWindow(ctx, io.TeeReader(reader, hasher), offset, limit)
 	if err != nil {
-		return appTool.Result{}, classifyIO(fmt.Errorf("cannot read %q: %w", display, err))
+		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot read %q: %w", display, err))
 	}
 	if !window.capped && offset > window.total && (window.total != 0 || offset != 1) {
 		return appTool.Result{}, fmt.Errorf("offset %d is out of range for %q (%d lines)", offset, display, window.total)

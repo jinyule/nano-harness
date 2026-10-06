@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
@@ -123,8 +124,28 @@ func writeAtomic(ctx context.Context, target string, data []byte, mode fs.FileMo
 		return renameFile(staged.Name(), target)
 	}
 	if err = linkFile(staged.Name(), target); err != nil {
-		return err
+		return guardedCreateFailure(target, err)
 	}
 	_ = removeFile(staged.Name()) // the target is published; private residue cannot undo it
 	return nil
+}
+
+// guardedCreateFailure classifies only a failed no-replace publication. Target
+// inspection distinguishes a regular-file collision from a directory or link;
+// staging failures and ordinary replacement I/O do not enter this boundary.
+func guardedCreateFailure(target string, cause error) error {
+	info, err := lstatFile(target)
+	code, message := "FS_IO_ERROR", fmt.Errorf("cannot write %q: %w", target, cause).Error()
+	switch {
+	case err == nil:
+		code, message = "FS_NOT_OBSERVED", errNotRead(target).Error()
+		if !info.Mode().IsRegular() {
+			code = "FS_NOT_REGULAR_FILE"
+		}
+	case !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR):
+		cause = errors.Join(cause, err)
+	case errors.Is(cause, fs.ErrExist):
+		code = "FS_NOT_OBSERVED"
+	}
+	return &fsError{code: code, message: message, err: cause}
 }

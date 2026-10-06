@@ -1223,5 +1223,40 @@
     "before": "return cmp.Compare(left.Order, right.Order)",
     "after": "return cmp.Compare(0, 0)",
     "test": "^TestEngine_SnapshotSectionsFollowOrderNotRegistration$"
+  },
+  {
+    "id": "file-edit-actual-line-changes",
+    "file": "internal/adapter/tool/file/diff.go",
+    "before": "changedLines(a, b, 0, 0)",
+    "after": "[]lineChange{{0, len(a), 0, len(b)}}",
+    "test": "^TestEditResult_UsesActualChangesInsideLargeReplacement$"
+  },
+  {
+    "id": "file-ordinary-io-is-unclassified",
+    "file": "internal/adapter/tool/file/error.go",
+    "before": "default:\n\t\treturn err",
+    "after": "default:\n\t\treturn fsFailure(\"FS_IO_ERROR\", err)",
+    "test": "^TestFileResults_OrdinaryIOStaysUnclassified$"
+  },
+  {
+    "id": "file-permission-is-unclassified",
+    "file": "internal/adapter/tool/file/error.go",
+    "before": "case errors.Is(err, errBinary), errors.Is(err, errNotText):",
+    "after": "case errors.Is(err, fs.ErrPermission):\n\t\tcode = \"FS_PERMISSION_DENIED\"\n\tcase errors.Is(err, errBinary), errors.Is(err, errNotText):",
+    "test": "^TestReadResult_PermissionFailureStaysUnclassified$|^TestFileResults_OrdinaryIOStaysUnclassified$"
+  },
+  {
+    "id": "file-create-collision-checks-type",
+    "file": "internal/adapter/tool/file/provider.go",
+    "before": "if !info.Mode().IsRegular() {",
+    "after": "if info.Mode().IsRegular() {",
+    "test": "^TestWriteResult_CreateDirectoryCollisionIsNotRegular$"
+  },
+  {
+    "id": "file-create-classifies-publication-only",
+    "file": "internal/adapter/tool/file/provider.go",
+    "before": "staged, err := createTemp(filepath.Dir(target), \".\"+filepath.Base(target)+\".*.tmp\")\n\tif err != nil {\n\t\treturn err",
+    "after": "staged, err := createTemp(filepath.Dir(target), \".\"+filepath.Base(target)+\".*.tmp\")\n\tif err != nil {\n\t\treturn fsFailure(\"FS_IO_ERROR\", err)",
+    "test": "^TestFileResults_OrdinaryIOStaysUnclassified$|^TestWriteResult_ClassifiesOnlyFailedCreatePublication$"
   }
 ]

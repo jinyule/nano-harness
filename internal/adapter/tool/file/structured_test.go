@@ -119,11 +119,6 @@ func TestFileResults_ClassifyFailures(t *testing.T) {
 			writeFixture(t, h.path("f"), strings.Repeat("a", maxEditBytes+1))
 			h.read(t, "f")
 		}},
-		{"permission", "read", "FS_PERMISSION_DENIED", map[string]any{"file_path": "f"}, func(t *testing.T, _ *harness) { restoreHooks(t); openFile = openFailing(nil, fs.ErrPermission) }},
-		{"io", "write", "FS_IO_ERROR", map[string]any{"file_path": "absent", "content": "after"}, func(t *testing.T, _ *harness) {
-			restoreHooks(t)
-			createTemp = func(string, string) (stagedFile, error) { return nil, errors.New("disk failure") }
-		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			h := newHarness(t)
@@ -394,10 +389,14 @@ func TestReadImageResult_ClassifiesSourceFailuresAndKeepsOnlyPath(t *testing.T) 
 
 func TestFsError_PreservesCauseAndUnclassifiedFailures(t *testing.T) {
 	for _, cause := range []error{fs.ErrPermission, context.Canceled, context.DeadlineExceeded, errors.New("disk failure")} {
-		failure := classifyIO(fmt.Errorf("cannot read: %w", cause))
+		failure := classifyKnown(fmt.Errorf("cannot read: %w", cause))
 		var declared appTool.Failure
-		if !errors.Is(failure, cause) || !errors.As(failure, &declared) || declared.ToolError().Name != "FsError" || failure.Error() != "cannot read: "+cause.Error() {
+		wantClassified := errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded)
+		if !errors.Is(failure, cause) || errors.As(failure, &declared) != wantClassified || failure.Error() != "cannot read: "+cause.Error() {
 			t.Fatalf("wrapped = %v", failure)
+		}
+		if declared != nil && declared.ToolError() != (session.ToolError{Name: "FsError", Code: "FS_ABORTED"}) {
+			t.Fatalf("cancel classification = %+v", declared.ToolError())
 		}
 	}
 	h := newHarness(t)

@@ -58,3 +58,46 @@ func TestComposition_FileResultsPersistIndependentMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestComposition_FileEditDiffUsesActualChangedLines(t *testing.T) {
+	line := strings.Repeat("a", 199)
+	before := strings.Repeat(line+"\n", 240)
+	after := before[:24_000] + "b" + before[24_001:]
+	arguments, err := json.Marshal(map[string]string{"file_path": "f", "old_string": before, "new_string": after})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembled, seen := startAssembled(t, []modelStep{
+		{tool: "read", arguments: `{"file_path":"f","limit":1}`},
+		{tool: "edit", arguments: string(arguments)},
+		{text: "done"},
+	})
+	allowAssembledWrites(t, assembled)
+	path := filepath.Join(assembledWorkspace(t, assembled), "f")
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if result := assembled.turn(t, "change one character"); result.Err != nil || result.Text != "done" {
+		t.Fatalf("turn = %+v", result)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != after { //nolint:gosec // fixed filename in the private workspace from this test's session header
+		t.Fatalf("published file = %q, %v", data, err)
+	}
+	results := orderedToolResults(assembled.records(t))
+	oldHunk := strings.TrimSuffix(strings.Repeat(line+"\n", 7), "\n")
+	newHunk := strings.Repeat(line+"\n", 3) + "b" + line[1:] + "\n" + strings.TrimSuffix(strings.Repeat(line+"\n", 3), "\n")
+	want := &session.ToolMeta{Edit: &session.EditMeta{Diffs: []session.FileDiff{{Path: path, OldText: &oldHunk, NewText: newHunk}}}}
+	if len(results) != 2 || results[1].IsError || !reflect.DeepEqual(results[1].Meta, want) {
+		t.Fatalf("persisted actual-change diff = %+v, want %+v", results, want)
+	}
+	requests := seen()
+	if len(requests) != 3 {
+		t.Fatalf("requests = %d", len(requests))
+	}
+	input, _ := json.Marshal(requests[2].Input)
+	for _, private := range []string{"old_text", "diffs", "\"meta\""} {
+		if strings.Contains(string(input), private) {
+			t.Fatalf("model input contains metadata field %s", private)
+		}
+	}
+}

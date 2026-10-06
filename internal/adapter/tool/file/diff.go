@@ -44,52 +44,82 @@ func writeMeta(path string, exists bool, before, after []byte) session.WriteMeta
 // lineChange names half-open ranges of changed lines on the two LF bases.
 type lineChange struct{ startA, endA, startB, endB int }
 
-func editMeta(path string, before, after []byte, needle, replacement string) session.EditMeta {
-	old, next := diffBasis(before), diffBasis(after)
-	if old == next {
-		return session.EditMeta{Diffs: []session.FileDiff{}}
-	}
-	needle = strings.ReplaceAll(needle, "\r\n", "\n")
-	replacement = strings.ReplaceAll(replacement, "\r\n", "\n")
-	var changes []lineChange
-	position, lineA, lineB, columnB := 0, 0, 0, 0
-	for {
-		index := strings.Index(old[position:], needle)
-		if index < 0 {
-			break
-		}
-		start := position + index
-		gap := old[position:start]
-		unchanged := strings.Count(gap, "\n")
-		lineA += unchanged
-		lineB += unchanged
-		columnB = advanceColumn(columnB, gap)
-		endA := lineA + strings.Count(needle, "\n")
-		endB := lineB + strings.Count(replacement, "\n")
-		columnB = advanceColumn(columnB, replacement)
-		tailB := 0
-		if columnB > 0 {
-			tailB = 1
-		}
-		changes = append(changes, lineChange{lineA, endA + lineTail(needle), lineB, endB + tailB})
-		position, lineA, lineB = start+len(needle), endA, endB
-	}
-	diffs, truncated := contextualDiffs(path, diffLines(old), diffLines(next), changes, false)
+func editMeta(path string, before, after []byte) session.EditMeta {
+	a, b := diffLines(diffBasis(before)), diffLines(diffBasis(after))
+	diffs, truncated := contextualDiffs(path, a, b, changedLines(a, b, 0, 0), false)
 	return session.EditMeta{Diffs: diffs, Truncated: truncated}
 }
 
-func advanceColumn(column int, text string) int {
-	if index := strings.LastIndexByte(text, '\n'); index >= 0 {
-		return len(text) - index - 1
+// changedLines finds actual line changes on the two file bases, independently
+// of the edit's matching block. Common edges and disjoint replacements avoid
+// diff work; remaining ranges use a shortest edit path with linear memory.
+func changedLines(a, b []string, startA, startB int) []lineChange {
+	for len(a) > 0 && len(b) > 0 && a[0] == b[0] {
+		a, b, startA, startB = a[1:], b[1:], startA+1, startB+1
 	}
-	return column + len(text)
+	for len(a) > 0 && len(b) > 0 && a[len(a)-1] == b[len(b)-1] {
+		a, b = a[:len(a)-1], b[:len(b)-1]
+	}
+	if len(a) == 0 && len(b) == 0 {
+		return nil
+	}
+	shared := make(map[string]bool, len(a))
+	for _, line := range a {
+		shared[line] = true
+	}
+	for _, line := range b {
+		if shared[line] {
+			x, y := bisectLines(a, b)
+			left := changedLines(a[:x], b[:y], startA, startB)
+			return append(left, changedLines(a[x:], b[y:], startA+x, startB+y)...)
+		}
+	}
+	return []lineChange{{startA, startA + len(a), startB, startB + len(b)}}
 }
 
-func lineTail(text string) int {
-	if strings.HasSuffix(text, "\n") {
-		return 0
+// bisectLines meets forward and reverse Myers frontiers at a shortest-path
+// split. Callers strip equal edges and require a shared interior line, so the
+// split makes progress. Odd path lengths meet after a forward step; even ones
+// meet after a reverse step. Only the current two frontiers are retained.
+func bisectLines(a, b []string) (int, int) {
+	n, m := len(a), len(b)
+	offset := (n+m+1)/2 + 1
+	forward, reverse := make([]int, 2*offset+1), make([]int, 2*offset+1)
+	for i := range forward {
+		forward[i], reverse[i] = -1, -1
 	}
-	return 1
+	forward[offset+1], reverse[offset+1] = 0, 0
+	delta := n - m
+	for distance := 0; ; distance++ {
+		for side, frontier := range [][]int{forward, reverse} {
+			for diagonal := -distance; diagonal <= distance; diagonal += 2 {
+				index := offset + diagonal
+				x := frontier[index-1] + 1
+				if diagonal == -distance || diagonal != distance && frontier[index-1] < frontier[index+1] {
+					x = frontier[index+1]
+				}
+				y := x - diagonal
+				for x < n && y < m {
+					i, j := x, y
+					if side == 1 {
+						i, j = n-x-1, m-y-1
+					}
+					if a[i] != b[j] {
+						break
+					}
+					x, y = x+1, y+1
+				}
+				frontier[index] = x
+				other := delta - diagonal
+				if side == 0 && delta%2 != 0 && other >= 1-distance && other <= distance-1 && x+reverse[offset+other] >= n {
+					return x, y
+				}
+				if side == 1 && delta%2 == 0 && other >= -distance && other <= distance && forward[offset+other]+x >= n {
+					return forward[offset+other], forward[offset+other] - other
+				}
+			}
+		}
+	}
 }
 
 // diffLines retains terminators for comparison, so a changed final newline

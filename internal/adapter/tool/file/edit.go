@@ -60,7 +60,7 @@ func (provider *Provider) editTool() *appTool.Tool {
 			// execution re-checks them under the target's lock.
 			target, err := provider.root.WritableIn(arguments.FilePath, mode)
 			if err != nil {
-				return classifyIO(fmt.Errorf("cannot edit %q: %w", arguments.FilePath, err))
+				return classifyPath(arguments.FilePath, fmt.Errorf("cannot edit %q: %w", arguments.FilePath, err))
 			}
 			_, _, err = provider.observedContent(invocation.SessionID, target)
 			return err
@@ -93,7 +93,7 @@ func (provider *Provider) edit(ctx context.Context, invocation appTool.Invocatio
 	}
 	target, err := provider.root.WritableIn(arguments.FilePath, mode)
 	if err != nil {
-		return appTool.Result{}, classifyIO(fmt.Errorf("cannot edit %q: %w", arguments.FilePath, err))
+		return appTool.Result{}, classifyPath(arguments.FilePath, fmt.Errorf("cannot edit %q: %w", arguments.FilePath, err))
 	}
 	defer provider.mutate.lock(target)()
 	info, raw, err := provider.observedContent(invocation.SessionID, target)
@@ -104,9 +104,9 @@ func (provider *Provider) edit(ctx context.Context, invocation appTool.Invocatio
 	if err != nil {
 		return appTool.Result{}, err
 	}
-	meta := editMeta(target, raw, edited, arguments.OldString, arguments.NewString)
+	meta := editMeta(target, raw, edited)
 	if err := writeAtomic(ctx, target, edited, info.Mode().Perm(), false); err != nil {
-		return appTool.Result{}, classifyIO(fmt.Errorf("cannot edit %q: %w", target, err))
+		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot edit %q: %w", target, err))
 	}
 	provider.observed.record(invocation.SessionID, target, observed(edited))
 	if arguments.ReplaceAll != nil && *arguments.ReplaceAll {
@@ -131,7 +131,7 @@ func (provider *Provider) observedContent(sessionID, target string) (fs.FileInfo
 	case errors.Is(err, fs.ErrNotExist):
 		return nil, nil, errStale("edit", target, "file changed since it was read")
 	case err != nil:
-		return nil, nil, classifyIO(fmt.Errorf("cannot edit %q: %w", target, err))
+		return nil, nil, classifyKnown(fmt.Errorf("cannot edit %q: %w", target, err))
 	case !info.Mode().IsRegular():
 		return nil, nil, fsFailure("FS_NOT_REGULAR_FILE", fmt.Errorf("cannot edit %q: not a regular file", target))
 	case info.Size() != prior.size:
@@ -141,7 +141,7 @@ func (provider *Provider) observedContent(sessionID, target string) (fs.FileInfo
 	}
 	raw, err := readLimited(target)
 	if err != nil {
-		return nil, nil, classifyIO(fmt.Errorf("cannot edit %q: %w", target, err))
+		return nil, nil, classifyKnown(fmt.Errorf("cannot edit %q: %w", target, err))
 	}
 	if digest(raw) != prior.version {
 		return nil, nil, errStale("edit", target, "file changed since it was read")

@@ -86,12 +86,13 @@ producer 要在外部提交前完成可能失败的 meta 构造。write/edit 的
 | `ToolOutputError` / `INVALID_TOOL_OUTPUT` | 第 2 节的 meta 契约违规。 |
 | `AbortError` / `ABORTED_BEFORE_DISPATCH`、`ABORTED` | 第 2 节的取消检查点。bash 自己返回的 `tool call aborted`（后台启动前、前台等待或交接、job 上限回退执行时调用被取消，或关闭已撤销交接记录）同样是 `AbortError/ABORTED`，与上游 tool-bash 设置的 name 和 code 一致。 |
 | `ToolOutcomeUnknownError` / `TOOL_OUTCOME_UNKNOWN` | JSONL resume 修复写入的 `Error: interrupted before a result was committed`。nano 在执行批次前提交全部 tool/call，未决调用都可能已经开始，因此不写 `TOOL_NOT_STARTED`。 |
-| `FsError` / `FS_NOT_FOUND`、`FS_NOT_REGULAR_FILE` | read/read_image 的目标不存在，或路径中间段不是目录（上游同样把 ENOTDIR 归为 `FS_NOT_FOUND`）；edit 观察到目标缺失；目标是目录或特殊文件。上游的 `FS_NOT_DIRECTORY` 只用于目录列举，本仓文件工具没有对应路径。 |
+| `FsError` / `FS_NOT_FOUND`、`FS_NOT_REGULAR_FILE` | 路径解析或 read/read_image 的前置 stat 发现目标不存在、路径中间段不是目录（ENOTDIR）；edit 观察到目标缺失；目标是目录或特殊文件，包括 guarded create 的 link 发布失败后检查到非普通文件。前置 stat 成功后的普通 open/read 错误不分类。上游的 `FS_NOT_DIRECTORY` 只用于目录列举，本仓文件工具没有对应路径。 |
 | `FsError` / `FS_NOT_TEXT`、`FS_TOO_LARGE` | read/edit 遇到二进制或非法 UTF-8；edit 超过 10 MiB；read_image 超过源字节上限。read 的窗口截断是成功，不是 `FS_TOO_LARGE`。 |
-| `FsError` / `FS_NOT_OBSERVED`、`FS_STALE_VERSION` | write/edit 的 `errNotRead`、`errStale`，`FS_NOT_OBSERVED` 包括未读目标和并发创建导致的盲覆盖拒绝；`FS_STALE_VERSION` 包括已读后变化或删除。 |
+| `FsError` / `FS_NOT_OBSERVED`、`FS_STALE_VERSION` | write/edit 的 `errNotRead`、`errStale`，`FS_NOT_OBSERVED` 包括未读目标、并发创建普通文件导致的盲覆盖拒绝，以及 link 报 EEXIST 后目标已消失；非普通目标使用 `FS_NOT_REGULAR_FILE`。`FS_STALE_VERSION` 包括已读后变化或删除。 |
 | `FsError` / `FS_EDIT_NOT_FOUND`、`FS_AMBIGUOUS_EDIT` | 字面替换零次匹配；多次匹配且未设 `replace_all`。 |
 | `FsError` / `FS_ABORTED` | `read aborted`、`write aborted`、`edit aborted`：读取、摘要或发布前发现取消。link/rename 成功后写入即已提交，工具返回成功；若此时调用已取消，按第 2 节替换为 `ABORTED`，文件保持已发布。 |
-| `FsError` / `FS_PERMISSION_DENIED`、`FS_SANDBOX_DENIED`、`FS_IO_ERROR` | `fs.ErrPermission`；workspace 越界或符号链接拒绝；其他 stat/open/read/摘要/暂存/同步/link/rename 失败。WP14 的 read-only write/edit 拒绝同样为 `FS_SANDBOX_DENIED`；danger-full-access 放宽路径范围，但仍拒绝写入跨越符号链接。策略日志读取失败、升级参数语义错误和图片规范化失败没有文件分类。 |
+| `FsError` / `FS_SANDBOX_DENIED` | workspace 越界或符号链接拒绝；WP14 的 read-only write/edit 拒绝。danger-full-access 放宽路径范围，但仍拒绝写入跨越符号链接。 |
+| `FsError` / `FS_IO_ERROR` | guarded create 的 link 发布失败，检查目标时出现非 ENOENT/ENOTDIR 的 metadata 错误，或目标不存在且 link 错误不是 EEXIST。四个文件工具的普通 stat/open/read/摘要、mkdir、暂存、同步、chmod、close 和 rename 错误保持普通错误；`FS_PERMISSION_DENIED` 只属于上游目录列举，本仓四个文件工具不生成它。策略日志读取失败、升级参数语义错误和图片规范化失败也没有文件分类。 |
 | `SearchError` / `SEARCH_INVALID_PATTERN`、`SEARCH_FAILED`、`SEARCH_RAW_OUTPUT_OVERFLOW`、`SEARCH_ABORTED` | rg 拒绝正则或 glob；搜索根失败、显式特殊文件、启动失败、信号、非 0/1 退出、`--json` 输出畸形；stdout 超过 20,000,000 字节；搜索超时或调用方取消。rg 缺失或版本过低是启动错误，不产生工具结果。 |
 | `WebError` / `app/web` 的全部 Code | 包括上游同名码和本仓已有的 `WEB_SEARCH_TIMEOUT`、`WEB_REQUEST_RECORD_FAILED`；文本保持 `<CODE>: <message>`。非 2xx HTTP 是成功结果。 |
 | `SandboxUnavailableError` / `SANDBOX_UNAVAILABLE` | 前台 bash 的 runner 缺失或失败，即 `errors.Is(err, process.ErrSandboxUnavailable)`；文本保留上游 `SandboxUnavailableError` 原文，按实际 launch mode 使用 `read-only` 或 `workspace-write`，runner 故障保留 `Runner failure: <行>`。`danger-full-access` 使用 host runner，不要求 sandbox 后端。platform 不依赖领域层，分类在 shell adapter 补上。后台 job 的 runner 失败只记录为 failed 状态，不是工具错误。 |
@@ -123,7 +124,7 @@ diff 规则：
 
 - 基础文本与 edit 匹配所用的文本相同：去掉 BOM，CRLF 归一为 LF。这与上游的 LF diff 基础一致，CRLF 文件不会显示为整文件改动。
 - write 只在新旧两侧都小于 10 MiB 时读取旧内容，在目标锁内与现有摘要校验同一次读取完成，不额外打开文件，内存上限与 edit 现有的 10 MiB 相同。
-- 每个 hunk 带三行上下文。edit 按实际匹配位置生成 hunk，重叠的上下文合并。write 用公共行前缀和后缀确定一个变化区间，至多一个 hunk。这比上游 jsdiff 的最小 hunk 更粗，但只需标准库、线性时间，不引入第三方依赖。
+- 每个 hunk 带三行上下文。edit 从实际前后内容的最短行编辑路径生成变化区间，先移除相同的首尾行；同一替换块中的分散变化仍生成独立 hunk，重叠的上下文合并。实现使用标准库和线性空间的 Myers 双向搜索，不依赖匹配参数来划定变化。write 用公共行前缀和后缀确定一个变化区间，至多一个 hunk；这个已接受的粗粒度差异只属于 write。
 - 单个 hunk 超过 meta 预算时直接跳过并标记 `truncated`，不先复制完整文本再丢弃。
 
 失败结果一律没有 meta。

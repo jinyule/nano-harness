@@ -94,7 +94,7 @@ func (provider *Provider) readImage(ctx context.Context, invocation appTool.Invo
 	info, err := statFile(path)
 	switch {
 	case err != nil:
-		return appTool.Result{}, classifyIO(fmt.Errorf("cannot read %q: %w", display, err))
+		return appTool.Result{}, classifyPath(display, fmt.Errorf("cannot read %q: %w", display, err))
 	case !info.Mode().IsRegular():
 		return appTool.Result{}, fsFailure("FS_NOT_REGULAR_FILE", fmt.Errorf("cannot read %q: not a regular file", display))
 	case info.Size() > session.MaxImageSourceBytes:
@@ -102,7 +102,7 @@ func (provider *Provider) readImage(ctx context.Context, invocation appTool.Invo
 	}
 	data, err := readImageBytes(path)
 	if err != nil {
-		return appTool.Result{}, classifyIO(fmt.Errorf("cannot read %q: %w", display, err))
+		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot read %q: %w", display, err))
 	}
 	declared := imageExtensions[strings.ToLower(extname(arguments.FilePath))]
 	actual := sniffImage(data)
