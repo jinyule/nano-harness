@@ -78,7 +78,7 @@ func TestService_ForkInheritsOnlyCompletedTurns(t *testing.T) {
 		}
 	}
 	// The child's own runtime context follows its task, after the inherited prefix.
-	if strings.Join(seen, "|") != "FIRST|first answer|FORK_TASK|"+delegationContext {
+	if strings.Join(seen, "|") != "FIRST|first answer|FORK_TASK|Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n"+delegationContext {
 		t.Fatalf("fork surface = %q", seen)
 	}
 	id := session.Children(h.events("root"))[0].SessionID

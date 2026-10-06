@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/jinyule/nano-harness/internal/app/transcript"
@@ -11,7 +10,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
-func TestSandboxContext_RegistrationProjectionAndCompaction(t *testing.T) {
+func TestSandboxContext_RegistrationAndAuthoritativeSection(t *testing.T) {
 	h := startEngineHarness(t, 1)
 	provider := NewSandboxContext(h.engine, "/workspace")
 	if provider.ID() != "sandbox-policy" {
@@ -27,26 +26,12 @@ func TestSandboxContext_RegistrationProjectionAndCompaction(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(func() { _ = scope.Close(context.Background()) })
-	messages, err := provider.StepContext(t.Context(), ContextRequest{})
-	if err != nil || len(messages) != 1 || messages[0].Source.Plugin != "sandbox:policy" || !strings.Contains(session.Text(messages[0]), "workspace-write") {
-		t.Fatalf("messages=%+v err=%v", messages, err)
-	}
-	events := []session.Event{{Sequence: 1, Record: session.Record{Type: session.RecordUserMessage, Message: &messages[0]}}}
-	if next, err := provider.StepContext(t.Context(), ContextRequest{Events: events}); err != nil || len(next) != 0 {
-		t.Fatalf("unchanged=%v %v", next, err)
-	}
-	events = append(events, session.Event{Sequence: 2, Record: session.Record{Type: session.RecordSandboxMode, Sandbox: &session.SandboxModeChange{Mode: session.SandboxReadOnly}}})
-	changed, err := provider.StepContext(t.Context(), ContextRequest{Events: events})
-	if err != nil || len(changed) != 1 || !strings.Contains(session.Text(changed[0]), "read-only") {
-		t.Fatalf("changed=%v %v", changed, err)
-	}
-	events = append(events, session.Event{Sequence: 3, Record: session.Record{Type: session.RecordCompactionSummary, Compaction: &session.CompactionData{ID: "c", ShadowedSeqs: []uint64{1}, Summary: []session.ContentBlock{{Type: session.ContentText, Text: "summary"}}}}})
-	if rebuilt, err := provider.StepContext(t.Context(), ContextRequest{Events: events}); err != nil || len(rebuilt) != 1 {
-		t.Fatalf("compaction=%v %v", rebuilt, err)
-	}
-	events[len(events)-1].Record.Compaction.ShadowedSeqs = []uint64{999}
-	if _, err := provider.StepContext(t.Context(), ContextRequest{Events: events}); !errors.Is(err, session.ErrInvalidRecord) {
-		t.Fatalf("corrupt projection: %v", err)
+	for _, mode := range []session.SandboxMode{session.SandboxWorkspaceWrite, session.SandboxReadOnly, session.SandboxDangerFullAccess} {
+		events := []session.Event{{Sequence: 1, Record: session.Record{Type: session.RecordSandboxMode, Sandbox: &session.SandboxModeChange{Mode: mode}}}}
+		contribution, err := provider.StepContext(t.Context(), ContextRequest{Events: events})
+		if err != nil || len(contribution.Sections) != 1 || contribution.Sections[0] != session.SandboxPolicyText(mode, "/workspace") || len(contribution.Messages) != 0 {
+			t.Fatalf("section=%+v err=%v", contribution, err)
+		}
 	}
 	if err := scope.Close(t.Context()); err != nil || len(h.engine.contexts) != 0 {
 		t.Fatalf("cleanup=%v", err)

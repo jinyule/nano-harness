@@ -214,25 +214,14 @@ type Contexts interface {
 	RegisterContext(agent.ContextProvider, *plugin.Scope) error
 }
 
-// StepContext contributes the delegation-scope runtime context to a
-// delegated session whenever no copy of it is visible in the replay
-// surface: before its first step, and again after compaction hid it. A
-// resumed child finds the committed copy and contributes nothing. Root
-// sessions, which carry no subagent descriptor, never receive it.
-func (*Service) StepContext(_ context.Context, request agent.ContextRequest) ([]session.Message, error) {
+// StepContext contributes the delegation-scope section for sessions with an
+// authoritative subagent descriptor. The engine merges it with the other
+// runtime sections and handles resume and compaction of the complete snapshot.
+func (*Service) StepContext(_ context.Context, request agent.ContextRequest) (agent.ContextContribution, error) {
 	if !slices.ContainsFunc(request.Events, func(event session.Event) bool { return event.Record.Type == session.RecordSubagentDescriptor }) {
-		return nil, nil
+		return agent.ContextContribution{}, nil
 	}
-	surface, err := session.Surface(request.Events)
-	if err != nil {
-		return nil, err
-	}
-	if slices.ContainsFunc(surface, func(node session.SurfaceNode) bool {
-		return node.Message != nil && node.Message.Source.Kind == SourceRuntimeContext && session.Text(*node.Message) == delegationContext
-	}) {
-		return nil, nil
-	}
-	return []session.Message{textMessage(SourceRuntimeContext, "", delegationContext)}, nil
+	return agent.ContextContribution{Sections: []string{delegationContext}}, nil
 }
 
 // ID returns the stable plugin identity.

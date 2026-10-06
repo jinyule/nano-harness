@@ -180,6 +180,6 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 
 ## 2026-10-06：Base 会话 sandbox 与 Linux 联网
 
-参考 `packages/sandbox/sandbox-policy`、`sandbox-local/src/profiles.ts`、`sandbox/roots.ts`、fs/bash sandbox 与 Base 权限预设，采纳三档闭合模式、workspace-write 默认、立即持久化的 `sandbox/mode`、委派时显式 override 捕获及 `sandbox:policy`（上游 order 110 的 runtime-context 段落，在用户输入之后、step 之前；本仓依注册顺序早于 skill）。read-only→workspace-write 作为一次性窄升级，full access 等同 host。Linux 采纳 `--unshare-pid` 与 root/dev/proc 挂载，放开网络，与 macOS 联网一致。不会修改或复制参考源码，指针保持不变。
+参考 `packages/sandbox/sandbox-policy`、`sandbox-local/src/profiles.ts`、`sandbox/roots.ts`、fs/bash sandbox 与 Base 权限预设，采纳三档闭合模式、workspace-write 默认、立即持久化的 `sandbox/mode`、委派时显式 override 捕获及 `sandbox:policy`（上游 order 110 的 runtime-context 段落，在用户输入之后、step 之前；本仓按注册顺序与委派 section 聚合为完整快照，统一比较、提交与添加一次替代声明，早于独立 skill 消息；聚合参考 `packages/core/system-prompt/src/index.ts`，路径渲染对齐 `JSON.stringify`）。read-only→workspace-write 作为一次性窄升级，full access 等同 host。Linux 采纳 `--unshare-pid` 与 root/dev/proc 挂载，放开网络，与 macOS 联网一致。不会修改或复制参考源码，指针保持不变。
 
 本仓继续对每次 write/edit/bash 请求一次性 approval，并固定 delegated `never`，比上游 Base 严格；默认文件读/搜索仍保留 workspace/spill 边界，host 文件修改保留先读后写、原子发布与 symlink 禁写。Web 权限 UI 与平台特有 ACL 后端暂缓。本仓 session v2 与 fingerprint 拒绝旧 composition 的策略、恢复路径与实现证据见 [ADR-0021](decisions/0021-session-sandbox-modes.md) 和[实施 Note](../.agents/notes/implemented/2026-10-06-session-sandbox-modes.md)。

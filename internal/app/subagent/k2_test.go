@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -181,37 +182,18 @@ func TestService_PersistsTheSenderOfRelayedMessages(t *testing.T) {
 	}
 }
 
-func TestService_DelegationContextReappearsOnlyWhenHidden(t *testing.T) {
+func TestService_DelegationSectionComesFromDescriptor(t *testing.T) {
 	h := startHarness(t)
 	descriptor := session.Event{Sequence: 1, Record: session.Record{Type: session.RecordSubagentDescriptor, Subagent: &session.SubagentDescriptor{Version: session.SubagentDescriptorVersion, Provider: session.SubagentSpawn, Mode: session.SubagentOneShot, Route: testRoute}}}
 	task := session.Event{Sequence: 2, Record: session.Record{Type: session.RecordUserMessage, Turn: 1, Message: &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: SourceDelegation}, Content: []session.ContentBlock{{Type: session.ContentText, Text: "task"}}}}}
-	committed := textMessage(SourceRuntimeContext, "", delegationContext)
-	contextEvent := session.Event{Sequence: 3, Record: session.Record{Type: session.RecordUserMessage, Turn: 1, Message: &committed}}
-	policy := session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: SourceRuntimeContext, Plugin: "sandbox:policy"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: session.SandboxPolicyText(session.SandboxReadOnly, "/work")}}}
-	policyEvent := session.Event{Sequence: 3, Record: session.Record{Type: session.RecordUserMessage, Turn: 1, Message: &policy}}
-	summary := session.Event{Sequence: 4, Record: session.Record{Type: session.RecordCompactionSummary, Turn: 1, Compaction: &session.CompactionData{ID: "c", ShadowedSeqs: []uint64{2, 3}, ShadowedTokenCount: 1, Summary: []session.ContentBlock{{Type: session.ContentText, Text: "summary"}}, Provider: "openai", Model: "m"}}}
-	broken := session.Event{Sequence: 4, Record: session.Record{Type: session.RecordCompactionSummary, Turn: 1, Compaction: &session.CompactionData{ID: "c", ShadowedSeqs: []uint64{99}, ShadowedTokenCount: 1, Summary: []session.ContentBlock{{Type: session.ContentText, Text: "summary"}}, Provider: "openai", Model: "m"}}}
-	for name, test := range map[string]struct {
-		events []session.Event
-		want   int
-	}{
-		"root session":                    {[]session.Event{task}, 0},
-		"first step":                      {[]session.Event{descriptor, task}, 1},
-		"sandbox snapshot is independent": {[]session.Event{descriptor, task, policyEvent}, 1},
-		"visible after resume":            {[]session.Event{descriptor, task, contextEvent}, 0},
-		"hidden by compaction":            {[]session.Event{descriptor, task, contextEvent, summary}, 1},
-	} {
-		messages, err := h.service.StepContext(context.Background(), agent.ContextRequest{Events: test.events})
-		if err != nil || len(messages) != test.want {
-			t.Errorf("%s: StepContext = %d messages, %v", name, len(messages), err)
-			continue
+	for name, events := range map[string][]session.Event{"root": {task}, "child": {descriptor, task}} {
+		contribution, err := h.service.StepContext(t.Context(), agent.ContextRequest{Events: events})
+		if err != nil || len(contribution.Messages) != 0 {
+			t.Fatalf("%s: contribution=%+v error=%v", name, contribution, err)
 		}
-		if test.want == 1 && (messages[0].Source.Kind != SourceRuntimeContext || session.Text(messages[0]) != delegationContext) {
-			t.Errorf("%s: message = %#v", name, messages[0])
+		if name == "root" && len(contribution.Sections) != 0 || name == "child" && !slices.Equal(contribution.Sections, []string{delegationContext}) {
+			t.Fatalf("%s: sections=%q", name, contribution.Sections)
 		}
-	}
-	if _, err := h.service.StepContext(context.Background(), agent.ContextRequest{Events: []session.Event{descriptor, task, broken}}); err == nil {
-		t.Fatal("an invalid surface contributed context")
 	}
 }
 

@@ -140,7 +140,7 @@ Submit user message
 
 - 一个 agent 串行处理 turn；一个 turn 最多 256 个 step，产品默认 32。一个 step 是一次模型调用与其产生的全部工具执行。
 - 每个 step 在 `step/start` 之前经过规划模式边界：提交待生效的 `plan/mode` 选择、必要时追加用户切换提示，并取得本 step 的规划段落，见[用户提问与规划模式](#用户提问与规划模式)。
-- 规划模式边界之后、`step/start` 之前运行 step 上下文扩展点：`Engine.RegisterContext` 注册的 `ContextProvider` 随注册方 Scope 存在，按注册顺序收到该 step 可见的工具名和已提交日志，返回的消息作为本 turn 的 `user/message`（step 为 0）先提交再进入请求。provider 错误结束 turn，取消映射为 `canceled`。当前 provider 按组合顺序为 sandbox 策略、委派说明与运行时 skill；后台任务通知仍由 engine 在 turn 开始和工具 step 边界直接提交。
+- 规划模式边界之后、`step/start` 之前运行 step 上下文扩展点：`Engine.RegisterContext` 注册的 `ContextProvider` 随注册方 Scope 存在，按注册顺序收到该 step 可见的工具名和同一份已提交日志，返回 `ContextContribution`。engine 收集全部 `Sections` 后聚合为一份完整 runtime 快照，只添加一次替代声明，比较最后保留快照，再作为本 turn 的 `user/message`（step 为 0）提交；独立的 `Messages` 随后按注册顺序提交。provider 错误结束 turn，不发布局部快照，取消映射为 `canceled`。当前 provider 按组合顺序为 sandbox 策略、委派说明与运行时 skill；后台任务通知仍由 engine 在 turn 开始和工具 step 边界直接提交。
 - 每个 step 从权威 log 重新折叠 model surface。request header 在调用前固定 provider、model、effort、system、tool schema 和 context window；provider 请求携带 header 冻结的 effort，不再另读当时的模型目录。root 跟随热切换的设置 route，delegated child 使用它继承的 route（见 [Subagent](#subagent)），包括其 compaction 的阈值与摘要调用；compaction summary 同样记录其冻结的 provider、model 和 effort。
 - streaming chunk 按 provider 顺序持久化。完成的 assistant message 和全部 tool call 先提交，工具才能执行；每个 call 最终得到唯一 tool result。
 - 超出参数预算的提案先转换为保留 ID/名称、`arguments:{}` 和 `arguments_omitted:true` 的调用，再提交日志；runtime 为其产生错误结果，turn 继续。provider 越界后停止累积与提交该调用的参数 delta，继续消费有界响应；普通参数仍按原顺序提交。限值与持久化策略见 [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败)。
@@ -262,7 +262,7 @@ list_agents                → parent 自己的 subagent/catalog；descendants �
 ```
 
 - spawn child 从空会话开始；fork child 以 parent 最后一个 `turn/end` 为止的事件为种子（不含进行中的 turn），child 固定使用 parent 委派时最新请求的 provider、model 和 effort，每个 step 与冷恢复都不随之后的热切换改变。child 创建时持久化 parent/depth、带继承 route 的 descriptor v3、捕获的显式 sandbox override 与 `never` 策略；parent 在创建它的工具 step 内写 `subagent/catalog`。
-- delegated session 在持久化策略层固定为 `never`，需要 approval 的工具无法执行，bash/write/edit 还在工具执行点无条件拒绝 delegated 调用。child 与 parent 使用同一 system prompt；委派说明由 subagent 服务的 step context provider 作为 source kind `runtime-context` 的 `user/message` 贡献（审批自动拒绝、不要重试、向委派方说明限制），surface 中没有可见副本时（首个 step、compaction 之后）才提交，恢复后不重复。
+- delegated session 在持久化策略层固定为 `never`，需要 approval 的工具无法执行，bash/write/edit 还在工具执行点无条件拒绝 delegated 调用。child 与 parent 使用同一 system prompt；subagent 服务的 step context provider 根据 descriptor 贡献委派 section（审批自动拒绝、不要重试、向委派方说明限制），engine 将其与 sandbox 合并成完整 `runtime-context` 快照，按最新保留快照比较，恢复后不重复，compaction 隐藏后重建全部 section。
 - 消息只跨越直接父子边，经 `Agent.NotifyContext` 在收件箱锁内检查取消后投递：接收方忙时在下一个 step 边界追加，空闲时开启新 turn。中断前排队的未提交消息使 child 保持驻留；中断后接受的新消息在旧 turn 退出后自动唤醒下一轮，一并处理旧消息。结算通知只在 child 自然结算时发送；服务关闭和 one-shot parent 回收是拆除，不发通知。
 - 每个 continuable 池最多 8 个驻留 child，创建占位与发布后的 handle 原子转交同一个名额，one-shot 不占池；绝对 delegation depth 上限为 4。
 - 释放 child 时先中断它，深度优先释放其 live 子代理，关闭 agent 与 transcript，再以 `job.Service.Release` 结束它拥有的 job。清理失败覆盖成功或取消结局，通知及后台 job 不附成功输出。服务 cleanup 拒绝新操作、停止结算 watcher，再从最深处起释放全部 child。
@@ -272,7 +272,7 @@ list_agents                → parent 自己的 subagent/catalog；descendants �
 
 `session.SandboxMode` 定义 read-only、workspace-write（默认）、danger-full-access。人类 `/sandbox MODE` 经 `Registry.SetSandboxMode` 立即提交 `sandbox/mode`；模型没有切换入口。执行点从调用 journal 读最新模式，审批后再次读取并解析目标。已经启动的进程保留 launch profile；模式与 approval 独立，delegated 永远 `never`。各档 profile、一次性窄升级与 host 路径规则见[安全边界](security.md#approvalshell-与进程)。
 
-`sandbox-policy` 是 `SandboxContext` 插件，由 engine 后的 composition 显式注入 workspace，Scope cleanup 撤销 context 注册。它在用户输入之后、step/start 之前提交 user-role `runtime-context` / `sandbox:policy` 快照，与委派说明共用 step-context 接缝并早于 skill 目录。委派说明只识别自己的内容，其他 runtime-context 不抑制它；fork 继承前缀保持原样。正文沿用 Base 当前文件策略文本与 supersedes 前缀；workspace-write 给出已解析 workspace，read-only 给出拒绝后窄升级指引，full access 说明无文件 sandbox。仅在最后一个保留快照不同或被 compaction 移除时追加；TUI 不将其显示为用户发言。当前模式不进入静态 system prompt，事件与 composition 足以重建上下文。
+`sandbox-policy` 是 `SandboxContext` 插件，由 engine 后的 composition 显式注入 workspace，Scope cleanup 撤销 context 注册。它从模式事件贡献上游 `sandbox:policy` section；engine 将其与委派说明聚合，在用户输入之后、step/start 之前提交 user-role `runtime-context` / `agent-engine` 完整快照，早于独立的 skill 目录与调用正文。替代声明仅出现一次；fork 继承前缀保持原样，在 child 自有任务之后追加完整快照。正文沿用 Base 当前文件策略文本；workspace-write 给出按 JavaScript `JSON.stringify` 渲染的已解析 workspace，read-only 给出拒绝后窄升级指引，full access 说明无文件 sandbox。仅在最后一个保留完整快照不同或被 compaction 隐藏时追加；TUI 不将其显示为用户发言。当前模式不进入静态 system prompt，权威事件与 composition 足以重建全部 section。
 
 resume 保留最新模式；spawn/fork 在创建时捕获父会话的显式 override，而非一次性授权。fork 的 child 自有 delegation 记录覆盖已完成历史中的旧模式，父模式后续变化不传播。持久化与取舍由 [ADR-0021](decisions/0021-session-sandbox-modes.md) 拥有。
 
@@ -343,7 +343,7 @@ notice/queued, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、工具运行时（`tool-runtime-v3`，含结构化错误分类与结果 metadata）、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、持久化的完成通知（`job-tools-v2`）、goal 停止语义（`goal-tools-v2`）、检索请求审计（`web-tools-v2`）、spill 策略、附件引用格式（`attachments-v1`）与工具结果裁剪（`tool-result-prune-v1`）的语义版本和 session v2。会话 sandbox 使用 `sandbox-policy-v1` 与 `shell-tools-v5`；文件结构化结果使用 `fs-tools-v5`（含 sandbox 文件策略）；工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、工具运行时（`tool-runtime-v3`，含结构化错误分类与结果 metadata）、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、持久化的完成通知（`job-tools-v2`）、goal 停止语义（`goal-tools-v2`）、检索请求审计（`web-tools-v2`）、spill 策略、附件引用格式（`attachments-v1`）与工具结果裁剪（`tool-result-prune-v1`）的语义版本和 session v2。会话 sandbox 与完整 runtime 快照使用 `sandbox-policy-v2`，版本拒绝与保留规则见 [ADR-0021](decisions/0021-session-sandbox-modes.md#版本识别拒绝与保留)；sandbox 命令策略使用 `shell-tools-v5`；文件结构化结果使用 `fs-tools-v5`（含 sandbox 文件策略）；工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。`approval/asked` 的工具名必须等于 pending call 的名称；`approval/decided` 仅通过 approval ID 关联问题，不允许携带 `call_id`。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。

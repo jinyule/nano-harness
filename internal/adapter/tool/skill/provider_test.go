@@ -240,25 +240,25 @@ func TestStepContext_PublishesCatalogForVisibleTool(t *testing.T) {
 	visible := agent.ContextRequest{Tools: []string{"read", "skill"}, Events: catalogEvents("")}
 
 	messages, err := f.provider.StepContext(context.Background(), visible)
-	if err != nil || !slices.Equal(messageKinds(messages), []string{coreskill.SourceCatalog}) {
+	if err != nil || !slices.Equal(messageKinds(messages.Messages), []string{coreskill.SourceCatalog}) {
 		t.Fatalf("messages = %+v, %v", messages, err)
 	}
-	text := messages[0].Content[0].Text
+	text := messages.Messages[0].Content[0].Text
 	entries := []coreskill.Entry{coreskill.NewEntry("pdf", "Handle   PDFs\n& forms."), coreskill.NewEntry("review", "Review code.")}
 	if want, _, _ := coreskill.CatalogUpdate(catalogEvents(""), entries); text != want || !strings.Contains(text, "- `pdf`: Handle PDFs &amp; forms.") || strings.Contains(text, "hidden") {
 		t.Fatalf("catalog text =\n%s", text)
 	}
 	visible.Events = catalogEvents(text)
-	if messages, err := f.provider.StepContext(context.Background(), visible); err != nil || len(messages) != 0 {
+	if messages, err := f.provider.StepContext(context.Background(), visible); err != nil || len(messages.Messages) != 0 {
 		t.Fatalf("unchanged catalog republished: %+v, %v", messages, err)
 	}
 	hidden := agent.ContextRequest{Tools: []string{"read"}, Events: catalogEvents("")}
-	if messages, err := f.provider.StepContext(context.Background(), hidden); err != nil || len(messages) != 0 {
+	if messages, err := f.provider.StepContext(context.Background(), hidden); err != nil || len(messages.Messages) != 0 {
 		t.Fatalf("hidden tool published: %+v, %v", messages, err)
 	}
 	hidden.Events = catalogEvents(text)
 	messages, err = f.provider.StepContext(context.Background(), hidden)
-	if err != nil || len(messages) != 1 || !strings.Contains(messages[0].Content[0].Text, "No skills are currently available") {
+	if err != nil || len(messages.Messages) != 1 || !strings.Contains(messages.Messages[0].Content[0].Text, "No skills are currently available") {
 		t.Fatalf("hidden tool did not retire the catalog: %+v, %v", messages, err)
 	}
 	if err := os.Remove(filepath.Join(f.user, "review.md")); err != nil {
@@ -266,7 +266,7 @@ func TestStepContext_PublishesCatalogForVisibleTool(t *testing.T) {
 	}
 	visible.Events = catalogEvents(text)
 	messages, err = f.provider.StepContext(context.Background(), visible)
-	if err != nil || len(messages) != 1 || !strings.Contains(messages[0].Content[0].Text, "replaces every earlier") || strings.Contains(messages[0].Content[0].Text, "review") {
+	if err != nil || len(messages.Messages) != 1 || !strings.Contains(messages.Messages[0].Content[0].Text, "replaces every earlier") || strings.Contains(messages.Messages[0].Content[0].Text, "review") {
 		t.Fatalf("removal did not replace the catalog: %+v, %v", messages, err)
 	}
 }
@@ -278,7 +278,7 @@ func TestStepContext_KeepsLastCatalogOnIncompleteDiscovery(t *testing.T) {
 	visible := agent.ContextRequest{Tools: []string{"skill"}, Events: catalogEvents("stale catalog")}
 	failure := errors.New("read failure")
 	readEntries = func(*os.File, int) ([]fs.DirEntry, error) { return nil, failure }
-	if messages, err := f.provider.StepContext(context.Background(), visible); err != nil || messages != nil {
+	if messages, err := f.provider.StepContext(context.Background(), visible); err != nil || messages.Messages != nil {
 		t.Fatalf("incomplete discovery = %+v, %v", messages, err)
 	}
 	readEntries = func(directory *os.File, limit int) ([]fs.DirEntry, error) { return directory.ReadDir(limit) }
@@ -305,7 +305,7 @@ func TestStepContext_ExplicitInvocationFailsOnIncompleteDiscovery(t *testing.T) 
 	for _, tools := range [][]string{{"skill"}, nil} {
 		request := agent.ContextRequest{Tools: tools, Events: gestureEvents("/demo")}
 		messages, err := f.provider.StepContext(t.Context(), request)
-		if !errors.Is(err, failure) || messages != nil {
+		if !errors.Is(err, failure) || messages.Messages != nil {
 			t.Fatalf("explicit invocation silently consumed: messages=%+v error=%v", messages, err)
 		}
 	}
@@ -320,20 +320,20 @@ func TestStepContext_InjectsUserInvokedSkills(t *testing.T) {
 	request := agent.ContextRequest{Tools: []string{"skill"}, Events: gestureEvents("/demo then /model-only /absent and /shared /demo")}
 
 	messages, err := f.provider.StepContext(context.Background(), request)
-	if err != nil || !slices.Equal(messageKinds(messages), []string{coreskill.SourceCatalog, coreskill.SourceInvocation, coreskill.SourceInvocation}) {
-		t.Fatalf("messages = %v, %v", messageKinds(messages), err)
+	if err != nil || !slices.Equal(messageKinds(messages.Messages), []string{coreskill.SourceCatalog, coreskill.SourceInvocation, coreskill.SourceInvocation}) {
+		t.Fatalf("messages = %v, %v", messageKinds(messages.Messages), err)
 	}
-	if got, want := messages[1].Content[0].Text, coreskill.RenderContent("demo", filepath.Join(f.projectRoot(), "demo"), "Body of demo."); got != want {
+	if got, want := messages.Messages[1].Content[0].Text, coreskill.RenderContent("demo", filepath.Join(f.projectRoot(), "demo"), "Body of demo."); got != want {
 		t.Fatalf("injection =\n%s", got)
 	}
-	if !strings.Contains(messages[2].Content[0].Text, `<skill_content name="shared">`) || strings.Contains(messages[0].Content[0].Text, "`demo`") {
+	if !strings.Contains(messages.Messages[2].Content[0].Text, `<skill_content name="shared">`) || strings.Contains(messages.Messages[0].Content[0].Text, "`demo`") {
 		t.Fatalf("messages = %+v", messages)
 	}
 
 	request.Tools = nil
 	messages, err = f.provider.StepContext(context.Background(), request)
-	if err != nil || !slices.Equal(messageKinds(messages), []string{coreskill.SourceInvocation, coreskill.SourceInvocation}) {
-		t.Fatalf("hidden-tool gestures = %v, %v", messageKinds(messages), err)
+	if err != nil || !slices.Equal(messageKinds(messages.Messages), []string{coreskill.SourceInvocation, coreskill.SourceInvocation}) {
+		t.Fatalf("hidden-tool gestures = %v, %v", messageKinds(messages.Messages), err)
 	}
 
 	file := filepath.Join(f.projectRoot(), "shared", "SKILL.md")
@@ -347,7 +347,7 @@ func TestStepContext_InjectsUserInvokedSkills(t *testing.T) {
 		return os.Open(path) //nolint:gosec // test-owned temporary path
 	}
 	request.Events = gestureEvents("/shared")
-	if messages, err := f.provider.StepContext(context.Background(), request); err != nil || len(messages) != 0 {
+	if messages, err := f.provider.StepContext(context.Background(), request); err != nil || len(messages.Messages) != 0 {
 		t.Fatalf("stale gesture injected: %+v, %v", messages, err)
 	}
 	openPath = os.Open

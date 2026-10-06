@@ -184,7 +184,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 ## Subagent 与生命周期
 
 - subagent 是同进程的独立 agent/session，不启动外部 Codex/Claude 进程，也不共享可变 transcript。fork child 复制 parent 已完成 turn 的事件作为自己日志的前缀，之后两者独立追加；复制内容与 parent 一样是模型可见数据，可能包含工具输出和图片引用；图片对象由两者共享，不复制字节。
-- delegated session 的 approval 策略在创建时持久化为 `never`，fork 复制的 parent `ask` 策略被其后的 `never` 覆盖；child 因此不能写文件、运行 `bash` 或请求 sandbox 升级。这一权限范围以 runtime context 告诉 child（审批会自动拒绝、不要重试被拒操作、向委派方说明限制）；它只是模型指引，执行点的拒绝不依赖它。最大 delegation depth 为 4，每个 continuable 池最多 8 个驻留 child。
+- delegated session 的 approval 策略在创建时持久化为 `never`，fork 复制的 parent `ask` 策略被其后的 `never` 覆盖；child 因此不能写文件、运行 `bash` 或请求 sandbox 升级。这一权限范围与当前 sandbox 策略合并成完整 runtime context 快照告诉 child（审批会自动拒绝、不要重试被拒操作、向委派方说明限制）；它只是模型指引，执行点的拒绝不依赖它。最大 delegation depth 为 4，每个 continuable 池最多 8 个驻留 child。
 - 授权以精确的 live 调用方 session 与持久化 lineage 为准，不信任模型提供的身份：
 
 | 操作 | 允许 | 拒绝 |

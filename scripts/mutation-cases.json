@@ -995,10 +995,10 @@
   },
   {
     "id": "sandbox-delegation-context-independent",
-    "file": "internal/app/subagent/service.go",
-    "before": " && session.Text(*node.Message) == delegationContext",
-    "after": "",
-    "test": "^TestService_DelegationContextReappearsOnlyWhenHidden$"
+    "file": "internal/app/agent/context.go",
+    "before": "sections = append(sections, contribution.Sections...)",
+    "after": "sections = contribution.Sections",
+    "test": "^TestEngine_CompleteRuntimeSnapshotLifecycle$"
   },
   {
     "id": "search-failure-classification",
@@ -1097,5 +1097,26 @@
     "before": "service.mu.Lock()\n\tdefer service.mu.Unlock()\n\t// The stop transition and durable outcome must serialize; cleanup cannot",
     "after": "service.mu.Lock()\n\tservice.mu.Unlock()\n\t// The stop transition and durable outcome must serialize; cleanup cannot",
     "test": "^TestService_CleanupDuringDecisionCommit$"
+  },
+  {
+    "id": "sandbox-complete-snapshot-resume",
+    "file": "internal/app/agent/context.go",
+    "before": "if session.Text(*node.Message) == text {",
+    "after": "if false && session.Text(*node.Message) == text {",
+    "test": "^TestEngine_CompleteRuntimeSnapshotLifecycle$"
+  },
+  {
+    "id": "sandbox-complete-snapshot-compaction",
+    "file": "internal/app/agent/context.go",
+    "before": "surface, err := session.Surface(events)",
+    "after": "uncompacted := slices.DeleteFunc(slices.Clone(events), func(event session.Event) bool { return event.Record.Type == session.RecordCompactionSummary })\n\tsurface, err := session.Surface(uncompacted)",
+    "test": "^TestEngine_CompleteRuntimeSnapshotLifecycle$"
+  },
+  {
+    "id": "sandbox-policy-javascript-quote",
+    "file": "internal/core/session/sandbox.go",
+    "before": "case SandboxWorkspaceWrite:\n\t\treturn \"Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: \" + text.Quote(workspace) + \". Some platform temporary areas may also be writable.\"",
+    "after": "case SandboxWorkspaceWrite:\n\t\t_ = text.Quote(workspace)\n\t\tquoted, _ := json.Marshal(workspace)\n\t\treturn \"Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: \" + string(quoted) + \". Some platform temporary areas may also be writable.\"",
+    "test": "^TestSandboxPolicyText_JavaScriptWorkspaceVectors$"
   }
 ]

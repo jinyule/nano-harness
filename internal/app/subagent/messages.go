@@ -19,15 +19,14 @@ const (
 	// SourceAgentMessage so a transcript never credits the child with words
 	// it did not write.
 	SourceSettled = session.SourceSubagentSettled
-	// SourceRuntimeContext marks a delegated child's runtime-context
-	// snapshot, which states its fixed permission scope.
+	// SourceRuntimeContext marks the engine's complete runtime snapshot,
+	// including a delegated child's fixed permission scope.
 	SourceRuntimeContext = "runtime-context"
 )
 
 // delegationContext is the upstream delegation-scope statement, contributed
 // as runtime context so a child's system prompt matches its parent's.
-const delegationContext = "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n" +
-	"You are a delegated subagent: your permission scope was fixed when you were started and cannot be " +
+const delegationContext = "You are a delegated subagent: your permission scope was fixed when you were started and cannot be " +
 	"widened from inside this session — operations that require approval are rejected automatically. " +
 	"When the task needs access beyond that scope, do not retry the denied operation; state the " +
 	"limitation in your reply so the delegating agent can handle it."

@@ -83,3 +83,21 @@ func TestSandboxPolicyText_BaseContent(t *testing.T) {
 		t.Fatal(text)
 	}
 }
+
+func TestSandboxPolicyText_JavaScriptWorkspaceVectors(t *testing.T) {
+	for _, test := range []struct{ name, path, quoted string }{
+		{"ampersand", "/work/a&b", `"/work/a&b"`},
+		{"less than", "/work/a<b", `"/work/a<b"`},
+		{"greater than", "/work/a>b", `"/work/a>b"`},
+		{"line separator", "/work/a\u2028b", "\"/work/a\u2028b\""},
+		{"paragraph separator", "/work/a\u2029b", "\"/work/a\u2029b\""},
+		{"mixed", "/work/<&>/\"\\\a\n\t\u2028\u2029", "\"/work/<&>/\\\"\\\\\\u0007\\n\\t\u2028\u2029\""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			want := "Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: " + test.quoted + ". Some platform temporary areas may also be writable."
+			if got := SandboxPolicyText(SandboxWorkspaceWrite, test.path); got != want {
+				t.Fatalf("policy bytes differ:\n got %q\nwant %q", got, want)
+			}
+		})
+	}
+}

@@ -400,8 +400,13 @@ def verify(binary):
                 assert own[0]["type"] == "subagent/descriptor" and own[0]["subagent"]["mode"] == "one-shot", own[0]
                 assert own[1]["type"] == "approval/policy" and own[1]["approval"]["policy"] == "never", own[1]
                 assert own[0]["subagent"]["route"] == {"provider": "openai", "model": "fixture"}, own[0]
-                assert [entry for entry in own if entry["type"] == "user/message"
-                        and entry["message"]["source"]["kind"] == "runtime-context"], "missing delegation runtime context"
+                child_contexts = [entry["message"]["content"][0]["text"] for entry in own
+                                  if entry["type"] == "user/message" and entry["message"]["source"]["kind"] == "runtime-context"]
+                assert len(child_contexts) == 1, child_contexts
+                assert child_contexts[0].count("This snapshot supersedes earlier runtime-context snapshots.") == 1, child_contexts
+                assert "Current DSH file policy: workspace-write." in child_contexts[0], child_contexts
+                assert "\n\nYou are a delegated subagent:" in child_contexts[0], child_contexts
+                assert "do not retry the denied operation" in child_contexts[0], child_contexts
                 assert [entry["outcome"] for entry in own if entry["type"] == "turn/end"] == ["completed"], own
                 if label == "reader":
                     assert own[0]["subagent"]["provider"] == "spawn" and own[0]["subagent"].get("inherited", 0) == 0

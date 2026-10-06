@@ -194,45 +194,52 @@ func TestComposition_SandboxSwitchWhileApprovalIsPending(t *testing.T) {
 
 func TestComposition_SandboxRejectsOldSessionsWithoutChangingThem(t *testing.T) {
 	config := applicationConfig{workspaceRoot: "/workspace"}
-	previous := sha256.Sum256([]byte("nano-harness-v2\x00/workspace\x00tool-runtime-v2\x00fs-tools-v3\x00search-tools-v3\x00shell-tools-v3\x00job-tools-v1\x00subagent-tools-v3\x00todo-tools-v1\x00web-tools-v2\x00question-tools-v1\x00plan-tools-v1\x00skill-tools-v1\x00goal-tools-v2\x00spill-v1\x00attachments-v1\x00session-v2"))
-	root := filepath.Join(t.TempDir(), "sessions")
-	old, err := sessionjsonl.New(sessionjsonl.Config{Root: root, CompositionID: hex.EncodeToString(previous[:])})
-	if err != nil {
-		t.Fatal(err)
-	}
-	scope := &plugin.Scope{}
-	if err := old.Start(t.Context(), scope); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = scope.Close(context.Background()) })
-	log, err := old.Open(t.Context(), sessionjsonl.OpenOptions{SessionID: "old", Cwd: config.workspaceRoot, Create: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := log.Close(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(log.Path())
-	if err != nil {
-		t.Fatal(err)
-	}
-	current, err := sessionjsonl.New(sessionjsonl.Config{Root: root, CompositionID: compositionID(config)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	currentScope := &plugin.Scope{}
-	if err := current.Start(t.Context(), currentScope); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = currentScope.Close(context.Background()) })
-	if _, _, err := current.Inspect(t.Context(), "old"); !errors.Is(err, sessionjsonl.ErrCorruptSession) {
-		t.Fatalf("Inspect old composition: %v", err)
-	}
-	if _, err := current.Open(t.Context(), sessionjsonl.OpenOptions{SessionID: "old", Cwd: config.workspaceRoot}); !errors.Is(err, sessionjsonl.ErrCorruptSession) {
-		t.Fatalf("Open old composition: %v", err)
-	}
-	after, err := os.ReadFile(log.Path())
-	if err != nil || !bytes.Equal(before, after) {
-		t.Fatalf("rejection changed old session: %v", err)
+	for name, identity := range map[string]string{
+		"before session sandbox":    "nano-harness-v2\x00/workspace\x00tool-runtime-v2\x00fs-tools-v3\x00search-tools-v3\x00shell-tools-v3\x00job-tools-v1\x00subagent-tools-v3\x00todo-tools-v1\x00web-tools-v2\x00question-tools-v1\x00plan-tools-v1\x00skill-tools-v1\x00goal-tools-v2\x00spill-v1\x00attachments-v1\x00session-v2",
+		"partial runtime snapshots": "nano-harness-v2\x00/workspace\x00tool-runtime-v3\x00fs-tools-v4\x00search-tools-v4\x00shell-tools-v5\x00job-tools-v2\x00subagent-tools-v4\x00todo-tools-v1\x00web-tools-v2\x00question-tools-v1\x00plan-tools-v1\x00skill-tools-v1\x00goal-tools-v2\x00spill-v1\x00attachments-v1\x00tool-result-prune-v1\x00sandbox-policy-v1\x00session-v2",
+	} {
+		t.Run(name, func(t *testing.T) {
+			previous := sha256.Sum256([]byte(identity))
+			root := filepath.Join(t.TempDir(), "sessions")
+			old, err := sessionjsonl.New(sessionjsonl.Config{Root: root, CompositionID: hex.EncodeToString(previous[:])})
+			if err != nil {
+				t.Fatal(err)
+			}
+			scope := &plugin.Scope{}
+			if err := old.Start(t.Context(), scope); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = scope.Close(context.Background()) })
+			log, err := old.Open(t.Context(), sessionjsonl.OpenOptions{SessionID: "old", Cwd: config.workspaceRoot, Create: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := log.Close(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(log.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			current, err := sessionjsonl.New(sessionjsonl.Config{Root: root, CompositionID: compositionID(config)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			currentScope := &plugin.Scope{}
+			if err := current.Start(t.Context(), currentScope); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = currentScope.Close(context.Background()) })
+			if _, _, err := current.Inspect(t.Context(), "old"); !errors.Is(err, sessionjsonl.ErrCorruptSession) {
+				t.Fatalf("Inspect old composition: %v", err)
+			}
+			if _, err := current.Open(t.Context(), sessionjsonl.OpenOptions{SessionID: "old", Cwd: config.workspaceRoot}); !errors.Is(err, sessionjsonl.ErrCorruptSession) {
+				t.Fatalf("Open old composition: %v", err)
+			}
+			after, err := os.ReadFile(log.Path())
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("rejection changed old session: %v", err)
+			}
+		})
 	}
 }

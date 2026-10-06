@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"slices"
 
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
@@ -28,24 +27,10 @@ func (provider *SandboxContext) Start(_ context.Context, scope *plugin.Scope) er
 	return provider.engine.RegisterContext(provider, scope)
 }
 
-// StepContext emits a snapshot after user input and before step/start only
-// when the last retained snapshot differs. Compaction can remove that snapshot,
-// in which case the next step reconstructs it from authoritative mode records.
-func (provider *SandboxContext) StepContext(_ context.Context, request ContextRequest) ([]session.Message, error) {
-	text := "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n" + session.SandboxPolicyText(session.EffectiveSandbox(request.Events), provider.workspace)
-	surface, err := session.Surface(request.Events)
-	if err != nil {
-		return nil, err
-	}
-	for _, node := range slices.Backward(surface) {
-		if node.Message != nil && node.Message.Source.Kind == "runtime-context" && node.Message.Source.Plugin == "sandbox:policy" {
-			if session.Text(*node.Message) == text {
-				return nil, nil
-			}
-			break
-		}
-	}
-	return []session.Message{{Role: session.RoleUser, Source: session.MessageSource{Kind: "runtime-context", Plugin: "sandbox:policy"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: text}}}}, nil
+// StepContext rebuilds the sandbox:policy section from authoritative mode
+// records. The engine owns snapshot aggregation, comparison, and publication.
+func (provider *SandboxContext) StepContext(_ context.Context, request ContextRequest) (ContextContribution, error) {
+	return ContextContribution{Sections: []string{session.SandboxPolicyText(session.EffectiveSandbox(request.Events), provider.workspace)}}, nil
 }
 
 // SetSandboxMode is the human-only entry point for a live root. Its event is

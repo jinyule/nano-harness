@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
@@ -13,18 +14,28 @@ import (
 type ContextRequest struct {
 	// Tools names every tool visible to the step in lexical order.
 	Tools []string
-	// Events is the complete committed log, including this turn's input and
-	// the contributions of providers that ran earlier for the same step.
+	// Events is the complete committed log, including this turn's input.
+	// All providers for a step observe the same log before any contribution.
 	Events []session.Event
 }
 
-// ContextProvider contributes durable user-role context before a model
-// step. The engine commits returned messages in order as user/message
-// records of the active turn before step/start, so replay, compaction, fork,
-// and resume observe them like any other input. A provider whose observation
-// is incomplete returns no messages; an error ends the turn.
+// ContextContribution separates sections of the complete runtime snapshot
+// from independent user-role inputs, such as skill catalogs and invocations.
+type ContextContribution struct {
+	// Sections describes current runtime state without a replacement preamble.
+	// Providers contribute all their sections even when an older copy is visible.
+	Sections []string
+	// Messages follows the complete snapshot in registration order.
+	Messages []session.Message
+}
+
+// ContextProvider contributes context before a model step. The engine gathers
+// every contribution before committing one complete runtime snapshot followed
+// by independent messages as user/message records before step/start. Replay,
+// compaction, fork, and resume observe these like any other input. A provider
+// whose observation is incomplete returns no contribution; an error ends the turn.
 type ContextProvider interface {
-	StepContext(context.Context, ContextRequest) ([]session.Message, error)
+	StepContext(context.Context, ContextRequest) (ContextContribution, error)
 }
 
 // contextEntry gives each registration a distinct identity, so a cleanup
@@ -61,9 +72,8 @@ func (engine *Engine) removeContext(entry *contextEntry) {
 	engine.mu.Unlock()
 }
 
-// stepContext commits every registered provider's contribution for the next
-// step of turn. Each provider rereads the log so it observes earlier
-// contributions of the same step.
+// stepContext gathers the next step's context from one committed observation,
+// then commits its complete snapshot and independent messages before step/start.
 func (engine *Engine) stepContext(ctx context.Context, input runInput, turn uint64) error {
 	engine.mu.RLock()
 	entries := slices.Clone(engine.contexts)
@@ -79,18 +89,46 @@ func (engine *Engine) stepContext(ctx context.Context, input runInput, turn uint
 	for index, definition := range catalog.Definitions {
 		names[index] = definition.Name
 	}
+	events, err := input.journal.Events(ctx)
+	if err != nil {
+		return err
+	}
+	var sections []string
+	var messages []session.Message
 	for _, entry := range entries {
-		events, err := input.journal.Events(ctx)
+		contribution, err := entry.provider.StepContext(ctx, ContextRequest{Tools: slices.Clone(names), Events: events})
 		if err != nil {
 			return err
 		}
-		messages, err := entry.provider.StepContext(ctx, ContextRequest{Tools: slices.Clone(names), Events: events})
-		if err != nil {
-			return err
-		}
-		if err := appendUserMessages(ctx, input.journal, turn, messages); err != nil {
-			return err
+		sections = append(sections, contribution.Sections...)
+		messages = append(messages, contribution.Messages...)
+	}
+	snapshot, err := runtimeSnapshot(events, sections)
+	if err != nil {
+		return err
+	}
+	return appendUserMessages(ctx, input.journal, turn, append(snapshot, messages...))
+}
+
+// runtimeSnapshot compares the whole current context with the latest retained
+// engine snapshot. A hidden snapshot is reconstructed after compaction; a fork
+// preserves its prefix and appends a replacement only when its own scope differs.
+func runtimeSnapshot(events []session.Event, sections []string) ([]session.Message, error) {
+	if len(sections) == 0 {
+		return nil, nil
+	}
+	text := "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n" + strings.Join(sections, "\n\n")
+	surface, err := session.Surface(events)
+	if err != nil {
+		return nil, err
+	}
+	for _, node := range slices.Backward(surface) {
+		if node.Message != nil && node.Message.Source.Kind == "runtime-context" && node.Message.Source.Plugin == "agent-engine" {
+			if session.Text(*node.Message) == text {
+				return nil, nil
+			}
+			break
 		}
 	}
-	return nil
+	return []session.Message{{Role: session.RoleUser, Source: session.MessageSource{Kind: "runtime-context", Plugin: "agent-engine"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: text}}}}, nil
 }

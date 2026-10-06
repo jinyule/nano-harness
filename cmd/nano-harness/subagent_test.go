@@ -320,7 +320,12 @@ func TestComposition_SubagentsEndToEnd(t *testing.T) {
 	if childHeader == nil || childHeader.System != rootHeader.System || childHeader.Provider != rootHeader.Provider || childHeader.Model != rootHeader.Model {
 		t.Errorf("child request header differs from the root's: %+v", childHeader)
 	}
-	if contexts := notices(childRecords, appSubagent.SourceRuntimeContext); len(contexts) != 2 || !strings.Contains(contexts[0], "Current DSH file policy:") || !strings.Contains(contexts[1], "do not retry the denied operation") {
+	completeSnapshot := func(contexts []string) bool {
+		return len(contexts) == 1 && strings.Count(contexts[0], runtimeContextPrefix) == 1 &&
+			strings.Contains(contexts[0], session.SandboxPolicyText(session.SandboxWorkspaceWrite, config.workspaceRoot)+"\n\nYou are a delegated subagent:") &&
+			strings.Contains(contexts[0], "do not retry the denied operation")
+	}
+	if contexts := notices(childRecords, appSubagent.SourceRuntimeContext); !completeSnapshot(contexts) {
 		t.Errorf("child runtime context = %q", contexts)
 	}
 	forkEvents := readTranscript(t, filepath.Join(data, "sessions", review.SessionID+".jsonl"))
@@ -342,8 +347,8 @@ func TestComposition_SubagentsEndToEnd(t *testing.T) {
 			t.Error("fork system prompt differs from its parent's")
 		}
 	}
-	if contexts := notices(ownRecords, appSubagent.SourceRuntimeContext); len(contexts) != 1 || !strings.Contains(contexts[0], "do not retry the denied operation") {
-		t.Errorf("fork must retain its inherited sandbox snapshot and add delegation context: %q", contexts)
+	if contexts := notices(ownRecords, appSubagent.SourceRuntimeContext); !completeSnapshot(contexts) {
+		t.Errorf("fork must append one complete snapshot after its unchanged inherited prefix: %q", contexts)
 	}
 
 	// A later message cold-resumes the settled child; the root interrupts it.
@@ -368,6 +373,9 @@ func TestComposition_SubagentsEndToEnd(t *testing.T) {
 	}
 	if outcome, _ := session.LastOutcome(readTranscript(t, filepath.Join(data, "sessions", child+".jsonl"))); outcome != session.OutcomeCanceled {
 		t.Errorf("resumed child outcome = %q", outcome)
+	}
+	if contexts := notices(transcript(child), appSubagent.SourceRuntimeContext); !completeSnapshot(contexts) {
+		t.Errorf("cold resume duplicated or lost the complete runtime snapshot: %q", contexts)
 	}
 	shutdown, stop := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stop()

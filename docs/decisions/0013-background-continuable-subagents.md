@@ -70,7 +70,7 @@ session format 仍为 v2，变化都在记录层：
 3. **`subagent/catalog`**：parent 在创建 child 的工具 step 内写 `{"type":"subagent/catalog","turn":T,"step":S,"catalog":{"session_id":...,"mode":...,"label":...}}`。记录必须位于活动 step，同一日志内 `session_id` 唯一。它不进入 surface。
 4. **自有事件**：`session.OwnEvents` 以最后一个 descriptor 的 `inherited` 为界区分继承前缀；`session.Children` 只读取自有事件中的目录，fork 继承的 parent 目录不属于 child。会话自有的状态同样只从自有事件折叠：规划模式（`session.ProjectPlan`，见 [ADR-0014](0014-user-questions-and-plan-mode.md)）与目标（见 [ADR-0016](0016-long-running-goals.md)）。sandbox 与此不同：spawn/fork 在委派时捕获父显式 override，child 自有 delegation 模式覆盖种子中较旧策略，cold resume 保留；approval 始终为 `never`，见 [ADR-0021](0021-session-sandbox-modes.md)。种子中的这些记录仍按顺序规则原位校验，只作为 parent 的历史存在；种子带入 child 模型 surface 的只有消息、工具调用与结果和 compaction 摘要。
 5. **消息来源**：`agent-message` 与 `subagent-settled` 的 source 必须带 `sender_session_id`（发送消息的会话，或结算的 child），其他 source kind 与 assistant 消息不得带它；decoder 同时拒绝缺失和多余的发送者。上游 source 的 `form` 与结算 `summary` 只服务界面展示，本仓不持久化：消息正文已含发送者与结算摘要，TUI 按 kind 区分显示。
-6. **runtime context**：delegated child 的委派说明是 source kind `runtime-context` 的 `user/message`，见第 7 节。
+6. **runtime context**：delegated child 的委派说明是完整 `runtime-context` 快照的一段，快照以 `user/message` 持久化，见第 7 节。
 
 旧二进制遇到新记录或 descriptor v3 时按未知记录或非法字段拒绝；composition token 现为 `subagent-tools-v4`（v3 引入本 ADR 的记录，v4 引入继承 route、发送者身份与 runtime context），旧组合创建的会话按 composition mismatch 拒绝恢复，不迁移。本仓尚无发布 tag，没有需要迁移的会话。新记录与其他事实同存于 `0600`、写后 `fsync` 的只追加日志，受单 record 6 MiB、单 session 64 MiB 限制；fork 种子计入 child 的 64 MiB，parent 接近上限时 fork 失败。
 
@@ -86,15 +86,13 @@ session format 仍为 v2，变化都在记录层：
 
 **继承 route。** 创建 child 时，服务读取 parent 最新的 `request/header`，把其中的 provider、model 和 effort 写入 descriptor 的 `route`；parent 还没有发出请求时委派失败。child 的每个 step 与冷恢复都使用这一 route：request header、system prompt 中的 route 行、`PrepareCall`、retry 策略键和工具执行 route 都取自它，`llm.Request.Effort` 携带 header 冻结的 effort（含省略），provider 以它代替目录中当时的 effort。context window 仍按该 provider/model 查当前设置目录。root 与 parent 自身继续跟随热切换的设置 route（[ADR-0002](0002-provider-neutral-agent-harness.md)）。route 所指的模型从设置中移除后，child 的请求以 `PrepareCall` 的未知模型错误失败，不改用其他模型。child 的 compaction 同样使用继承的 route：压力阈值和保留量按该 provider/model 在当前设置目录中的 context window 计算，摘要调用在该 route 上发出并携带继承的 effort，`compaction/summary` 记录这一 provider、model 和 effort；设置热切换与冷恢复都不改变它。上游 `compaction-basic` 在没有单独配置摘要模型时同样取会话最新请求的 route（child 即继承的 route），但不显式传 effort、由模型默认值决定；本仓传继承的 effort，使摘要请求与 child 其他请求一致。目录中已不再列出该模型时窗口未知，压力 compaction 不触发，context-window 错误与手动请求仍强制执行。
 
-**委派 runtime context。** child 与 parent 使用同一 system prompt 组装，不再有 child 专属段落，因此同 route 的 fork 请求在继承历史之前与 parent 前缀一致。委派说明改由 subagent 服务注册的 step context provider 贡献：有 descriptor 的会话在 step 开始前，若 replay surface 中没有可见的 `runtime-context` 消息，就提交一条
+**委派 runtime context。** child 与 parent 使用同一 system prompt 组装，不再有 child 专属段落，因此同 route 的 fork 请求在继承历史之前与 parent 前缀一致。subagent 服务注册的 step context provider 从权威 descriptor 判断委派身份，每个 step 为 delegated 会话贡献以下 section：
 
 ```text
-Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
-
 You are a delegated subagent: your permission scope was fixed when you were started and cannot be widened from inside this session — operations that require approval are rejected automatically. When the task needs access beyond that scope, do not retry the denied operation; state the limitation in your reply so the delegating agent can handle it.
 ```
 
-文本与上游 `SUBAGENT_DELEGATION_CONTEXT` 及其快照包装一致，包含审批自动拒绝、不要重试被拒操作、向委派方说明限制三项指引。它位于首个 step 的任务消息之后，与上游把 runtime context 追加在已领取消息之后的顺序相同。恢复后已提交的副本仍可见，不重复贡献；compaction 隐藏它后，下一个 step 重新贡献。root 会话没有 descriptor，不受影响。本仓 runtime context 只承载委派说明；上游的 sandbox 与审批策略快照仍由 system prompt 的 Safety 段落表达。
+文本与上游 `SUBAGENT_DELEGATION_CONTEXT` 一致，包含审批自动拒绝、不要重试被拒操作、向委派方说明限制三项指引。engine 将它与 sandbox 等当前 section 聚合为一份完整快照，再添加一次取代旧快照的声明、比较并提交；所有 provider 观察同一份日志，独立的 skill 消息在快照之后提交。快照位于任务消息之后、`step/start` 之前，与上游先聚合 section 再包装的顺序一致。恢复后同一完整快照仍可见，不重复提交；compaction 隐藏它后，下一个 step 重建全部 section。fork 保留继承前缀，在 child 自有任务之后追加含 sandbox 与委派范围的完整快照。root 不贡献委派 section，但仍有 sandbox section。来源与版本识别由 [ADR-0021](0021-session-sandbox-modes.md#模型策略上下文) 拥有。
 
 ## 后果
 

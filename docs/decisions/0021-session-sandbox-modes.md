@@ -38,9 +38,11 @@ confined runner 的启动与致命诊断失败优先于文件 denial；不可用
 
 ### 模型策略上下文
 
-插件 `sandbox-policy` 通过 engine 的 scoped step-context 接缝贡献上游 `sandbox:policy` 内容。它在当前用户输入之后、`step/start` 与 `request/header` 之前提交普通 user-role `user/message`，来源 `runtime-context`、plugin `sandbox:policy`，与委派说明共用 `Engine.RegisterContext`，按 sandbox 策略、委派说明、skill 目录的顺序贡献。文本以 “Current runtime context. This snapshot supersedes earlier runtime-context snapshots.” 开头，随后说明当前档位；workspace-write 包含已解析 workspace 与平台临时区说明，read-only 包含尝试工具并遵循拒绝/升级指引，full access 说明不限制文件修改。
+插件 `sandbox-policy` 通过 engine 的 scoped step-context 接缝贡献上游 `sandbox:policy` section，与委派说明共用 `Engine.RegisterContext`。每个 step 的 provider 从同一份已提交日志返回 `ContextContribution`：`Sections` 是完整当前状态的各段，`Messages` 是独立输入。engine 先收集全部贡献，再按注册顺序以空行合并 section，添加一次 “Current runtime context. This snapshot supersedes earlier runtime-context snapshots.” 声明，比较并提交一份完整快照。普通 user-role `user/message` 的来源为 `runtime-context`、plugin `agent-engine`，位于当前用户输入之后、`step/start` 与 `request/header` 之前；独立的 skill 目录与调用正文跟在快照之后。provider 失败时不发布局部快照。
 
-只在最后一个保留快照与当前策略不同时追加。切换、resume、fork 或 compaction 后可从权威模式事件与 composition workspace 重建；compaction 移除旧快照时重新提交。委派说明只以自己的内容识别已提交副本，不会因其他 runtime-context（如 sandbox 快照）存在而省略。fork 的继承前缀保持原样，child 与 parent 的 system prompt 一致。TUI 不把这种快照展示为用户输入。system prompt 只描述各模式和独立 approval 规则，动态当前模式放在上述上下文位置。
+策略正文沿用上游文本：workspace-write 包含已解析 workspace 与平台临时区说明，read-only 包含尝试工具并遵循拒绝/升级指引，full access 说明不限制文件修改。workspace 使用 `core/text.Quote` 按 JavaScript `JSON.stringify` 渲染，保留 `&`、`<`、`>`、U+2028、U+2029，仅转义引号、反斜线与控制字符。
+
+只在最后一个保留的完整 engine 快照与当前全部 section 不同时追加，不用较旧的匹配副本抑制替换。切换、resume、fork 或 compaction 后可从权威模式事件、descriptor 与 composition workspace 重建；恢复后可见的同一完整快照不重复，compaction 隐藏快照后重新提交。fork 的继承前缀保持原样，child 在自己的任务之后追加包含策略与委派范围的完整快照，child 与 parent 的 system prompt 一致。TUI 不把这种快照展示为用户输入。system prompt 只描述各模式和独立 approval 规则，动态当前模式放在上述上下文位置。聚合和单次替代声明对齐上游 `system-prompt/src/index.ts` 的 `joinContextSections`。
 
 ### Linux 与 macOS
 
@@ -48,7 +50,7 @@ Linux 使用只读 root bind、独立 PID namespace（`--unshare-pid`）、`--de
 
 ### 版本识别、拒绝与保留
 
-nano-harness session format 仍为 v2，与上游格式无互通承诺。composition fingerprint 增加 `sandbox-policy-v1`，将 fs/shell token 提升为 `fs-tools-v4`、`shell-tools-v4`。旧 composition 在 Inspect/Open/恢复时严格拒绝；不猜测旧记录的权限、不静默将旧会话解释成新模式，也不自动改写文件。相同 composition 下缺省模式是合法默认，未知字段/枚举与非法顺序仍拒绝。
+nano-harness session format 仍为 v2，与上游格式无互通承诺。composition fingerprint 使用 `sandbox-policy-v2` 识别完整 runtime 快照与 JavaScript 路径渲染，保留其他能力的 token；v1 的局部策略/委派快照及更早 composition 在 Inspect/Open/恢复时严格拒绝。不猜测旧记录的权限、不静默将旧会话解释成新模式，也不自动改写文件。相同 composition 下缺省模式是合法默认，未知字段/枚举与非法顺序仍拒绝。
 
 本仓尚未承诺旧会话迁移。拒绝不删除 transcript 或附件，失败现场保持原字节；操作者保留旧版本与数据备份可继续用原 composition 恢复，或显式开始新会话。若要迁移已发布数据，必须单独决定转换、审计、回滚与附件保留策略。附件从不自动删除；spill 的既定 30 天保留规则不变。
 
@@ -60,4 +62,4 @@ nano-harness session format 仍为 v2，与上游格式无互通承诺。composi
 
 ## 验证
 
-固定 `session-v2-sandbox.jsonl` 与独立 writer 逐字节比较，反例覆盖 decoder、归属、因果与 composition 拒绝。文件与 shell 模式/升级/approval 矩阵验证实际文件效果和 runner profile；channel 屏障证明审批中切换阻止写入。真实 composition 覆盖三档、模型上下文位置与更新、JSONL resume；subagent 测试覆盖 spawn/fork 当前 override、旧种子与 cold resume。PTY 经真实二进制切换模式并检查日志与请求；逐文件 coverage、race、lint 与定向 mutation 由[测试策略](../testing.md)规定，本次证据见[实施 Note](../../.agents/notes/implemented/2026-10-06-session-sandbox-modes.md)。
+固定 `session-v2-sandbox.jsonl` 与独立 writer 逐字节比较，反例覆盖 decoder、归属、因果与 composition 拒绝。文件与 shell 模式/升级/approval 矩阵验证实际文件效果和 runner profile；channel 屏障证明审批中切换阻止写入。真实 composition 覆盖三档、模型上下文位置与更新、JSONL resume；subagent 测试覆盖 spawn/fork 当前 override、旧种子与 cold resume。完整快照测试证明 fork 前缀不变、冷恢复去重、compaction 隐藏后重建与局部贡献失败；路径固定向量逐字节覆盖 HTML 字符、Unicode 分隔符和混合转义。PTY 经真实二进制切换模式并检查日志与请求；逐文件 coverage、race、lint 与定向 mutation 由[测试策略](../testing.md)规定，证据见[模式实施 Note](../../.agents/notes/implemented/2026-10-06-session-sandbox-modes.md)与[完整快照修复 Note](../../.agents/notes/implemented/2026-10-07-complete-runtime-context-snapshots.md)。

@@ -101,26 +101,26 @@ func (provider *Provider) Start(_ context.Context, scope *plugin.Scope) error {
 // An incomplete discovery keeps the last catalog; when direct user input
 // names a skill it fails explicitly so the invocation is not consumed.
 // Cancellation and failures to load a named skill end the turn.
-func (provider *Provider) StepContext(ctx context.Context, request agent.ContextRequest) ([]session.Message, error) {
+func (provider *Provider) StepContext(ctx context.Context, request agent.ContextRequest) (agent.ContextContribution, error) {
 	visible := slices.Contains(request.Tools, toolName)
 	names := coreskill.InvokedNames(request.Events)
 	var skills []summary
 	if visible || len(names) > 0 {
 		found, err := provider.discover(ctx)
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
+			return agent.ContextContribution{}, ctxErr
 		}
 		if err != nil {
 			if len(names) > 0 {
-				return nil, fmt.Errorf("resolve explicit skill invocation: %w", err)
+				return agent.ContextContribution{}, fmt.Errorf("resolve explicit skill invocation: %w", err)
 			}
-			return nil, nil
+			return agent.ContextContribution{}, nil
 		}
 		skills = found
 	}
 	text, changed, err := coreskill.CatalogUpdate(request.Events, catalogEntries(skills, visible))
 	if err != nil {
-		return nil, err
+		return agent.ContextContribution{}, err
 	}
 	var messages []session.Message
 	if changed {
@@ -128,9 +128,9 @@ func (provider *Provider) StepContext(ctx context.Context, request agent.Context
 	}
 	invoked, err := invocations(skills, names)
 	if err != nil {
-		return nil, err
+		return agent.ContextContribution{}, err
 	}
-	return append(messages, invoked...), nil
+	return agent.ContextContribution{Messages: append(messages, invoked...)}, nil
 }
 
 // catalogEntries lists the model-invocable skills, or nothing when the skill
