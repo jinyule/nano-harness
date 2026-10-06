@@ -14,6 +14,8 @@ import (
 const (
 	// rawOutputMaxBytes bounds the complete ripgrep stdout one call parses.
 	rawOutputMaxBytes = 20_000_000
+	// stderrMaxBytes is upstream's retained diagnostic tail for search.
+	stderrMaxBytes = 65_536
 	// versionTimeout bounds the startup `rg --version` probe.
 	versionTimeout = 10 * time.Second
 )
@@ -32,7 +34,7 @@ func (provider *Provider) run(ctx context.Context, tool string, arguments []stri
 	result, err := provider.runner.Run(ctx, platformProcess.Request{
 		Path: provider.ripgrep, Args: append([]string{"--no-config"}, arguments...),
 		Root: provider.root.Path(), Cwd: provider.root.Path(), Mode: platformProcess.ModeHost,
-		Timeout: provider.timeout, StdoutLimit: provider.rawLimit,
+		Timeout: provider.timeout, StdoutLimit: provider.rawLimit, StderrLimit: stderrMaxBytes,
 	})
 	switch {
 	case ctx.Err() != nil || err == nil && result.TimedOut:

@@ -142,3 +142,18 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 三个参考工具固定调查于 crapper `9f1bead298b5a9d576bdd6319289fcf426e5b18a`、dryer `66ff6d21a42c04afcad89c78a80066176d1294b0`、mutator `c57f03879a08d2afe8c7e044e86c80bb164afd30`。采纳复杂度、结构重复候选和断言反例的方法；不直接引入 Python 工具。mutator 的编译失败计 killed、函数源码缓存不随测试变化失效、缺失 coverage 仍成功均有本机反例。本仓使用固定 Go 分析器及有限、无缓存、明确分类的回归变异，详细规范归[开发规范](development.md#复杂度与重复代码)与[测试策略](testing.md#定向-mutation-与断言有效性)。
 
 这次补充与此前只更新参考指针的工作范围不同，验证和重叠决定见[工程证据 Note](../.agents/notes/implemented/2026-10-04-engineering-evidence-gates.md)。未复制上游实现，不放宽插件化、逐文件 coverage、Agent Note、durable chunk 或数据责任。
+
+## 2026-10-06 搜索与 spill 对齐
+
+参考指针仍为 `5badb15009ae1756c3afe0ae0cef1faafc290ccc`，此次只读核对搜索与 spill 及 web 空白查询，不修改或运行上游代码。实施证据见[对齐 Note](../.agents/notes/implemented/2026-10-06-search-spill-query-parity.md)。
+
+| 上游行为 | 本仓取舍与 owner |
+|---|---|
+| glob/grep/web search 的 JS `trim()` 判空 | 采纳 ECMAScript 空白集合；原文与 grep 空格正则保留，见 ADR-0007、ADR-0011 |
+| grep.ts 先识别非 match framing、拒绝 null | 采纳解析顺序与永久负例，见 ADR-0007 |
+| search-core.ts 的 stderr 65,536 字节 | 采纳 search 专用预算；bash 维持 64,000，见 ADR-0007 |
+| subprocess 的 SIGTERM → 3 s → SIGKILL | 保留立即终止进程组以尽快静止，偏离理由见 ADR-0007 |
+| spill-policy 也保存超预算错误 | 采纳，保留错误状态；替换原有错误天然有界的理由，见 ADR-0008 |
+| 绝对定位符不依赖当前写入 root | 在既有 workspace 安全边界内采纳精确 transcript 历史授权，见 ADR-0008 |
+
+多模态 spill 与 PTC 不由此变更扩展；图片的会话引用与附件存储已由 [ADR-0017](decisions/0017-content-addressed-image-attachments.md) 采纳，独立于本次文本 spill 对齐。

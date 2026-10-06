@@ -30,7 +30,7 @@
 
 模型获得与参考 schema 一致的检索和抓取；检索复用现有账户，抓取以地址策略阻断 SSRF 与 DNS 重绑定，并在设置热重载时保持工具集合不变。对话请求也不再跟随重定向，这是对既有凭据转发风险的收紧；依赖 endpoint 重定向的部署需要改为直接配置最终 HTTPS 地址。
 
-代价：检索默认关闭，用户必须在 `settings.yaml` 选择 route，每次检索额外计费；Codex Responses 边界对 `web_search` 工具的接受度没有 live 证据。抓取不读取代理环境变量；没有逐次确认，模型仍可把数据编码进公网 URL。检索结果超过 `session.MaxTextBytes` 时沿用 tool runtime 的通用截断，未提供参考的 spill。HTML 转换是近似 Markdown，不追求与 turndown 逐字节一致。旧会话因 composition ID 变化而拒绝恢复，本仓尚无发布数据。
+代价：检索默认关闭，用户必须在 `settings.yaml` 选择 route，每次检索额外计费；Codex Responses 边界对 `web_search` 工具的接受度没有 live 证据。抓取不读取代理环境变量；没有逐次确认，模型仍可把数据编码进公网 URL。检索纯文本结果受 [ADR-0008](../../../docs/decisions/0008-tool-output-spill-and-observation-policy.md) 的通用 spill 与最终截断约束。查询空白判定的补充证据见[对齐 Note](2026-10-06-search-spill-query-parity.md)。HTML 转换是近似 Markdown，不追求与 turndown 逐字节一致。旧会话因 composition ID 变化而拒绝恢复，本仓尚无发布数据。
 
 参考 `docs/reference-deepseek-harness.md` 中“新工具暂缓”的那一行由总体计划在全部 WP 合并后更新，本 WP 未改动。
 

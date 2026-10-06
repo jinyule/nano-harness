@@ -16,6 +16,20 @@ import (
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
+func TestParseQueries_ECMAScriptWhitespace(t *testing.T) {
+	for _, query := range []string{"\ufeff", "\ufeff\t\u2028\u3000"} {
+		if _, err := parseQueries([]string{query}); err == nil || err.Error() != "each query must be a non-empty string" {
+			t.Errorf("blank query %q: %v", query, err)
+		}
+	}
+	for _, query := range []string{"\u0085", "\ufeff query \ufeff", "\u200b"} {
+		got, err := parseQueries([]string{query, query})
+		if err != nil || len(got) != 1 || got[0] != query {
+			t.Errorf("query spelling/dedup %q: %q, %v", query, got, err)
+		}
+	}
+}
+
 type webStore struct{ err error }
 
 func (store webStore) Resolve(context.Context, string, string) (llm.Credential, error) {

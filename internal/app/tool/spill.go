@@ -109,7 +109,7 @@ func (runtime *Runtime) UseSpill(store SpillStore, scope *plugin.Scope) error {
 	return nil
 }
 
-// retainInline applies upstream's spill policy to one successful result: text
+// retainInline applies upstream's spill policy to one text result: text
 // within the estimated-token budget passes through; larger text is saved and
 // replaced by an ordered head/tail preview plus a notice naming the omitted
 // bytes and the locator. A failed save, a missing store or session, or a

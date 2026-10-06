@@ -51,6 +51,21 @@ func TestNew_ResolvesPlatformSandbox(t *testing.T) {
 	}
 }
 
+func TestRunnerRun_RetainsCallerStderrBudgetIndependently(t *testing.T) {
+	root := t.TempDir()
+	for _, limit := range []int{0, 65536, 70000, 1} {
+		request := Request{Path: "/bin/sh", Args: []string{"-c", "head -c 70000 /dev/zero | tr '\\000' o; head -c 70000 /dev/zero | tr '\\000' e >&2"}, Root: root, Cwd: root, Mode: ModeHost, StderrLimit: limit}
+		result, err := New().Run(t.Context(), request)
+		want := limit
+		if want == 0 {
+			want = 64000
+		}
+		if err != nil || result.ExitCode != 0 || result.Stdout.Text != strings.Repeat("o", 64000) || !result.Stdout.Truncated || result.Stderr.Text != strings.Repeat("e", want) || result.Stderr.Truncated != (want < 70000) {
+			t.Fatalf("stderr limit=%d: stdout=%d stderr=%d truncated=%v err=%v", limit, len(result.Stdout.Text), len(result.Stderr.Text), result.Stderr.Truncated, err)
+		}
+	}
+}
+
 func TestRunnerRun_ValidatesRequestAndPaths(t *testing.T) {
 	temporary := t.TempDir()
 	runner := &Runner{goos: "linux"}
@@ -62,6 +77,7 @@ func TestRunnerRun_ValidatesRequestAndPaths(t *testing.T) {
 		func(request *Request) { request.TempDir, request.Mode = "", ModeWorkspace },
 		func(request *Request) { request.Mode = "unknown" },
 		func(request *Request) { request.StdoutLimit = -1 },
+		func(request *Request) { request.StderrLimit = -1 },
 		func(request *Request) { request.Timeout = -time.Second },
 		func(request *Request) { request.Timeout = 11 * time.Minute },
 		func(request *Request) { request.Cwd = filepath.Dir(temporary) },

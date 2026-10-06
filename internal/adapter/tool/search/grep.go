@@ -72,14 +72,14 @@ func checkGrep(_ appTool.Invocation, arguments grepArgs) error {
 	if arguments.Pattern == "" {
 		return errors.New("pattern must be a non-empty string")
 	}
-	if arguments.Path != nil && strings.TrimSpace(*arguments.Path) == "" {
+	if arguments.Path != nil && appTool.IsBlank(*arguments.Path) {
 		return errors.New("path must be a non-empty string when given")
 	}
 	if arguments.Include == nil {
 		return nil
 	}
 	include := *arguments.Include
-	if strings.TrimSpace(include) == "" {
+	if appTool.IsBlank(include) {
 		return errors.New("include must be a non-empty glob when given")
 	}
 	if strings.HasPrefix(include, "!") {
@@ -102,7 +102,7 @@ func checkGrep(_ appTool.Invocation, arguments grepArgs) error {
 // grep runs `rg --json --regexp=<pattern> [--glob=<include>]` and groups the
 // first matches by file in ripgrep's output order.
 func (provider *Provider) grep(ctx context.Context, invocation appTool.Invocation, arguments grepArgs) (appTool.Result, error) {
-	start, err := provider.locate("grep", arguments.Path, true)
+	start, err := provider.locate(ctx, invocation, "grep", arguments.Path, true)
 	if err != nil {
 		return appTool.Result{}, err
 	}
@@ -148,15 +148,24 @@ func parseMatches(stdout string) ([]grepMatch, error) {
 		if line == "" {
 			continue
 		}
-		if !json.Valid([]byte(line)) {
+		var parsed any
+		if err := json.Unmarshal([]byte(line), &parsed); err != nil {
 			return nil, malformed("a line is not JSON")
+		}
+		switch header := parsed.(type) {
+		case map[string]any:
+			if header["type"] != "match" {
+				continue
+			}
+		case []any:
+			// JavaScript arrays are objects without a match type.
+			continue
+		default:
+			return nil, malformed("a record is not an object")
 		}
 		var record grepRecord
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
 			return nil, malformed("a record is not an object")
-		}
-		if record.Type != "match" {
-			continue
 		}
 		data := record.Data
 		switch {

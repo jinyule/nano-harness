@@ -199,10 +199,10 @@ func TestRuntime_SpillsOversizedResultsThroughTheRegisteredStore(t *testing.T) {
 	if !strings.HasPrefix(results[0].Output, strings.Repeat("x", 100)) || !strings.HasSuffix(results[0].Output, ". Full formatted result stored at: /spill/s/big.txt. Use read.)") || estimateTokens(results[0].Output) > spillInlineTokens {
 		t.Fatalf("spilled = %q", results[0].Output[len(results[0].Output)-200:])
 	}
-	if results[1].Output != "tiny" || results[3].Output != large || !results[2].IsError || !strings.HasPrefix(results[2].Output, "Error: xxx") || len(results[2].Output) != len(large)+len("Error: ") {
+	if results[1].Output != "tiny" || results[3].Output != large || !results[2].IsError || !strings.HasPrefix(results[2].Output, "Error: xxx") || !strings.Contains(results[2].Output, "Full formatted result stored at: /spill/s/failed.txt") {
 		t.Fatalf("results = %d %q %d %d", len(results[0].Output), results[1].Output, len(results[2].Output), len(results[3].Output))
 	}
-	if len(store.saved) != 1 || store.saved[0] != (spilled{"s", "big.txt", large}) {
+	if len(store.saved) != 2 || store.saved[0] != (spilled{"s", "big.txt", large}) || store.saved[1] != (spilled{"s", "failed.txt", "Error: " + large}) {
 		t.Fatalf("saved = %d artifacts", len(store.saved))
 	}
 	// A call without a session or a failed save keeps the original text.
@@ -215,14 +215,14 @@ func TestRuntime_SpillsOversizedResultsThroughTheRegisteredStore(t *testing.T) {
 	}
 	// A locator too long for the notice to fit keeps the original as well.
 	store.commitErr, store.locator = nil, strings.Repeat("/", 4*spillInlineTokens)
-	if results := execute("s"); results[0].Output != large || len(store.saved) != 2 {
+	if results := execute("s"); results[0].Output != large || len(store.saved) != 4 {
 		t.Fatal("an unfittable notice replaced the result")
 	}
 	store.locator = ""
 	if err := spillScope.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if results := execute("s"); results[0].Output != large || len(store.saved) != 2 {
+	if results := execute("s"); results[0].Output != large || len(store.saved) != 4 {
 		t.Fatal("the store stayed in use after its scope closed")
 	}
 }

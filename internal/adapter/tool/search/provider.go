@@ -91,17 +91,17 @@ type location struct {
 	info     fs.FileInfo
 }
 
-// locate confines an optional search path to the workspace, or with
-// readOnly also to the root's read-only directory; the default is the
-// workspace root.
-func (provider *Provider) locate(tool string, path *string, readOnly bool) (location, error) {
+// locate confines an optional search path to the workspace, or with readOnly
+// also to its current spill partition and exact authorized historical files.
+// The default is the workspace root.
+func (provider *Provider) locate(ctx context.Context, invocation appTool.Invocation, tool string, path *string, readOnly bool) (location, error) {
 	requested := "."
 	if path != nil {
 		requested = *path
 	}
 	resolve := provider.root.Existing
 	if readOnly {
-		resolve = provider.root.Readable
+		resolve = func(path string) (string, string, error) { return provider.root.ReadableFrom(ctx, path, invocation) }
 	}
 	lexical, resolved, err := resolve(requested)
 	switch {

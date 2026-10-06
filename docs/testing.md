@@ -126,6 +126,10 @@ PTY 中的 fork 在首个 turn 内创建，没有已完成 turn 可继承；完�
 
 TUI 回归测试还覆盖 v2 粘贴、按键释放、secret 遮罩、小窗口布局（含计划面板在 18×8 到 80×24 窗口中的行数上限、溢出窗口和 transcript 保留行）、计划的初始 replay、实时替换与下一 turn 清除，以及 Scope 关闭正在运行的 terminal、取消并等待登录命令和拒绝迟到命令。PTY 在两种窗口尺寸下使用 bracketed paste 输入任务。TUI 回归测试证明流式输出与系统行不会串接、reasoning 不隐藏最终回答、中文长行可见、历史浏览保留位置，以及键盘输入和分页/鼠标滚动各自生效。断点调试另按[调试步骤](debugging.md)验证；直接 IDE 与 Remote 各自需要真实断点、调用栈和变量证据，协议 fixture 不等于远端模型 live 证据。
 
+`TestComposition_ReadsHistoricalSpillsAfterRootChange` 从真实配置与 composition 生成完整 grep 列表和约 60,000 字节的长正则错误，检查错误状态、预览及完整文件；显式 compaction 遮蔽定位符后关闭，以新 spill root 恢复，再经 `read`/`grep` 读回两类历史文件，并在真正的 `subagent_fork` 子会话重复读回。断言来自磁盘日志、文件字节与 fork 自有事件。workspace 安全矩阵覆盖精确授权、身份/布局/链接/权限拒绝和写入边界；Unicode、framing 与 search stderr 预算的永久回归测试在产品修复前稳定失败。
+
+`TestComposition_ECMAScriptBlankQueriesAndSearchArguments` 从真实设置与 composition 调用检索工具，以 loopback provider 的请求数和原文断言 BOM 空白不会触发计费请求、NEL 非空查询保留原文且精确去重；同时从磁盘工具结果验证 glob/grep 的空白拒绝及空格正则接受。
+
 ## 并发、取消与清理
 
 文件工具的 `TestWrite_CancellationDuringSyncDoesNotPublish`（创建、替换）与 `TestEdit_CancellationDuringSyncDoesNotPublish` 用真实临时文件和 Sync channel 屏障确定取消发生在发布前；断言取消原因、link/rename 未调用、目标字节与观察摘要不变、staging 无残留。`TestFileTools_PhysicalParentTraversalMatrix` 通过真实 tool runtime 和 ripgrep 覆盖 read、write、edit、glob/grep 的 path 与 read_image，比较实际文件、搜索结果、交给附件存储的源字节、返回的图片引用及物理路径观察。workspace 的相对/绝对路径和只读分区矩阵补充边界，approval 期间替换被遍历的目录与直接执行测试证明写入执行点不能绕过拒绝。offset 测试逐字比较范围错误与最大合法值的越界诊断。

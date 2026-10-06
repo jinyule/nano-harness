@@ -184,8 +184,9 @@ func (runtime *Runtime) Catalog(allow []string) (Catalog, error) {
 // prepared is one call after lookup and schema validation. A nil call
 // carries a terminal error result and is scheduled as a barrier.
 type prepared struct {
-	call   *call
-	result session.ToolResult
+	call       *call
+	keepInline bool
+	result     session.ToolResult
 }
 
 // ExecuteBatch validates every call against its schema and classifies it,
@@ -232,9 +233,10 @@ func (runtime *Runtime) prepare(candidate session.ToolCall) (result prepared) {
 	}
 	runtime.mu.RUnlock()
 	if registered == nil {
-		result.result.Output, result.result.IsError = finishText(fmt.Sprintf("Error: unknown tool %q", candidate.Name)), true
+		result.result.Output, result.result.IsError = fmt.Sprintf("Error: unknown tool %q", candidate.Name), true
 		return result
 	}
+	result.keepInline = registered.keepInline
 	validated, err := registered.prepare(candidate.Arguments)
 	if err != nil {
 		result.result.Output, result.result.IsError = errorText(err), true
@@ -245,15 +247,6 @@ func (runtime *Runtime) prepare(candidate session.ToolCall) (result prepared) {
 }
 
 func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candidate session.ToolCall, validated prepared) (result session.ToolResult) {
-	if validated.call == nil {
-		return validated.result
-	}
-	result.CallID = candidate.ID
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			result.Output, result.IsError = "Error: implementation panicked", true
-		}
-	}()
 	runtime.mu.RLock()
 	store := runtime.spill
 	runtime.mu.RUnlock()
@@ -261,6 +254,25 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 		SessionID: request.SessionID, Cwd: request.Cwd, Route: request.Route, Turn: request.Turn, Step: request.Step, CallID: candidate.ID,
 		Journal: request.Journal, Delegated: request.Delegated, spill: store,
 	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result.Output, result.IsError = "Error: implementation panicked", true
+		}
+		result.Output = finishText(result.Output)
+	}()
+	// This runs inside the panic boundary above, including store callbacks.
+	defer func() {
+		text := strings.ToValidUTF8(result.Output, "�")
+		// Errors and successful text share the budget; image results stay inline.
+		if !validated.keepInline && result.Image == nil {
+			text = retainInline(ctx, invocation, candidate.Name, text)
+		}
+		result.Output = text
+	}()
+	if validated.call == nil {
+		return validated.result
+	}
+	result.CallID = candidate.ID
 	if err := validated.call.check(invocation); err != nil {
 		result.Output, result.IsError = errorText(err), true
 		return result
@@ -285,18 +297,13 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 		result.Output, result.IsError = errorText(err), true
 		return result
 	}
-	text := strings.ToValidUTF8(output.Text, "�")
-	// The spill store holds text only; an image result stays inline whole.
-	if !validated.call.keepInline && output.Image == nil {
-		text = retainInline(ctx, invocation, candidate.Name, text)
-	}
-	result.Output = finishText(text)
+	result.Output = output.Text
 	result.Image = output.Image
 	return result
 }
 
 // errorText renders a failed call with the upstream "Error: " envelope.
-func errorText(err error) string { return finishText("Error: " + err.Error()) }
+func errorText(err error) string { return "Error: " + err.Error() }
 
 // finishText makes tool output durable: invalid UTF-8 is replaced and the
 // complete text, including the truncation marker, fits one tool result.

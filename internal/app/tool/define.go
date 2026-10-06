@@ -103,7 +103,7 @@ type Spec[A any] struct {
 	Description string
 	Parameters  Parameters
 	Guidance    Guidance
-	// KeepInline exempts successful results from the spill policy that
+	// KeepInline exempts this tool's results, including errors, from the policy that
 	// replaces oversized text with a preview and a locator. read sets it so
 	// reading a spilled artifact cannot spill again.
 	KeepInline bool
@@ -132,6 +132,7 @@ type Spec[A any] struct {
 type Tool struct {
 	definition session.ToolDefinition
 	guidance   Guidance
+	keepInline bool
 	prepare    func(json.RawMessage) (*call, error)
 	err        error
 }
@@ -139,7 +140,6 @@ type Tool struct {
 // call is one schema-valid invocation bound to its typed arguments.
 type call struct {
 	concurrent bool
-	keepInline bool
 	check      func(Invocation) error
 	reason     func() string
 	execute    func(context.Context, Invocation) (Result, error)
@@ -173,7 +173,6 @@ func Define[A any](spec Spec[A]) *Tool {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}
 		prepared := &call{
-			keepInline: spec.KeepInline,
 			check: func(invocation Invocation) error {
 				if spec.Check == nil {
 					return nil
@@ -195,7 +194,7 @@ func Define[A any](spec Spec[A]) *Tool {
 		}
 		return prepared, nil
 	}
-	return &Tool{definition: definition, guidance: spec.Guidance, prepare: prepare}
+	return &Tool{definition: definition, guidance: spec.Guidance, keepInline: spec.KeepInline, prepare: prepare}
 }
 
 // Definition returns the frozen model-visible schema.

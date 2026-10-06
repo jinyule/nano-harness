@@ -88,6 +88,12 @@ ripgrep 以 argv 直接运行，不经过 shell，也不进入 workspace sandbox
 - `glob`/`grep` 的搜索根必须在 workspace 内（上游不限制；`grep` 与 `read` 另可读取本 workspace 的 spill 分区，见 ADR-0008），并以规范化的 workspace 相对路径交给 ripgrep，所以输出不保留 `./` 之类的原始拼写，绝对路径参数也显示为相对路径。不传 `HOME`，用户的全局 git excludes 不生效；上游的 subprocess 环境保留 `HOME`。`grep` 拒绝把 FIFO 等特殊文件作为显式路径。结果顺序与上游一样取决于 ripgrep：`glob` 按修改时间排序，`grep` 的跨文件顺序不固定。
 - `bash` 默认超时 60 s、上限 10 min，与 Base 配置一致；stdout 与 stderr 各保留最后 64,000 字节，截断时给出 ADR-0008 的完整输出文件位置，没有文件时显示上游的 `(unavailable)`；只提供 `DSH_SHELL` 与 `DSH_SESSION_ID`，不暴露 harness home 或 profile。
 
+搜索参数空白判定采用共享纯函数 `internal/app/tool.IsBlank`：按 ECMAScript WhiteSpace 与 LineTerminator 集合判断 `trim()` 后是否为空，包含 U+FEFF、排除 U+0085；原参数不被修改。`glob` pattern/path 与 `grep` path/include 使用该判定，grep pattern 仍只拒绝空字符串，允许纯空格正则。web 查询复用同一函数，见 [ADR-0011](0011-provider-web-search-and-public-fetch.md)。
+
+`grep --json` 先解析 JSON 和识别记录类型，再解码 match 数据：null 与非对象标量拒绝；非 match 对象（含未知或非字符串 type）及 JavaScript 的数组 framing 跳过，不要求它们的数据形状。match 数据仍须满足已有路径、行号与内容契约，任何畸形 match 拒绝整个结果，不返回部分匹配。
+
+搜索 stderr 尾部预算为上游的 65,536 字节，显式通过 runner 的 `Request.StderrLimit` 设置；零值仍为 64,000 字节，bash 与其他默认调用方的预算保持不变。取消保留本仓立即 SIGKILL 整个进程组并等待回收的行为：上游先 SIGTERM，再给 3 s 宽限期，最后 SIGKILL；本仓的只读搜索没有需提交的子进程状态，取消与关闭优先尽快达到静止，避免等待宽限期及模型/tool 继续产生输出。
+
 ### 证据与身份
 
 `cmd/nano-harness/testdata/tool-catalog.json` 冻结真实 composition 的全部工具定义，测试从 transcript 的 `request/header` 和 loopback provider 收到的请求比较；`testdata/upstream-base-tools.json` 记录上述 Base 推导和上游来源，测试要求同名工具逐字节一致。两个文件都由人工审查维护，CI 只比较，测试不读取 submodule。

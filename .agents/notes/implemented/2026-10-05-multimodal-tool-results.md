@@ -15,10 +15,12 @@
 
 长期决定见 [ADR-0015](../../../docs/decisions/0015-multimodal-tool-results.md)，当前事实归[架构](../../../docs/architecture.md#图片输入)、[安全](../../../docs/security.md#图片)和[测试](../../../docs/testing.md#agent-与工具证据)文档。本次实施：
 
+WP11 的[附件存储 Note](2026-10-06-content-addressed-image-attachments.md) 与 [ADR-0017](../../../docs/decisions/0017-content-addressed-image-attachments.md) 取代下面的内联图片、`media/image` provider、provider 图片预算投影与容量检查；此处保留 WP9 的能力建立证据。当前 `read_image` 经 `ImageStore.SaveImage` 先提交附件，再返回引用，预算投影与读取由 `app/llm.Call.Stream` 执行。
+
 - `internal/core/session`：`ToolResult.Image`（JSON `image`，可省略）复用 user 图片的校验，错误结果不能带图；`Surface`、`cloneSurface`、`CloneEvent` 深拷贝结果图片。新增 `image.go`：源图上限 `MaxImageSourceBytes`/`MaxImageSourcePixels` 与拒绝分类 `ErrImageFormat`、`ErrImagePixels`、`ErrImageBytes`，让 `images` 插件与另一个 adapter 子树中的 `read_image` 共享词汇而不横向依赖。
 - `internal/adapter/media/image`：注册 GIF（第一帧）与 `x/image/webp` 解码器，四种格式都接受；新增 `NormalizeBytes(ctx, name, data) (session.Image, image.Point, error)` 返回源尺寸；透明像素合成到白色（此前 JPEG 编码会把透明变成黑色）；拒绝按上述分类包装。`/attach` 共用同一路径，因此也接受 WebP/GIF。
 - `internal/app/tool`：`Result.Image`；`Route{Provider, Model, ImageInput}` 进入 `BatchRequest` 与 `Invocation`；带图片的结果跳过 spill。`internal/app/agent` 用本 step 冻结的 route 和 `call.Info().Vision` 填入 route。`app/llm` 的请求克隆与 `app/compaction` 的估算（每张 1024 token）覆盖结果图片。
-- `internal/adapter/tool/file`：`read_image` 与上游逐字节一致，构造函数增加消费方接口 `ImageNormalizer`（不能为 nil）。`Check` 依次拒绝空路径、非图片扩展名（Node `extname` 语义）、缺失 route 和未声明图片输入的模型；执行时经 `Root.Readable`、20 MiB 上限、签名与扩展名一致性检查后规范化，成功时记录观察并返回上游信封（缩放倍数按 JS `toFixed(2)`）。并发安全，无 approval。
+- `internal/adapter/tool/file`：`read_image` 与上游逐字节一致，构造函数消费非 nil 的 `ImageStore`。`Check` 依次拒绝空路径、非图片扩展名（Node `extname` 语义）、缺失 route 和未声明图片输入的模型；执行时经 `Root.ReadableFrom`、20 MiB 上限、签名与扩展名一致性检查后保存规范化附件，成功时记录观察并返回上游信封与附件引用（缩放倍数按 JS `toFixed(2)`）。历史定位符权限的补充证据见[对齐 Note](2026-10-06-search-spill-query-parity.md)。并发安全，无 approval。
 - `internal/adapter/model/provider`：Responses/Codex 用 `function_call_output` 数组（`input_text` + `input_image`，`detail: auto`），Anthropic 用 `tool_result` 内的 text+image，Chat Completions 在连续结果之后追加 `Attached image(s) from tool result:` user 消息；空文本用 `(see attached image)`。vision 门禁扩展到结果图片。`fitImages` 在发送前按 20 张、base64 10 MiB 从最新向前保留，更早的图片换成上游 offload 占位文本，替代上游的失败后重试与 `image/offload` 记录。
 - TUI：`result>` 行追加 `[image <name> <W>x<H> sha256:<12 位>]`。
 - `cmd`：`fs-tools` 注入 `images`，composition token 改为 `fs-tools-v3`；两份工具 fixture 加入 `read_image`，上游定义数量断言加一（rebase 到 WP10 后为 24）。`scripts/tui-e2e.py` 增加一次 `read_image` 调用并检查请求中的图片；mutation 新增 `read-image-route-gate` 与 `provider-result-image-vision`。

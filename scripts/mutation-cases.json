@@ -243,5 +243,54 @@
     "before": "conversions: make(chan struct{}, maxConversions),",
     "after": "conversions: make(chan struct{}, maxConversions+1),",
     "test": "^TestStore_LimitsConcurrentConversions$"
+  },
+  {
+    "id": "ecmascript-bom-blank",
+    "file": "internal/app/tool/blank.go",
+    "before": "'\\u00a0', '\\ufeff', '\\n'",
+    "after": "'\\u00a0', '\\n'",
+    "test": "^TestIsBlank_ECMAScriptWhiteSpaceAndLineTerminators$"
+  },
+  {
+    "id": "search-stderr-budget",
+    "file": "internal/adapter/tool/search/ripgrep.go",
+    "before": "stderrMaxBytes = 65_536",
+    "after": "stderrMaxBytes = 64_000",
+    "test": "^TestSearch_Retains65536ByteDiagnosticTail$"
+  },
+  {
+    "id": "error-result-spill",
+    "file": "internal/app/tool/runtime.go",
+    "before": "if !validated.keepInline && result.Image == nil {",
+    "after": "if !result.IsError && !validated.keepInline && result.Image == nil {",
+    "test": "^TestRuntime_SpillsErrorsBeforeDurableTruncation$"
+  },
+  {
+    "id": "historical-spill-exact-locator",
+    "file": "internal/adapter/tool/workspace/history.go",
+    "before": "event.Record.Type == session.RecordToolResult && mentionsSpill(event.Record.Result.Output, path)",
+    "after": "event.Record.Type == session.RecordToolResult",
+    "test": "^TestRoot_HistoricalSpillAllowDenyMatrix$"
+  },
+  {
+    "id": "historical-spill-workspace-partition",
+    "file": "internal/adapter/tool/workspace/history.go",
+    "before": "filepath.Base(filepath.Dir(dir)) == fmt.Sprintf(\"workspace-%x\", sum[:8])",
+    "after": "(filepath.Base(filepath.Dir(dir)) == fmt.Sprintf(\"workspace-%x\", sum[:8]) || strings.HasPrefix(filepath.Base(filepath.Dir(dir)), \"workspace-\"))",
+    "test": "^TestRoot_HistoricalSpillAllowDenyMatrix$"
+  },
+  {
+    "id": "historical-spill-link-denial",
+    "file": "internal/adapter/tool/workspace/history.go",
+    "before": "info, err := lstatPath(current)",
+    "after": "info, err := statPath(current)",
+    "test": "^TestRoot_HistoricalSpillRejectsUnsafeFilesAndDirectories$"
+  },
+  {
+    "id": "grep-null-record",
+    "file": "internal/adapter/tool/search/grep.go",
+    "before": "default:\n\t\t\treturn nil, malformed(\"a record is not an object\")",
+    "after": "default:\n\t\t\tcontinue",
+    "test": "^TestGrep_ParsesFramingBeforeMatchData$"
   }
 ]

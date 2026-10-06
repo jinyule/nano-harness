@@ -33,10 +33,10 @@ func (provider *Provider) globTool() *appTool.Tool {
 		},
 		Guidance: appTool.StaticGuidance(appTool.OrderGlob, "Use the glob tool — not shell find — to discover files by path pattern."),
 		Check: func(_ appTool.Invocation, arguments globArgs) error {
-			if strings.TrimSpace(arguments.Pattern) == "" {
+			if appTool.IsBlank(arguments.Pattern) {
 				return errors.New("pattern must be a non-empty string")
 			}
-			if arguments.Path != nil && strings.TrimSpace(*arguments.Path) == "" {
+			if arguments.Path != nil && appTool.IsBlank(*arguments.Path) {
 				return errors.New("path must be a non-empty string when given")
 			}
 			return nil
@@ -49,7 +49,7 @@ func (provider *Provider) globTool() *appTool.Tool {
 // glob runs `rg --files --sort=modified --no-ignore --hidden` with upstream's
 // VCS exclusions, so paths arrive oldest modification first.
 func (provider *Provider) glob(ctx context.Context, invocation appTool.Invocation, arguments globArgs) (appTool.Result, error) {
-	start, err := provider.locate("glob", arguments.Path, false)
+	start, err := provider.locate(ctx, invocation, "glob", arguments.Path, false)
 	if err != nil {
 		return appTool.Result{}, err
 	}

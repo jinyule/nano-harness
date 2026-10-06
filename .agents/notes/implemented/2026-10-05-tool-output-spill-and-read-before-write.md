@@ -13,15 +13,15 @@
 
 ## Decision
 
-边界校验与取消语义的补充实施见[修复 Note](2026-10-06-spill-question-and-call-validation.md)；本 Note 保留能力建立、生命周期和原始验证证据。
+错误 spill 与历史定位符授权的补充证据见[搜索与 spill 对齐 Note](2026-10-06-search-spill-query-parity.md)；边界校验与取消语义的补充实施见[修复 Note](2026-10-06-spill-question-and-call-validation.md)；本 Note 保留能力建立、生命周期和原始验证证据。
 
 文件发布前取消与 workspace/spill 物理父目录解析由[文件修复 Note](2026-10-06-file-upstream-alignment-fixes.md)补充，观察与 spill 生命周期契约保留。
 
 长期决定见 [ADR-0008](../../../docs/decisions/0008-tool-output-spill-and-observation-policy.md)，当前事实归[架构](../../../docs/architecture.md#工具approval-与调度)、[安全](../../../docs/security.md#spill-文件)和[测试](../../../docs/testing.md#agent-与工具证据)文档；[ADR-0007](../../../docs/decisions/0007-upstream-base-tool-definitions.md) 的行为差异和 guidance 段落已同步。本次实施：
 
-- `internal/app/tool/spill.go`：消费方接口 `SpillStore`（`Create(ctx, sessionID, name) (SpillFile, error)`）、`SpillFile`（`io.Writer` + `Commit() (SpillRef, error)` + `Discard() error`）、`SpillRef{Locator, Bytes, Hint}`、`ErrSpillUnavailable`。`Runtime.UseSpill(store, scope)` 在调用方 Scope 内发布唯一的 store；`Invocation.CreateSpill`/`SaveText` 由 runtime 绑定调用方会话。runtime 对成功结果先修复 UTF-8，再按上游 spill-policy 算法保存超预算文本并替换为首尾预览，最后截断到 256 KiB。`Spec.KeepInline` 让 `read` 豁免；新增 `OrderWrite`/`OrderEdit`。
+- `internal/app/tool/spill.go`：消费方接口 `SpillStore`（`Create(ctx, sessionID, name) (SpillFile, error)`）、`SpillFile`（`io.Writer` + `Commit() (SpillRef, error)` + `Discard() error`）、`SpillRef{Locator, Bytes, Hint}`、`ErrSpillUnavailable`。`Runtime.UseSpill(store, scope)` 在调用方 Scope 内发布唯一的 store；`Invocation.CreateSpill`/`SaveText` 由 runtime 绑定调用方会话。runtime 对纯文本结果（含错误）先修复 UTF-8，再按上游 spill-policy 算法保存超预算文本并替换为首尾预览，最后截断到 256 KiB。`Spec.KeepInline` 让 `read` 豁免；新增 `OrderWrite`/`OrderEdit`。
 - `internal/adapter/spill`：`spill-local` 插件。`Start` 校验私有根目录和 workspace 分区，登记“拒绝新文件并等待已打开文件”的 cleanup，启动一次可取消的过期清理 goroutine 并登记 cancel+join，最后 `UseSpill`。任何一步失败都由已登记的 cleanup 回滚。
-- `workspace.Root.WithReadOnly`/`Readable`：只读放行 spill 分区；`cmd` 只把放行后的 root 交给 `fs-tools` 与 `search-tools`，`shell-tools` 不变。`grep` 用 `Readable`，`glob` 仍用 `Existing`。
+- `workspace.Root.WithReadOnly`/`Readable`：只读放行当前 spill 分区；`cmd` 只把放行后的 root 交给 `fs-tools` 与 `search-tools`，`shell-tools` 不变。读取工具与 `grep` 经 `ReadableFrom` 增加精确历史定位符授权，见上述对齐 Note；`glob` 仍用 `Existing`。
 - `fs-tools`：按会话保存观察（内容 SHA-256 或确认不存在），Scope 清理时清空；`write`/`edit` 在执行点、插件互斥锁下校验，新文件通过硬链接独占发布；guidance 逐字采用上游文案。编辑的换行探测样本改为 4096 个 UTF-16 单元，与上游的字符串切片一致。
 - `search-tools`：`glob`/`grep` 超出内联上限时保存完整结果，尾注使用上游文案。
 - `bash`（rebase 到 WP3 后接入）：`shell/spill.go` 的 `streamSpill` 按上游输出收集器在每个流超过 64,000 字节时创建完整输出文件，job 通过新增的 `appJob.Output.Advertise` 声明或撤回，`Read.Spills` 与 `Read.Delta` 列出文件；前台、后台、超时转后台和 job 上限回退四条路径都写入同一 API，`SpillFile` 增加 `Locator()`。

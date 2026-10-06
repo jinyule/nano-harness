@@ -19,7 +19,7 @@ var (
 	ErrInvalidRoot = errors.New("invalid workspace root")
 	// ErrOutsideRoot identifies a path that resolves outside the workspace.
 	ErrOutsideRoot = errors.New("path is outside the workspace")
-	// ErrSymlink identifies a mutation target that crosses a symbolic link.
+	// ErrSymlink identifies a path that crosses a forbidden symbolic link.
 	ErrSymlink = errors.New("path crosses a symbolic link")
 
 	resolveAbs   = filepath.Abs

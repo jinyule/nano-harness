@@ -91,7 +91,7 @@ func positiveInteger(value float64) bool { return value >= 1 && value == math.Tr
 // read streams one window and records what the session observed: absence
 // for a missing path, or the digest of every byte read on success.
 func (provider *Provider) read(ctx context.Context, invocation appTool.Invocation, arguments readArgs) (appTool.Result, error) {
-	display, path, err := provider.root.Readable(arguments.FilePath)
+	display, path, err := provider.root.ReadableFrom(ctx, arguments.FilePath, invocation)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		provider.observed.record(invocation.SessionID, display, observation{})

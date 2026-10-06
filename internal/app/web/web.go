@@ -11,6 +11,7 @@ import (
 
 	"github.com/jinyule/nano-harness/internal/app/llm"
 	"github.com/jinyule/nano-harness/internal/app/settings"
+	"github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 )
 
@@ -230,7 +231,7 @@ func parseQueries(queries []string) ([]string, error) {
 	accepted := make([]string, 0, len(queries))
 	seen := map[string]struct{}{}
 	for _, query := range queries {
-		if strings.TrimSpace(query) == "" {
+		if tool.IsBlank(query) {
 			return nil, errors.New("each query must be a non-empty string")
 		}
 		if _, ok := seen[query]; !ok {

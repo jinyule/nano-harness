@@ -80,7 +80,7 @@ func checkReadImage(invocation appTool.Invocation, arguments readImageArgs) erro
 // readImage reads one workspace image within the source byte limit,
 // normalizes it, and records the observation like read does.
 func (provider *Provider) readImage(ctx context.Context, invocation appTool.Invocation, arguments readImageArgs) (appTool.Result, error) {
-	display, path, err := provider.root.Readable(arguments.FilePath)
+	display, path, err := provider.root.ReadableFrom(ctx, arguments.FilePath, invocation)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		provider.observed.record(invocation.SessionID, display, observation{})

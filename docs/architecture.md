@@ -159,8 +159,8 @@ Submit user message
 - 批次开始前，runtime 按 schema 校验并解码每个调用，再用 `Concurrent(A)` 分类。缺少必填、类型不符、null、非有限数、`-0`、重复键和未声明成员（包括根对象）都成为 `invalid arguments: ...` 结果，并按上游遍历顺序列出全部违规。上游根对象对未知成员开放，本仓更严格，模型可见 schema 不变。
 - `Concurrent(A)` 为 true 的相邻调用并行；其余调用、未知工具和无效参数形成独占 barrier。结果顺序始终与原始 call 顺序一致。
 - 每个调用轮到执行时依次运行 `Check(Invocation, A)`、`Approval(A)` 和 `Execute`。`Check` 因此能观察同一批次前序调用的效果和会话范围的状态，并在提问前拒绝语义错误、不安全路径或未读的写入目标。`Check` 收到的 `Invocation.Approved` 恒为 false，且不得产生副作用：之后可能不执行，approval 期间状态也可能变化，所以 `Execute` 必须重新检查它依赖的条件；`Approval` 返回非空原因时请求一次性 approval，原因截断到 1 KiB。执行函数仍须在执行点确认 `Invocation.Approved`。
-- `tool.Result` 由文本和可选的一张规范化图片组成。runtime 统一替换非法 UTF-8，对只含文本的成功结果应用 spill 策略，再把完整文本截断到 256 KiB；图片原样进入 `session.ToolResult`。
-- spill 策略与上游 Base 相同：估算超过 12,500 token（`ceil(UTF-16 单元/4)+4`）的结果保存到 spill store，模型看到首尾预览和 `(Omitted N bytes. Full formatted result stored at: <locator>. <hint>)`。错误结果、携带图片的结果和声明 `KeepInline` 的工具（`read`）不进入策略；没有 store、没有会话或保存失败时保留原结果。
+- `tool.Result` 由文本和可选的一张规范化图片引用组成。runtime 统一替换非法 UTF-8，对只含文本的结果（含错误）应用 spill 策略，再把完整文本截断到 256 KiB；附件已提交的图片引用原样进入 `session.ToolResult`。
+- spill 策略与上游 Base 相同：估算超过 12,500 token（`ceil(UTF-16 单元/4)+4`）的结果保存到 spill store，模型看到首尾预览和 `(Omitted N bytes. Full formatted result stored at: <locator>. <hint>)`。携带图片的结果和声明 `KeepInline` 的工具（`read`）不进入策略；错误预览保留 `is_error`；没有 store、没有会话或保存失败时保留原结果。
 - `Runtime.Catalog(allow)` 一次冻结按名称排序的 schema 和可见工具贡献的 guidance。guidance 按上游 section order 排序，engine 把它追加在 system prompt 的工具列表之后，与 schema 一起写入 `request/header`。
 - `Invocation` 携带 session、cwd、delegation、approval 结果、本 step 的 route（provider、model 与模型是否声明图片输入），以及当前 tool/call 的 call ID、turn、step 和调用方 durable journal。需要记录会话事实的工具在 tool/result 之前向该 journal 追加；没有 journal 的调用方必须失败关闭。
 - `Runtime.UseSpill` 在插件 Scope 内发布唯一的 `SpillStore`。`Invocation.CreateSpill`/`SaveText` 按调用方会话打开或保存 spill 文件，没有 store 或会话时返回 `ErrSpillUnavailable`，工具据此使用上游的降级文案。
@@ -182,13 +182,13 @@ Submit user message
 | `internal/adapter/tool/skill` | `skill-tools` | `skill`，以及 step 前的 skill 目录与 `/name` 注入 |
 | `internal/adapter/tool/goal` | `goal-tools` | `get_goal`、`create_goal`、`update_goal` |
 
-`internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。`cmd` 用 `WithReadOnly` 把 spill 分区只读地交给 `read`、`read_image` 与 `grep`；`shell-tools` 收到不含该分区的 root。
+`internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。`cmd` 用 `WithReadOnly` 把当前 spill 分区只读地交给 `read`、`read_image` 与 `grep`。这些工具在执行点用 `ReadableFrom` 从调用方已提交的原始日志授权精确的历史 spill 文件，恢复时更换写入 root 不会撤销日志中的定位符；fork 继承与 compaction 遮蔽的结果也可读回。`shell-tools` 收到不含该分区的 root。
 
 路径 resolver 逐段确定物理身份，父目录遍历不先做词法清理；含 `..` 的成功路径返回物理显示路径，避免搜索 consumer 再次清理后改变目标。文件发布接受调用 context，在 staging 关闭后、link/rename 前检查取消，发布成功后才更新读取观察。路径边界与提交点由[安全规则](security.md#workspace-文件边界)定义，采纳与差异由 ADR-0007 记录。
 
 `internal/adapter/spill` 是 `spill-local` 插件：在 `--spill-root` 下按 workspace 分区、按会话分组保存 owner-only 文件，启动时清理 30 天前的文件，关闭时等待已打开的文件。`fs-tools` 持有按会话记录的读取观察（`read` 与 `read_image` 都会记录），`write` 只覆盖读过且内容未变的文件，`edit` 必须先读；观察状态只在内存中。存储布局、读回边界、观察语义和降级见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md)。
 
-`search-tools` 与 `shell-tools` 共用 `cmd` 构造的同一个 platform process runner。search provider 在构造时从 PATH 解析 `rg`，找不到时组装失败；`Start` 运行 `rg --version`，低于 15.0.0 时启动失败，不注册降级工具。`glob` 与 `grep` 按上游参数调用 ripgrep，并解析它的路径列表或 `--json` 输出；进程边界见[安全工程规则](security.md#approvalshell-与进程)，版本前提见[开发规范](development.md#ripgrep)。
+`search-tools` 与 `shell-tools` 共用 `cmd` 构造的同一个 platform process runner。search provider 在构造时从 PATH 解析 `rg`，找不到时组装失败；`Start` 运行 `rg --version`，低于 15.0.0 时启动失败，不注册降级工具。`glob` 与 `grep` 按上游参数调用 ripgrep，并解析它的路径列表或 `--json` 输出；进程边界见[安全工程规则](security.md#approvalshell-与进程)，版本前提见[开发规范](development.md#ripgrep)。search 请求显式选择 65,536 字节 stderr 尾部，runner 默认及 bash 仍为 64,000 字节。`glob` 的 pattern/path、`grep` 的 path/include 与 web 查询共享 `app/tool.IsBlank` 的 ECMAScript 空白判定；grep pattern 只拒绝空字符串。
 
 `read`、`read_image`、`glob`、`grep`、`web_search`、`web_fetch`、`skill`、`subagent`、`subagent_fork` 可并行；`write`、`edit`、`bash` 和 `job_*` 是 exclusive；`write`、`edit`、`bash` 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。`bash` 的 `sandbox_permissions: danger-full-access` 是唯一离开 workspace sandbox 的方式，规则见[安全工程规则](security.md#approvalshell-与进程)。
 
@@ -211,7 +211,7 @@ app/web.Service ──Search──► llm.Runtime.PrepareCall(web.search route) 
 
 - `app/web.Service` 是插件：启动后接受操作，cleanup 先拒绝新操作，再取消全部在途检索和抓取，并等待它们的 provider 调用返回、操作注销。调用方在自己的 goroutine 上收到结果，这可能晚于 cleanup 返回。
 - 检索 route 由 settings 的 `web.search.provider/model` 显式选择，默认未配置。工具始终注册，因此热切换设置不改变模型可见 schema；未配置时每次调用返回 `WEB_PROVIDER_UNAVAILABLE`。
-- 一次 `web_search` 接受 1–4 个非空查询，精确重复项按首次出现折叠；只准备一次账户，多个查询并发执行，首个失败取消其余并在全部结束后返回。每个查询的来源先截到 8 条，再按 rank 轮转合并、按 URL 去重并截到 8 条；有回答文本时以 `### <查询>` 标注。整个调用限时 60 s。
+- 一次 `web_search` 接受 1–4 个按 ECMAScript `trim()` 集合判定非空的查询，保留原文，精确重复项按首次出现折叠；只准备一次账户，多个查询并发执行，首个失败取消其余并在全部结束后返回。每个查询的来源先截到 8 条，再按 rank 轮转合并、按 URL 去重并截到 8 条；有回答文本时以 `### <查询>` 标注。整个调用限时 60 s。
 - OpenAI Responses 与 Codex Responses 发送 `{"type":"web_search"}` 工具并读取 SSE 输出项，必须出现 `web_search_call`；来源取自 `url_citation`。Anthropic Messages 以非流式请求发送 `web_search_20250305`（`max_uses: 5`，`max_tokens: 4096`），必须出现 `web_search_tool_result`，片段取自 citation 的 `cited_text`，工具错误码映射为限流、服务端或非法请求。OpenRouter Chat Completions 以非流式请求发送 `openrouter:web_search` server tool（`max_results: 8`），来源取自 `url_citation`。每个响应最多保留 64 个来源。
 - `adapter/web/fetch` 不持有连接池：每一跳确定目的地址（IP 字面量或全部解析答案），对字面量与答案执行相同的公网与 NAT64 校验，并为该跳建立只连向已校验 IP 的 transport，结束即关闭。最多跟随 5 次同源重定向，每跳重新校验；跨源重定向返回 `WEB_REDIRECT_BLOCKED`，由模型另发调用。整个抓取限时 30 s，原始字节最多 5,000,000（声明超限直接失败，流式超限截断），解码文本最多 100,000 个字符。
 - 只接受 `text/*`、HTML/XHTML、JSON 与 XML（含 `+json`/`+xml`）；声明的 charset 按 WHATWG 标签解码，缺省 UTF-8，未知 charset 失败。非 2xx 状态是结果而非错误。

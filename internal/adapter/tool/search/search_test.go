@@ -471,7 +471,7 @@ func TestRun_ClassifiesRipgrepOutcomes(t *testing.T) {
 		{"truncated stderr", platformProcess.Result{ExitCode: 2, Stderr: stderr("tail", true)}, nil, "Error: grep search failed (exit 2): tail [stderr truncated]"},
 		{"overflow", platformProcess.Result{Stdout: platformProcess.Output{Text: "x", Truncated: true}}, nil, "Error: grep produced more raw output than the 20000000-byte cap; narrow pattern, path, or include and retry"},
 		{"not json", platformProcess.Result{Stdout: platformProcess.Output{Text: "plain\n"}}, nil, "Error: grep received malformed ripgrep --json output (a line is not JSON)"},
-		{"not object", platformProcess.Result{Stdout: platformProcess.Output{Text: "[1]\n"}}, nil, "(a record is not an object)"},
+		{"not object", platformProcess.Result{Stdout: platformProcess.Output{Text: "true\n"}}, nil, "(a record is not an object)"},
 		{"no data", platformProcess.Result{Stdout: platformProcess.Output{Text: `{"type":"match"}`}}, nil, "(a match record has no data)"},
 		{"no path", platformProcess.Result{Stdout: platformProcess.Output{Text: `{"type":"match","data":{"path":{"bytes":"eA=="}}}`}}, nil, "(a match record has no path text)"},
 		{"no line", platformProcess.Result{Stdout: platformProcess.Output{Text: `{"type":"match","data":{"path":{"text":"a"}}}`}}, nil, "(a match record has no line number)"},

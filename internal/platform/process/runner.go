@@ -70,6 +70,9 @@ type Request struct {
 	// StdoutLimit is the retained stdout tail in bytes; zero selects the
 	// default. Output.Truncated reports that more was written.
 	StdoutLimit int
+	// StderrLimit is the retained stderr tail in bytes; zero selects the
+	// default independently of StdoutLimit.
+	StderrLimit int
 	// Stdout and Stderr, when set, observe each stream as it is produced, in
 	// addition to the retained tails. Each is written from one goroutine,
 	// concurrently with the other, and must not fail.
@@ -119,7 +122,7 @@ func New() *Runner {
 // group is killed and reaped. Exit status, signals, and timeouts are facts
 // in Result; errors mean the process could not run or the caller canceled.
 func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) {
-	if request.Path == "" || request.Root == "" || request.Cwd == "" || request.TempDir == "" && request.Mode != ModeHost || request.Mode != ModeWorkspace && request.Mode != ModeHost || request.Timeout < 0 || request.Timeout > 10*time.Minute || request.StdoutLimit < 0 {
+	if request.Path == "" || request.Root == "" || request.Cwd == "" || request.TempDir == "" && request.Mode != ModeHost || request.Mode != ModeWorkspace && request.Mode != ModeHost || request.Timeout < 0 || request.Timeout > 10*time.Minute || request.StdoutLimit < 0 || request.StderrLimit < 0 {
 		return Result{}, ErrInvalidConfig
 	}
 	paths := make([]string, 3)
@@ -157,7 +160,7 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 		return nil
 	}
 	command.WaitDelay = pipeDrainDelay
-	stdout, stderr := tailBuffer{limit: request.StdoutLimit}, tailBuffer{}
+	stdout, stderr := tailBuffer{limit: request.StdoutLimit}, tailBuffer{limit: request.StderrLimit}
 	command.Stdout, command.Stderr = observed(&stdout, request.Stdout), observed(&stderr, request.Stderr)
 	err = command.Run()
 	// Descendants left in the group are stopped so the call reaches quiescence.
