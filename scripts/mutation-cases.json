@@ -320,5 +320,26 @@
     "before": "default:\n\t\t\treturn nil, malformed(\"a record is not an object\")",
     "after": "default:\n\t\t\tcontinue",
     "test": "^TestGrep_ParsesFramingBeforeMatchData$"
+  },
+  {
+    "id": "settings-lock-canceled-entry",
+    "file": "internal/adapter/settings/file/file.go",
+    "before": "for {\n\t\tif err := ctx.Err(); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tlock, err := settingsOpenFile",
+    "after": "for {\n\t\tlock, err := settingsOpenFile",
+    "test": "^TestProvider_PersistCanceledBeforeLock$"
+  },
+  {
+    "id": "settings-lock-acquired-cancellation",
+    "file": "internal/adapter/settings/file/file.go",
+    "before": "defer func() { _ = settingsRemove(path) }()\n\t\t\tif err := ctx.Err(); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\treturn operation()",
+    "after": "defer func() { _ = settingsRemove(path) }()\n\t\t\treturn operation()",
+    "test": "^TestProvider_PersistCanceledDuringLockAcquisition$"
+  },
+  {
+    "id": "settings-lock-cancellation-priority",
+    "file": "internal/adapter/settings/file/file.go",
+    "before": "case <-deadline.C:\n\t\t\tif err := ctx.Err(); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\treturn errors.New(\"settings writer lock timed out\")",
+    "after": "case <-deadline.C:\n\t\t\treturn errors.New(\"settings writer lock timed out\")",
+    "test": "^TestWithLock_CancellationWinsExpiredWait$"
   }
 ]

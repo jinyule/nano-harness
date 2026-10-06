@@ -15,6 +15,8 @@
 
 在 `internal/app` 新增 settings、LLM、approval、tool、prompt、retry、compaction、agent 和 subagent 用例。LLM runtime 在 provider 准备后解析账户，并在 owner-only credential store 的跨进程事务中刷新即将过期的 OAuth grant。OpenAI adapter 实现 Responses、ChatGPT Codex Responses、browser/device OAuth 和 Codex import；Anthropic 实现 Messages/browser OAuth；OpenRouter 实现 Chat Completions/browser OAuth。provider 拥有 catalog、auth、refresh、wire 与 stable error mapping，agent 只消费统一 request/stream/completion。
 
+settings writer lock 的取消仲裁与回归证据由 [settings 锁调查记录](2026-10-06-settings-lock-flake.md) 补充；本 Note 保留组件组合与 provider-neutral 接缝的决定。
+
 Agent Registry 为每个顺序 worker 和 journal 创建动态 Scope。Engine 在 provider call 前持久化 turn/user/step/header，按序提交 stream、assistant 与全部 call，再运行工具并提交唯一 result；只重试未提交任何 stream 的可恢复失败，context pressure 通过 append-only summary compaction 处理。Followup、steer、interrupt、idle 与 shutdown 有独立语义。Subagent 是同进程 child agent，支持 one-shot/continuable、spawn/fork/followup/interrupt/report/list，持久化 parent/depth/persona/tool allowlist，并永不 elevation。子代理工具、生命周期与 fork 方式现由[后台可继续子代理 Note](2026-10-05-background-continuable-subagents.md) 记录。
 
 workspace provider 提供 `read_file`、`list_files`、`search_files`、`apply_patch`、`run_shell`。只读调用按相邻 group 并行，patch/shell 是 exclusive barrier。所有写入和 shell 在执行点 fail-closed approval；普通 shell 使用 `sandbox-exec`/`bwrap`，host 需要一次性授权且 delegated request 无条件拒绝。进程使用 secret-free allowlist 环境、deadline、进程组回收和有界输出。

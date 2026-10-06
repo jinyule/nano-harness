@@ -98,6 +98,8 @@ spill 与先读后写另有专门证据：预览算法用上游 retention 的 Py
 - 附件存储：`attachments` 插件用真实临时目录覆盖启动的私有目录布局与权限、宽权限根/链接 `v1`/文件根的拒绝、链接根的接受、启动与关闭（cleanup 等待进行中的操作、过期 context）；保存后对象的摘要、长度与 `0400`/`0700` 权限，相同内容去重，八个并发写入者收敛为一个对象且不留暂存文件；读取对长度、摘要、类型、宽高、无法解码、缺失对象、缺失前缀、链接对象和前缀为文件的拒绝矩阵，以及 I/O 错误不被当作缺失或损坏；发布各步骤失败都不留下部分对象，预置的不一致对象被拒绝；`PrepareFile` 不写入任何对象，`Commit` 拒绝不匹配引用的字节；透明图片经 `SaveImage` 与 `PrepareFile` 两条路径、在不缩放（16×2）和缩放（4096×2 缩为 2048×1）时都输出白色像素；三个并发规范化中只有两个同时进入编码，持有全部名额时等待者随取消返回；observer 只在缺失或损坏时被调用并随 scope 撤销。`app/llm` 证明预算投影按 `bytes` 计算、每个 ID 只读一次、缺失与损坏换成占位文本而其他读取错误使请求失败，且没有 vision 的模型不读取附件。TUI 证明附件在 `Submit`/`Steer` 之前写入、写入失败不提交消息、unavailable 提示每个图片只显示一次且通知不阻塞读取方。
 - 多模态工具结果：`session` 校验覆盖错误结果带图、digest 不符和 clone 隔离；runtime 证明图片结果绕过 spill、携带本 step route；`read_image` 经真实 tool runtime 与真实临时目录覆盖 route 门禁（无 route、文本模型，均不触达规范化）、扩展名与签名矩阵（含 dotfile、无扩展名、`foo.`）、不存在/目录/越界/超限/读取中增长、规范化拒绝的三类文案、观察记录后 `write` 可替换、信封与缩放倍数（`toFixed(2)` 的 1/8 平局）以及两个调用的并发重叠。provider 用 loopback server 比较三种协议的工具结果图片请求字节、文本模型在网络调用前拒绝，以及没有附上字节的引用被拒绝。
 
+settings 锁的取消测试使用 channel 固定取得锁期间的取消；`testing/synctest` 让被屏障阻塞的 open 与虚拟锁期限交错，并在释放前取消，验证取消与超时同时就绪时仍返回 context 错误。另覆盖纯等待取消和原子写入开始后的完整提交；真实 `cmd` composition 从磁盘文件、snapshot revision 和残留 lock/temp 文件验证取消更新没有提交。负载重复使用 race 测试二进制的 `-test.count`、`-test.cpu=1,4,8` 与其他包的并发 race 测试，具体前后样本见 [settings 锁调查记录](../.agents/notes/implemented/2026-10-06-settings-lock-flake.md)。
+
 ## TUI 与真实 cmd
 
 TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event forwarding/backpressure、所有 durable presentation event、text/reasoning stream、图片附加、普通/approval/auth 输入模式、全部命令、UI 消失与 cancellation。

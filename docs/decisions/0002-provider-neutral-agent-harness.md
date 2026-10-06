@@ -26,6 +26,8 @@
 
 内建 catalog 只提供一组可用默认模型。owner-only hot settings 可以完整替换每个 provider 的 catalog、HTTPS/loopback endpoint、route、retry 和 compaction；非法编辑保留 last-good snapshot。
 
+settings 文件 provider 每次尝试取得跨进程 writer lock 前、取得锁后且开始写入前检查调用 context；观察到取消时返回原 context 错误，不替换文件或更新 snapshot，并删除本次取得的锁。锁等待期限为 2 s，每 25 ms 重试；期限与取消同时就绪时优先返回 context 错误。锁等待时限不约束已开始的写入：进入锁内原子写入后完整执行临时文件写入、`fsync` 与 rename，随后提交 snapshot，不因迟到取消把成功提交报告为失败。
+
 账户 store 支持 API key 和 OAuth。OpenAI 支持 browser PKCE、device code 和显式只读 Codex cache import；Anthropic/OpenRouter 支持 browser flow。import 会复制有效 grant 到 nano-harness 自己的 `0600` store，不修改 Codex cache。
 
 产品不实现 ChatGPT/Codex subscription 用量查询或 quota gate。用户账户的远端限制照常由 provider 返回；本地仍强制 step、context、字节、tool count、timeout 和并发上限。真实验证前的 3% 用量检查属于产品外的操作者步骤。

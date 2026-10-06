@@ -347,6 +347,8 @@ subagent/descriptor, subagent/catalog, todo/write, plan/mode, goal/change, step/
 
 settings owner 将内建 defaults 与稀疏用户 YAML 合并。模型目录的可选 `effort` 使用 `none|minimal|low|medium|high|xhigh|max` 的领域并集；OpenAI/OpenRouter 接受完整集合，Anthropic 接受 `low|medium|high|xhigh|max`。具体模型是否支持已选择级别仍由远端服务裁决并返回明确请求错误。默认 `openai/gpt-5.6-luna` 使用 `max`。可选 `web.search` 同时给出 provider 与 model，model 必须在该 provider 的目录中；它默认为空，只影响 `web_search`，不改变会话 route。文件 provider 使用 strict YAML、owner-only 权限、原子替换和 writer lock；250 ms polling 只发布通过完整校验的新 revision，非法外部编辑保留 last-good snapshot。TUI 的 `/model` 使用 optimistic revision update，避免覆盖并发修改。
 
+文件 provider 在锁内写入开始前观察取消并拒绝替换；取消与锁等待超时同时就绪时返回 context 错误。写入开始后完成原子提交，完整时序见 [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#2-provider-neutral-llm-与-provider-owned-wireauth)。
+
 credential store 按 provider 保存一个 API key 或 OAuth grant，使用 strict versioned YAML、`0600` 文件、随机临时文件、原子 rename 与跨进程 lock。认证与 refresh token 不进入 session、prompt、TUI 列表或错误。环境 API key 是无持久化 fallback；显式 login 会原子替换对应 provider record。
 
 ## TUI 与投影
