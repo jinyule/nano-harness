@@ -49,6 +49,11 @@
 | WP9 | `read_image` 与多模态工具结果 | WP2 | 0015 | 已合入 `05e4012` |
 | WP10 | 长期目标 `create_goal`/`get_goal`/`update_goal` 与 round driver | WP3、WP8 | 0016 | 已合入 `d8ba519` |
 | WP11 | 图片移入会话日志之外的内容寻址附件存储（对齐上游 `attachment`/`attachment-local`），`/attach` 与 `read_image` 共用 | WP9 | 0017 | 进行中 |
+| WP12 | 结构化工具结果：所有工具产出上游的错误分类（name/code/info）与结果 `meta` 并持久化到 `tool/result`；模型可见文本不变，TUI 卡片暂缓 | 小修合入后 | 0019 | 待开始 |
+| WP13 | compaction 先做上游 tool-result-pruner 的无模型裁剪（首 4096、尾 1024 码点，持久化裁剪事实），再决定是否摘要 | — | 0020 | 待开始 |
+| WP14 | 会话级 sandbox 模式：read-only、workspace-write、danger-full-access 三档，持久化 `sandbox/mode` 与策略上下文；Linux sandbox 与上游一致放开网络 | WP11 后的路径与 runner 修复 | 0021 | 待开始 |
+| WP15 | web_search 发送前持久化检索请求（route、endpoint、预算），写入失败不发送 | — | 0022 | 待开始 |
+| WP16 | job 完成通知持久化（对齐上游 durable inbox），重启后未送达的完成事实不丢失 | WP3 engine 修复 | 0023 | 待开始 |
 
 ### 跨工作包决策记录
 
@@ -70,6 +75,7 @@
 | 2026-10-06 | 启动顺序改为工具、jobs、subagent/goal 服务在前，agent registry、root bootstrap、goal driver 最后（仅在前端之前）；关闭时先停前端与 goal driver，再由 registry 同时取消并等待所有 agent，之后才撤销工具、停止 jobs、删除临时目录 | 整体审查、WP1 | `docs/architecture.md` |
 | 2026-10-06 | 所有 provider 请求（含 OAuth）拒绝跟随重定向；IPv6 字面量同样做 NAT64 校验 | 整体审查 | ADR-0011 |
 | 2026-10-06 | 会话日志内联图片会在约 10 张大图后写满 64 MiB：先以 8 MiB 保留容量拒绝新图片（`fe565ad`），再按上游迁移到附件存储（WP11），届时取代容量拒绝 | 整体审查、维护者 | ADR-0015、ADR-0017 |
+| 2026-10-06 | 维护者确认补齐四项结构性差距：结构化工具结果（数据先行、UI 暂缓）、tool-result-pruner、三档会话 sandbox 模式且 Linux 放开网络（每条 bash 仍需一次性 approval，比上游严格）、web_search 请求审计事件与 job 完成通知持久化；分别为 WP12–WP16 | 上游能力对齐审计、维护者 | ADR-0019–0023（预留） |
 | 2026-10-06 | provider 的输出上限截断统一映射为停止原因 `max_tokens`，engine 持久化为 turn outcome，goal 据此解除 armed（对齐上游 driver 在 max-tokens 时 disarm）；目标轮次开场的非准入失败按轮次 ID/revision 解除 armed；解除 armed 在锁内比较确切 ID/revision | Codex 审查、Codex-A | ADR-0018（goal 停止结局）、ADR-0016 |
 | 2026-10-06 | WP11 设计：对象按 `sha256` 存于 `<attachment-root>/v1/objects/`（0700/0600、独占创建、fsync、硬链接发布、发布后只读），不自动删除；图片块只存 `{id, name, media_type, bytes, width, height}`；session 仍为 v2，靠 `attachments-v1` composition token 拒绝旧会话；`/attach` 在消息提交前才写入存储（对齐上游）；附件缺失或损坏时本次请求以占位文本代替并提示用户（偏离上游的请求失败，避免会话永久不可用；维护者 2026-10-06 确认不必严格遵循上游）；移除 8 MiB 图片保留容量检查 | WP9 提案、协调者与维护者确认 | ADR-0017（草稿） |
 
@@ -115,7 +121,7 @@
 - `Check` 不接收 `context.Context`；当前由 10 MiB 前置上限和执行点可取消读取覆盖。
 - 三个 provider 的检索请求和工具结果图片只有 loopback 协议证据，缺 live 验证。
 
-ADR 编号预先分配，避免并行分支冲突（审查修复期间追加：0017 图片附件存储，0018 goal 停止结局）；某个 WP 不需要 ADR 时编号作废，不复用。每个 WP 另写自己的 Agent Note，本 Note 只记录总体范围、映射和进度。
+ADR 编号预先分配，避免并行分支冲突（审查修复期间追加：0017 图片附件存储，0018 goal 停止结局，0019–0023 为 WP12–WP16）；某个 WP 不需要 ADR 时编号作废，不复用。每个 WP 另写自己的 Agent Note，本 Note 只记录总体范围、映射和进度。
 
 ### 执行方式
 
