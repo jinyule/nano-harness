@@ -116,15 +116,16 @@ func restoreHooks(t *testing.T) {
 }
 
 type harness struct {
-	root     workspace.Root
-	runtime  *appTool.Runtime
-	approver *recordingApprover
-	runner   Runner
-	jobs     *appJob.Service
-	jobScope *plugin.Scope
-	notifier *recordingNotifier
-	provider *Provider
-	delegate bool
+	root          workspace.Root
+	runtime       *appTool.Runtime
+	approver      *recordingApprover
+	runner        Runner
+	jobs          *appJob.Service
+	jobScope      *plugin.Scope
+	providerScope *plugin.Scope
+	notifier      *recordingNotifier
+	provider      *Provider
+	delegate      bool
 }
 
 func newHarness(t *testing.T, runner Runner) *harness {
@@ -168,7 +169,7 @@ func newHarnessWith(t *testing.T, runner Runner, store appTool.SpillStore) *harn
 		_ = providerScope.Close(context.Background())
 		_ = runtimeScope.Close(context.Background())
 	})
-	return &harness{root: root, runtime: runtime, approver: approver, runner: runner, jobs: jobs, jobScope: jobScope, notifier: notifier, provider: provider}
+	return &harness{root: root, runtime: runtime, approver: approver, runner: runner, jobs: jobs, jobScope: jobScope, providerScope: providerScope, notifier: notifier, provider: provider}
 }
 
 // settled waits for one of the session's jobs to finish.

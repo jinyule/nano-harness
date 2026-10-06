@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
@@ -85,6 +86,15 @@ func (model *shutdownModel) ServeHTTP(writer http.ResponseWriter, request *http.
 // waits for both before tools are withdrawn and the shell temporary
 // directory is removed, and no agent issues another model request.
 func TestComposition_ShutdownQuiescesAgentsBeforeToolsAndTemporaryFiles(t *testing.T) {
+	for _, limit := range []int{0, 10} {
+		t.Run(fmt.Sprintf("active jobs %d", limit), func(t *testing.T) {
+			shutdownQuiescesAgents(t, limit)
+		})
+	}
+}
+
+func shutdownQuiescesAgents(t *testing.T, activeJobs int) {
+	t.Helper()
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not installed")
 	}
@@ -119,6 +129,18 @@ func TestComposition_ShutdownQuiescesAgentsBeforeToolsAndTemporaryFiles(t *testi
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	for _, candidate := range app.plugins {
+		if jobs, ok := candidate.(*appJob.Service); ok {
+			for range activeJobs {
+				if _, err := jobs.Launch(appJob.Spec{Kind: "held", Label: "hold admission", Owner: "session-shutdown", Run: func(ctx context.Context, _ *appJob.Output) appJob.Outcome {
+					<-ctx.Done()
+					return appJob.Outcome{Status: appJob.StatusKilled}
+				}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
 	rootAgent, err := app.root.Agent()
 	if err != nil {
 		t.Fatal(err)

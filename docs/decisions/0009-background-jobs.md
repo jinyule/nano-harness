@@ -19,6 +19,8 @@
 
 本仓约束：所有运行时 effect 由插件 Scope 回收；模型可见信息必须能从权威会话事件重建；单个 tool result 上限 256 KiB；followup 与 steer 当前是内存队列，不持久化。
 
+前台完成通知必须覆盖注册到等待、超时到输出读取的交接空档，不能依赖 producer 与调用方的调度顺序。达到 job 上限的回退执行也必须有 Scope 所有者，保证受管 runner 与输出收尾在临时目录删除前结束；后代进程回收还受平台与执行模式限制。
+
 非目标：完整输出 spill 文件（WP2）、subagent 后台运行（WP7）、job 的 UI 列表与人工 kill、跨进程或可恢复的 job。
 
 ## 决策
@@ -27,7 +29,7 @@
 
 `internal/app/job.Service` 是插件 `jobs`，提供进程内注册表：
 
-- producer 用 `Launch(Spec)` 提交 `Kind`、`Label`、`Owner` 和阻塞式 `Run(ctx, *Output) Outcome`。服务在自己拥有的 goroutine 中运行 `Run`，`Kill` 和关闭会取消 `ctx`；producer 在资源释放后返回结果。producer panic 被收敛为 `failed`。
+- producer 用 `Launch(Spec)` 提交 `Kind`、`Label`、`Owner`、可选 `Foreground` 和阻塞式 `Run(ctx, *Output) Outcome`。服务在自己拥有的 goroutine 中运行 `Run`，`Kill` 和关闭会取消 `ctx`；producer 在资源释放后返回结果。producer panic 被收敛为 `failed`。`Foreground` 在注册锁内预留完成收集权，不计入实际 `Wait` 调用数，详见[完成通知](#完成通知)。
 - 所有读写和控制操作都带调用方 session；访问他人 job 返回 `job <id> belongs to another session`，未知 ID 返回 `unknown job <id>`。ID 可预测，所以边界是所有权而不是保密。
 - ID 计数按 kind、在一个服务实例内递增。前台 `bash` 调用也会消耗编号，所以第一个后台 job 可能是 `bash-2`，与上游一致。
 - 每个 owner 最多 10 个 `running` 或 `stopping` 的 job。输出环在运行中保留 128 KiB；上游保留 256 KiB，但本仓一次读取连同状态行必须放进 256 KiB 的 tool result，减半后完整读取永远不会被统一截断。settle 时保留全部未读字节，settle 后第一次读取把保留量裁到 16 KiB。游标落到保留窗口之前时，读取追加 `[some output was dropped from memory; full output: <文件>]`，列出 job 当前声明的完整输出文件（见 [ADR-0008](0008-tool-output-spill-and-observation-policy.md#bash-完整输出)），没有文件时为 `(unavailable)`。
@@ -54,19 +56,22 @@
 
 - 每次调用在审批和执行点检查之后注册为 kind `bash`、label 为命令文本的 job。job 中的进程没有 runner 截止时间，只在自行结束、`job_kill` 或关闭时停止；取消时 runner 终止整个进程组并等待退出。
 - `run_in_background: true` 立即返回 `started background job <id>`，不应用 `timeoutMs`。审批原因为 `run a background shell command in the workspace sandbox: <description>`；升级请求仍使用升级原因。
-- 前台调用等待 `timeoutMs`（默认 60 s、上限 10 min）。及时结束时移除 job 记录，按原有前台格式渲染（stdout/stderr 各保留最后 64,000 字节、退出码、信号和 sandbox 标记）。超时时做一次消费式读取，返回已有输出和 `[still running after <N>ms; moved to background job <id>]` 及上游的后续说明；之后的 `job_output` 从这次读取之后继续。
+- 前台调用从注册时起预留完成收集权，等待 `timeoutMs`（默认 60 s、上限 10 min）。及时结束时移除 job 记录，按原有前台格式渲染（stdout/stderr 各保留最后 64,000 字节、退出码、信号和 sandbox 标记）。超时时做一次消费式读取：读取时已结束的 job 仍按前台结果返回并移除，不发通知；仍活动时才返回已有输出和 `[still running after <N>ms; moved to background job <id>]` 及上游的后续说明，并允许后续完成通知。之后的 `job_output` 从这次读取之后继续。
 - 调用被取消（或服务在等待期间关闭）时，以 reason `tool call aborted` kill 该 job，等待其结束并移除，返回 `tool call aborted`。owner 达到 job 上限时，后台调用返回上限错误，前台调用退回到期即终止的执行方式并可能返回 `[timed out after Nms]`。
 - job 结局：信号终止为 `killed`（`signal: <name>`，未启动即取消为 `killed before exit`），正常退出为 `completed`（`exit code: N`，sandbox 拒绝时追加拒绝标记和升级提示），无法启动或 sandbox 不可用为 `failed`。
 - approval、sandbox、`danger-full-access` 升级与 delegated 拒绝语义不变，后台命令同样经过它们。
-- 后台命令使用 shell provider 的临时目录作为 `TMPDIR`。composition 中 `jobs` 在 `shell-tools` 之后启动，所以关闭时先结束全部后台进程，再删除该目录。
+- 后台命令使用 shell provider 的临时目录作为 `TMPDIR`。job 上限回退执行由 shell provider 在自己的 Scope 下跟踪，保留调用方取消；准入与 cleanup 共用锁，关闭开始后不再增加执行贡献。`cmd/nano-harness` 先关闭 agent，再关闭 jobs，最后关闭 shell provider：等待全部 job producer 后，provider 拒绝新回退、取消并等待全部回退 runner 与 spill 收尾，再删除该目录。
+- Scope 的 join 只证明受管执行静止。Linux workspace sandbox 有 PID namespace；macOS `sandbox-exec` 没有，`killpg` 无法保证终止调用 `setsid()` 或离开原进程组的后代。host 模式同样没有 namespace。完整平台与模式边界归[安全规则](../security.md#approvalshell-与进程)，更强回收保证需要独立容器、VM 或执行后端。
 
 ### 完成通知
 
-job settle 时，如果有正在进行的 wait 收走了结果、settle 由 `Kill` 引起、服务正在关闭或插件启动 context 已取消，则不发通知。否则服务通过消费方接口 `job.Notifier` 调用 agent `Registry.Notify`，文本为：
+job settle 时，如果前台完成收集权尚未释放、有正在进行的 wait 收走了结果、settle 由 `Kill` 引起、服务正在关闭或插件启动 context 已取消，则不发通知。前台预留覆盖 `Launch` 到 `Wait`，以及超时/取消的 `Wait` 返回到首次 `Read`/`Remove`，不依赖 producer 与调用方的调度顺序。否则服务通过消费方接口 `job.Notifier` 调用 agent `Registry.Notify`，文本为：
 
 ```text
 background job <id> (<kind>: <label>) finished <status line>. Read its output with job_output.
 ```
+
+首次消费式 `Read` 在同一把锁内获取输出与状态并释放前台预留：终态由前台收集并 `Remove`，仍活动才交出后台 ID，后续 settle 可以通知一次。正常前台结束或取消通过 `Remove` 丢弃预留，consumer 必须读取或移除，不能直接遗弃。其他 producer 的 `Foreground` 零值行为与 `job_output` 的 wait 收集语义不变；这些修复不改变工具 schema、session v2、composition ID 或持久化格式，也不新增部署参数。
 
 通知是 role 为 user、source kind 为 `tool-jobs` 的消息，由 `Agent.Notify` 投递：
 
@@ -100,8 +105,10 @@ delegated agent 可以调用对其可见的 `job_*` 工具，但只能访问自�
 代价与风险：
 
 - 通知可以在没有用户输入时开启 turn 并消耗模型调用；每个通知最多触发一个 turn，自激链需要模型反复启动新 job，而每次启动都需要用户审批。
-- 进程退出、崩溃或 shutdown 会终止全部 job，并丢弃尚未投递的通知；用户需要重新运行命令。
+- job 与通知不随进程恢复；正常 shutdown 取消并等待受管执行，尚未投递的通知丢弃。异常退出和脱离进程组的后代能否回收取决于[平台与执行模式](../security.md#approvalshell-与进程)，不能假定所有 host 进程都已终止。
 - 前台命令现在多一次 job 注册和输出复制（输出环最多 128 KiB）；内存上限为每 owner 10 个活动 job。
+- 前台预留避免未交出的 job ID 引发通知或额外 turn，交接按读取时状态描述命令；consumer 必须完成读取或移除。
+- 每个回退执行增加一个取消句柄与等待贡献，cleanup 等待 runner 与输出收尾；不遵守取消契约的 runner 会阻塞关闭。
 - 输出环保留量与上游不同；超出保留窗口的输出在 WP2 的 spill 落地前无法找回。
 
 > 后续决定：[ADR-0008](0008-tool-output-spill-and-observation-policy.md#bash-完整输出) 已保存完整 shell 输出并补齐定位符；[ADR-0013](0013-background-continuable-subagents.md#2-生命周期) 增加无需用户审批即可启动的后台 subagent job，因此“每次启动都需要用户审批”只适用于 `bash`，不覆盖所有 job producer。
@@ -114,11 +121,16 @@ delegated agent 可以调用对其可见的 `job_*` 工具，但只能访问自�
 - 输出环保留 256 KiB：读取加状态行可能超过 tool result 上限，被统一截断后丢掉状态行。
 - 由 job 工具适配器投递通知（上游 `tool-jobs` 的做法）：适配器需要依赖 agent registry，且通知是否已被 wait 或 kill 收走只有注册表知道；由服务通过消费方 `Notifier` 投递只有一个 owner。
 - 把 job 工具声明为并发：上游没有声明，`job_output` 的 wait 也会让同批次的其余调用与之重叠，改变调用顺序语义。
+- 仅依赖 `Wait` 的 waiter 数：无法覆盖注册到等待或超时到读取的空档。
+- 超时返回时立即释放前台预留：producer 可在读取前通知，前台随后又报告同一终态。
+- 只依赖 agent 先关闭取消回退执行：不能证明 provider 自身的 Scope 清理顺序，也不能约束其他合法 consumer 的在途调用。
 
 ## 复审触发条件
 
 - WP7 接入 subagent job，需要 owner 释放、progress 或值结果的新约束。
 - WP2 的 spill 存储落地，丢失提示和截断提示需要报告完整输出路径。
 - 增加 job 的 UI 列表、人工 kill 或观察读取。
+- 增加多个同 owner 的前台 consumer，需要重新界定读取与交接权限。
+- 引入独立容器、VM 或平台后代跟踪，能够提供更强回收保证。
 - 观察到通知引起的连续自动 turn，需要上游的 `maxConsecutiveWakes` 或 `quiet` 投递。
 - 参考指针更新改变了 jobs、tool-jobs 或 tool-bash 的定义或语义。

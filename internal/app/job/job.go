@@ -91,6 +91,9 @@ type Spec struct {
 	// Owner is the session that may read, wait on, and kill the job, and
 	// that receives its completion notice.
 	Owner string
+	// Foreground reserves completion collection until the first Read or
+	// Remove, including before Wait starts and after its timeout expires.
+	Foreground bool
 	// Run performs the work in a goroutine the service owns and returns
 	// after the work has released its resources. ctx is cancelled by Kill
 	// and by service shutdown; output appends to the job's ring.

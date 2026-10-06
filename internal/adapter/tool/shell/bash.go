@@ -193,16 +193,23 @@ func (provider *Provider) foreground(ctx context.Context, invocation appTool.Inv
 	timeout := max(time.Duration(timeoutMS*float64(time.Millisecond)), time.Nanosecond)
 	owner := invocation.SessionID
 	run := &processRun{}
-	id, err := provider.jobs.Launch(provider.job(invocation, command, request, run))
+	spec := provider.job(invocation, command, request, run)
+	spec.Foreground = true
+	id, err := provider.jobs.Launch(spec)
 	if errors.Is(err, appJob.ErrLimit) {
+		fallback, done, err := provider.beginFallback(ctx)
+		if err != nil {
+			return appTool.Result{}, err
+		}
+		defer done()
 		streams := [2]*streamSpill{
-			newStreamSpill(nil, openSpill(ctx, invocation, "bash-stdout.log"), nil),
-			newStreamSpill(nil, openSpill(ctx, invocation, "bash-stderr.log"), nil),
+			newStreamSpill(nil, openSpill(fallback, invocation, "bash-stdout.log"), nil),
+			newStreamSpill(nil, openSpill(fallback, invocation, "bash-stderr.log"), nil),
 		}
 		request.Timeout, request.Stdout, request.Stderr = timeout, streams[0], streams[1]
-		run.result, run.err = provider.runner.Run(ctx, request)
+		run.result, run.err = provider.runner.Run(fallback, request)
 		run.spills = finishAll(streams)
-		return finish(ctx, *run, timeoutMS)
+		return finish(fallback, *run, timeoutMS)
 	}
 	if err != nil {
 		return appTool.Result{}, err
@@ -217,12 +224,21 @@ func (provider *Provider) foreground(ctx context.Context, invocation appTool.Inv
 		_ = provider.jobs.Remove(owner, id)
 		return appTool.Result{}, errors.New("tool call aborted")
 	}
+	return provider.foregroundResult(ctx, owner, id, view, run, timeoutMS)
+}
+
+func (provider *Provider) foregroundResult(ctx context.Context, owner, id string, view appJob.View, run *processRun, timeoutMS float64) (appTool.Result, error) {
 	if view.Status == appJob.StatusRunning || view.Status == appJob.StatusStopping {
 		// One consuming read hands over the output so far, so job_output
 		// continues exactly after it. It fails only once shutdown dropped
 		// the record, which leaves nothing to hand over.
-		read, _ := provider.jobs.Read(owner, id)
-		return appTool.Text(promoted(read.Delta(), id, timeoutMS)), nil
+		read, err := provider.jobs.Read(owner, id)
+		if err != nil {
+			return appTool.Result{}, errors.New("tool call aborted")
+		}
+		if read.Job.Status == appJob.StatusRunning || read.Job.Status == appJob.StatusStopping {
+			return appTool.Text(promoted(read.Delta(), id, timeoutMS)), nil
+		}
 	}
 	// Removal fails only after shutdown already dropped the record.
 	_ = provider.jobs.Remove(owner, id)

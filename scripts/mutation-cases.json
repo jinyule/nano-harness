@@ -91,6 +91,34 @@
     "test": "^TestService_FencesOwnersAndUnknownJobs$"
   },
   {
+    "id": "job-foreground-reservation",
+    "file": "internal/app/job/service.go",
+    "before": "foreground: spec.Foreground",
+    "after": "foreground: false",
+    "test": "^TestService_ForegroundSettlementBeforeWaitDoesNotNotify$"
+  },
+  {
+    "id": "job-foreground-handoff-notice",
+    "file": "internal/app/job/service.go",
+    "before": "!current.foreground && !awaited",
+    "after": "!awaited",
+    "test": "^TestService_ForegroundNoticeTransfersAtRead$"
+  },
+  {
+    "id": "bash-handoff-read-status",
+    "file": "internal/adapter/tool/shell/bash.go",
+    "before": "if read.Job.Status == appJob.StatusRunning || read.Job.Status == appJob.StatusStopping {",
+    "after": "if true {",
+    "test": "^TestBash_ForegroundHandoffUsesReadStatus$"
+  },
+  {
+    "id": "shell-fallback-cancellation",
+    "file": "internal/adapter/tool/shell/provider.go",
+    "before": "for _, cancel := range provider.fallbacks {\n\t\t\tcancel()\n\t\t}",
+    "after": "for range provider.fallbacks {}",
+    "test": "^TestProvider_ShutdownCancelsAndJoinsFallbackBeforeRemovingTemporary$"
+  },
+  {
     "id": "question-delegated",
     "file": "internal/app/question/question.go",
     "before": "if request.Delegated {",

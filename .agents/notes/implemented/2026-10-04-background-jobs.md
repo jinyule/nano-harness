@@ -15,6 +15,8 @@
 
 job 名额测试的结算屏障证据见[边界修复 Note](2026-10-06-spill-question-and-call-validation.md)；本 Note 保留后台任务的产品决定与原始验证。
 
+前台完成收集、超时原子交接、回退执行所有权与平台回收边界由[前台 job 交接 Note](2026-10-06-foreground-job-handoff-and-shell-cleanup.md)补充；本 Note 保留后台任务的其余设计与实施证据，当前契约以 [ADR-0009](../../../docs/decisions/0009-background-jobs.md) 为准。
+
 长期契约记录在 [ADR-0009](../../../docs/decisions/0009-background-jobs.md)，当前事实分别归[架构](../../../docs/architecture.md#后台任务)、[安全](../../../docs/security.md#approvalshell-与进程)和[测试](../../../docs/testing.md#agent-与工具证据)文档。本次实施：
 
 - 新增 `internal/app/job`（插件 `jobs`）。producer 用 `Launch(Spec)` 提交阻塞式 `Run(ctx, *Output) Outcome`，服务在自己的 `WaitGroup` goroutine 中运行它；`Kill` 与关闭取消 `ctx`。effect/cleanup 对：`Start` 登记 `stop`，后者拒绝新 job、把活动 job 标为 `stopping` 并取消、等待全部 producer 返回、丢弃记录。所有操作校验调用方 session；每 owner 最多 10 个活动 job；输出环运行中 128 KiB、首次终态读取后 16 KiB；writer 暂存被拆开的 UTF-8 尾部；producer panic 收敛为 `failed`。
@@ -29,17 +31,17 @@ job 名额测试的结算屏障证据见[边界修复 Note](2026-10-06-spill-que
   func (*Service) Wait(ctx context.Context, owner, id string, timeout time.Duration) (View, error)
   func (*Service) Kill(owner, id, reason string) (View, bool, error)
   func (*Service) Remove(owner, id string) error             // ErrStillRunning
-  type Spec struct { Kind, Label, Owner string; Run func(context.Context, *Output) Outcome }
+  type Spec struct { Kind, Label, Owner string; Foreground bool; Run func(context.Context, *Output) Outcome }
   type Outcome struct { Status Status; Detail, Result string }
   type Notifier interface { Notify(sessionID string, message session.Message) error }
   ```
 
   `Output.Writer(Stdout|Stderr)` 返回不会失败的 writer。subagent producer 可在 `Run` 中驱动 child、用 `Outcome.Result` 交出报告；需要 owner 关闭时释放 job 的生产者须增加 owner 释放（ADR 已记录）。
 - 新增 `internal/adapter/tool/job`（插件 `job-tools`），注册与上游逐字节一致的 `job_output`、`job_list`、`job_kill`，三者 exclusive；上游 `tool:jobs` 段落以 `appTool.OrderJobs = 1600` 挂在 `job_output` 上。
-- `bash` 切换到 Base 后台变体。每次调用在审批之后注册为 kind `bash` 的 job（进程无 runner 截止时间）：`run_in_background` 立即返回 ID，审批原因注明 background；前台调用等待 `timeoutMs`，及时结束时移除记录并按原前台格式渲染，超时则做一次消费式读取并返回 `[still running after Nms; moved to background job <id>]`；取消或关闭时 kill 并移除，返回 `tool call aborted`；达到上限时退回到期即终止。approval、sandbox、升级和 delegated 拒绝不变。
+- `bash` 切换到 Base 后台变体。每次调用在审批之后注册为 kind `bash` 的 job（进程无 runner 截止时间）：`run_in_background` 立即返回 ID，审批原因注明 background；前台从注册时预留完成收集并等待 `timeoutMs`，及时结束时移除记录并按原前台格式渲染；超时的消费式读取若仍活动才返回 `[still running after Nms; moved to background job <id>]`，已结束则按前台结果返回并移除；取消或关闭时 kill 并移除，返回 `tool call aborted`；达到上限时退回到期即终止。approval、sandbox、升级和 delegated 拒绝不变。
 - `platform/process.Request` 追加 `Stdout`/`Stderr` 观察者，`Timeout` 为零表示只受 ctx 约束；改动保持追加式，以便与 WP1 的 `StdoutLimit` 合并。
 - agent engine 的注入语义：`Agent.Notify(message)` 与 `Registry.Notify(sessionID, message)`。忙时通知进入内存队列，由 engine 在三个边界追加为 `user/message`：turn 开始后、工具 step 结束后（steer 之后）、无工具调用的回答之后；最后一种情况下 turn 继续一个 step，已到 step 上限时留在队列。空闲时 worker 以最早通知开启新 turn（`woken`），turn 结束后仍有通知且没有排队 turn 也会唤醒；被取消的 turn 留下的通知等待下一个 turn；`WhenIdle` 把已唤醒的通知 turn 视为忙；agent 停止时丢弃队列。
-- 通知由 `app/job` 在 settle 时决定：有 wait 收走、由 `Kill` 引起、服务关闭或启动 context 已取消时不发；否则文本为 `background job <id> (<kind>: <label>) finished <status line>. Read its output with job_output.`，source kind `tool-jobs`。session v2 不变，没有新增记录类型，因此不需要持久化固定样本或迁移；TUI 把这类消息显示为 `job> `。
+- 通知由 `app/job` 在 settle 时决定：前台完成收集预留尚在、有 wait 收走、由 `Kill` 引起、服务关闭或启动 context 已取消时不发；否则文本为 `background job <id> (<kind>: <label>) finished <status line>. Read its output with job_output.`，source kind `tool-jobs`。session v2 不变，没有新增记录类型，因此不需要持久化固定样本或迁移；TUI 把这类消息显示为 `job> `。
 - composition 新增 `jobs` 与 `job-tools`，顺序为 `shell-tools → jobs → job-tools → subagent-tools`，使后台进程在 shell 临时目录删除前结束；composition ID 改为 `shell-tools-v2` 并加入 `job-tools-v1`。两份目录 fixture 更新，parity 测试的上游工具数加上三个 job 工具（与 WP4 的 `todo_write`、WP5 的 `web_search`/`web_fetch` 合并后为 12）。
 - mutation 新增 `job-owner-fence`：去掉 owner 比较后 `TestService_FencesOwnersAndUnknownJobs` 必须失败。
 - `scripts/tui-e2e.py` 增加一个在第一个 turn 结束后才完成的后台 job，验证终端 `job>` 通知和通知开启的 turn。
@@ -59,7 +61,7 @@ job 名额测试的结算屏障证据见[边界修复 Note](2026-10-06-spill-que
 代价与风险：
 
 - 通知可以在没有用户输入时开启 turn 并消耗模型调用；每个通知最多触发一个 turn，而启动新 job 需要用户审批。
-- 进程退出会终止全部 job，并丢弃尚未投递的通知；恢复后旧 job ID 为 `unknown job`，编号从 1 重新开始。
+- 正常关闭取消并等待受管执行，丢弃尚未投递的通知；脱离进程组的后代回收受[平台与模式边界](../../../docs/security.md#approvalshell-与进程)限制；恢复后旧 job ID 为 `unknown job`，编号从 1 重新开始。
 - 前台命令多一次 job 注册与输出复制；每 owner 内存上限为 10 个活动 job 的输出环。
 - 输出环保留量（128 KiB）小于上游（256 KiB），超出窗口的输出在 spill 落地前无法找回。
 - 旧会话按 composition mismatch 拒绝恢复；本仓尚无发布 tag。

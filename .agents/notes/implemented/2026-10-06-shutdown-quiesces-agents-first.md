@@ -13,7 +13,7 @@
 
 `Registry.stop` 逐个关闭 agent，`Bootstrap` 也先单独关闭 root，所以一个 agent 排空时，其他 agent 仍可能被 notice 唤醒并开启新 turn。
 
-非目标：shell provider 对 job 上限回退路径进程的跟踪由 WP3 负责；本次不改变任何工具、job 或 agent 的运行期语义。
+非目标：shell provider 对 job 上限回退路径进程的跟踪见[前台 job 交接 Note](2026-10-06-foreground-job-handoff-and-shell-cleanup.md)；本 Note 的决定不改变工具、job 或 agent 的运行期语义。
 
 ## Decision
 

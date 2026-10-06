@@ -57,7 +57,7 @@ settings → settings file → credential store → attachments → LLM runtime
 1. 前端先停止，撤销 broker 并结束交互。
 2. goal driver 停止 goal 轮次。
 3. agent registry 同时关闭 root 和所有子代理。在途 turn 被取消，排队的 turn 和 notice 不再执行，registry 等待每个 worker 退出；此时工具仍已注册，前台 `bash` 随 turn 取消被终止并回收，不会出现 unknown tool 结果，也不会再发模型请求。root bootstrap 只撤销发布，root 由 registry 与其他 agent 一起关闭。
-4. 工具撤销注册；jobs 取消并等待所有后台进程；shell provider 删除临时目录。jobs 在 shell 工具之后启动，所以后台进程总在临时目录删除之前结束。
+4. 工具撤销注册；jobs 取消并等待全部 producer；shell provider 取消并等待 job 上限回退执行及其输出收尾，然后删除临时目录。jobs 在 shell 工具之后启动；进程后代的回收边界见[安全规则](security.md#approvalshell-与进程)。
 5. delegation 与 goal 服务、spill、session、engine 和更早的基础组件最后关闭。
 
 `cmd/nano-harness` 的 assembled 测试从真实组装证明这一顺序，结构测试固定 agent 层在最后启动。
@@ -228,14 +228,14 @@ app/web.Service ──Search──► llm.Runtime.PrepareCall(web.search route) 
 producer Launch(kind, label, owner, Run)
   → service goroutine runs Run(ctx, Output) → bounded output ring
   → job_output/job_list/job_kill read, wait, kill by owner session
-  → settle → unless awaited/killed/teardown: Notifier → Registry.Notify → owner agent
+  → settle → unless foreground/awaited/killed/teardown: Notifier → Registry.Notify → owner agent
 ```
 
 - job 属于启动它的 session，所有操作都校验调用方 session；ID 为 `<kind>-<n>`。状态为 `running`、可选 `stopping`，再到 `completed`、`killed`、`failed` 之一，先到先得。
 - 每个 owner 最多 10 个活动 job。输出环运行中保留 128 KiB，settle 后第一次读取裁到 16 KiB；模型游标消费式读取，settle 后第一次读取还交出 producer 的值结果。
-- cleanup 先拒绝新 job，再取消全部活动 job，等待 producer goroutine 返回后丢弃记录。`jobs` 在 `shell-tools` 之后启动，所以后台进程在 shell 临时目录删除之前结束。
-- `bash` 的每次调用都作为 kind `bash` 的 job 运行：`run_in_background` 立即返回 ID；前台调用等待 `timeoutMs`，及时结束时移除记录并按前台格式返回，超时则移交为后台 job。
-- job、计数器和待投递通知都不持久化，进程结束时 job 终止。
+- cleanup 先拒绝新 job，再取消全部活动 job，等待 producer goroutine 返回后丢弃记录。`jobs` 在 `shell-tools` 之后启动，所以受管 runner 在 shell 临时目录删除之前返回；provider 自己拥有 job 上限回退执行，取消并等待它们及输出收尾后才删除目录。
+- `bash` 的每次调用优先作为 kind `bash` 的 job 运行：`run_in_background` 立即返回 ID；前台注册以 `Spec.Foreground` 原子预留完成收集权，等待 `timeoutMs`，及时结束时移除记录并按前台格式返回。超时后的首次 `Read` 在锁内释放预留：终态由前台收集；仍活动则交给后台并允许后续唯一完成通知。
+- job、计数器和待投递通知都不持久化，正常关闭取消并等待受管执行；脱离进程组的后代限制见[安全规则](security.md#approvalshell-与进程)。
 
 工具与通知的完整契约见 [ADR-0009](decisions/0009-background-jobs.md)。
 

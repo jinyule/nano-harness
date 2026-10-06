@@ -43,7 +43,9 @@ type record struct {
 	// waiters counts live Wait calls; a settlement that releases one is
 	// collected by that caller and sends no notice.
 	waiters int
-	done    chan struct{}
+	// foreground keeps collection reserved across Launch, Wait and Read.
+	foreground bool
+	done       chan struct{}
 }
 
 func (current *record) view() View {
@@ -139,7 +141,7 @@ func (service *Service) Launch(spec Spec) (string, error) {
 	ctx, cancel := context.WithCancel(service.base)
 	current := &record{
 		id: spec.Kind + "-" + strconv.Itoa(service.counters[spec.Kind]), kind: spec.Kind, label: spec.Label, owner: spec.Owner,
-		status: StatusRunning, cancel: cancel, done: make(chan struct{}),
+		status: StatusRunning, cancel: cancel, foreground: spec.Foreground, done: make(chan struct{}),
 	}
 	service.records = append(service.records, current)
 	output := &Output{service: service, record: current, id: current.id}
@@ -181,7 +183,8 @@ func (service *Service) advertise(current *record, channel Channel, locator stri
 }
 
 // settle records the terminal outcome, releases waiters, and notifies the
-// owner unless a waiter, a kill, or teardown already accounts for it.
+// owner unless foreground collection, a waiter, a kill, or teardown
+// already accounts for it.
 func (service *Service) settle(current *record, outcome Outcome) {
 	service.mu.Lock()
 	current.status, current.detail, current.result = outcome.Status, outcome.Detail, outcome.Result
@@ -196,7 +199,7 @@ func (service *Service) settle(current *record, outcome Outcome) {
 	awaited := current.waiters > 0
 	current.waiters = 0
 	close(current.done)
-	notify := !awaited && current.cause == causeProducer && service.base.Err() == nil
+	notify := !current.foreground && !awaited && current.cause == causeProducer && service.base.Err() == nil
 	view, owner := current.view(), current.owner
 	service.mu.Unlock()
 	if notify {
@@ -261,7 +264,9 @@ func (service *Service) Get(owner, id string) (View, error) {
 
 // Read consumes the output since the caller's previous read. The first
 // read after settlement also carries the producer's value result and trims
-// retention to the settled cap.
+// retention to the settled cap. Reading a foreground job also releases its
+// completion reservation under the same lock: a terminal read collects the
+// outcome without a notice; a live read lets a later settlement notify.
 func (service *Service) Read(owner, id string) (Read, error) {
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -284,6 +289,7 @@ func (service *Service) Read(owner, id string) (Read, error) {
 		current.ring.trim(settledRetainBytes)
 	}
 	read.Job = current.view()
+	current.foreground = false
 	return read, nil
 }
 
@@ -388,7 +394,8 @@ func (service *Service) Release(ctx context.Context, owner string) error {
 }
 
 // Remove drops a settled job that its caller collected through its own
-// Wait and never handed out, such as a foreground shell call.
+// Wait or a terminal handoff Read and never handed out, such as a
+// foreground shell call.
 func (service *Service) Remove(owner, id string) error {
 	service.mu.Lock()
 	defer service.mu.Unlock()
