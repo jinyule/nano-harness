@@ -44,6 +44,9 @@ var (
 	beforeResume  = func() {}
 	// parked observes a settlement watcher that keeps its child resident.
 	parked = func(string) {}
+	// released observes, under Service.mu, a child whose release waiters
+	// were just woken.
+	released = func(string) {}
 )
 
 // Code classifies a model-facing delegation failure.
@@ -650,7 +653,8 @@ func (service *Service) close(ctx context.Context, current *child, notice *sessi
 // the child, releases its live children first, closes its agent and
 // transcript, and ends the jobs it owned. It then removes the handle and,
 // in the same critical section, delivers notice to the parent, so a
-// continuable parent cannot settle between the two.
+// continuable parent cannot settle between the two. Release waiters wake
+// last: once they observe the child gone, any notice reached the parent.
 func (service *Service) release(ctx context.Context, current *child, notice *session.Message) error {
 	current.agent.Interrupt()
 	service.mu.Lock()
@@ -678,7 +682,6 @@ func (service *Service) release(ctx context.Context, current *child, notice *ses
 	defer service.mu.Unlock()
 	delete(service.children, current.id)
 	current.closeErr = failure
-	close(current.done)
 	parent := service.children[current.parent]
 	delivered := false
 	if notice != nil && service.active && (parent == nil || !parent.closing) {
@@ -692,6 +695,8 @@ func (service *Service) release(ctx context.Context, current *child, notice *ses
 		}
 		wakeLocked(parent)
 	}
+	close(current.done)
+	released(current.id)
 	return failure
 }
 

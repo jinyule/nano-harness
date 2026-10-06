@@ -111,6 +111,51 @@ func TestService_SendMessageRoundTripAndColdResume(t *testing.T) {
 	}
 }
 
+func TestService_SettlementNoticePrecedesReleaseWaiters(t *testing.T) {
+	h := startHarness(t,
+		rule{match: "ROOT_HOLD", first: reply{hold: true}, then: reply{text: "root done"}},
+		rule{match: "CHILD_TASK", first: reply{hold: true}, then: reply{text: "child report"}},
+		rule{match: "Background subagent", first: reply{hold: true}, then: reply{text: "noted"}},
+	)
+	rootCall, results := h.submit("ROOT_HOLD")
+	id, err := h.service.StartContinuable(context.Background(), start(rootCall, "worker", "CHILD_TASK", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	childCall := receive(t, h.held)
+	rootCall.release <- "released"
+	receive(t, results)
+	previous := released
+	t.Cleanup(func() { released = previous })
+	// The probe runs the moment release waiters can observe the child gone.
+	// An idle parent that does not yet hold the notice reports idle; the
+	// notice's wake keeps it busy, and its woken turn holds so the probe
+	// cannot see that turn finish.
+	probed := make(chan error, 1)
+	released = func(childID string) {
+		if childID != id {
+			return
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		probed <- h.root.WhenIdle(ctx)
+	}
+	childCall.release <- "child held"
+	if err := receive(t, probed); !errors.Is(err, context.Canceled) {
+		t.Fatalf("parent idle when release waiters woke: %v", err)
+	}
+	receive(t, h.done(id))
+	noticeCall := receive(t, h.held)
+	if noticeCall.invocation.SessionID != "root" {
+		t.Fatalf("notice turn session = %q", noticeCall.invocation.SessionID)
+	}
+	noticeCall.release <- "noted"
+	h.idle(h.root)
+	if notices := messages(h.events("root"), SourceSettled); len(notices) != 1 || !strings.HasSuffix(notices[0], "Its closing message:child report") {
+		t.Fatalf("root notices = %q", notices)
+	}
+}
+
 func TestService_RejectsMessagesOutsideDirectLineage(t *testing.T) {
 	h := startHarness(t,
 		rule{match: "ROOT_HOLD", first: reply{hold: true}, then: reply{text: "root done"}},

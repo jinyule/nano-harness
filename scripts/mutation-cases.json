@@ -476,6 +476,13 @@
     "test": "^TestRecordValidateRejectsEveryInvalidShape$"
   },
   {
+    "id": "subagent-settle-notice-before-done",
+    "file": "internal/app/subagent/service.go",
+    "before": "\tcurrent.closeErr = failure\n\tparent := service.children[current.parent]\n\tdelivered := false\n\tif notice != nil && service.active && (parent == nil || !parent.closing) {\n\t\t// The only failure is a parent that is no longer live; the notice\n\t\t// then has no reader, as during teardown.\n\t\tdelivered = service.registry.Notify(current.parent, *notice) == nil\n\t}\n\tif parent != nil {\n\t\tif delivered {\n\t\t\tparent.delivered++\n\t\t}\n\t\twakeLocked(parent)\n\t}\n\tclose(current.done)\n\treleased(current.id)\n",
+    "after": "\tcurrent.closeErr = failure\n\tclose(current.done)\n\treleased(current.id)\n\tparent := service.children[current.parent]\n\tdelivered := false\n\tif notice != nil && service.active && (parent == nil || !parent.closing) {\n\t\t// The only failure is a parent that is no longer live; the notice\n\t\t// then has no reader, as during teardown.\n\t\tdelivered = service.registry.Notify(current.parent, *notice) == nil\n\t}\n\tif parent != nil {\n\t\tif delivered {\n\t\t\tparent.delivered++\n\t\t}\n\t\twakeLocked(parent)\n\t}\n",
+    "test": "^TestService_SettlementNoticePrecedesReleaseWaiters$"
+  },
+  {
     "id": "todo-ecmascript-durable-trim",
     "file": "internal/core/session/todo.go",
     "before": "item.Content != text.TrimSpace(item.Content)",
