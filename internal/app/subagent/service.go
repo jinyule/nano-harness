@@ -227,7 +227,7 @@ func (*Service) StepContext(_ context.Context, request agent.ContextRequest) (ag
 	if !slices.ContainsFunc(request.Events, func(event session.Event) bool { return event.Record.Type == session.RecordSubagentDescriptor }) {
 		return agent.ContextContribution{}, nil
 	}
-	return agent.ContextContribution{Sections: []string{delegationContext}}, nil
+	return agent.ContextContribution{Sections: []agent.ContextSection{{Order: agent.OrderSubagentDelegation, Text: delegationContext}}}, nil
 }
 
 // ID returns the stable plugin identity.

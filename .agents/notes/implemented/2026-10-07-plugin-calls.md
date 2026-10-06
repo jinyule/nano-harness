@@ -19,7 +19,7 @@ web、plan、approval、retry 与 compaction 五个 app 服务各有一份约 20
 
 五个服务删除 `nextCall`/`calls`/`group` 三个字段（retry 为 `waits`，web 为 `nextID`/`operations`），`begin` 中的登记段与 cleanup 中的取消循环改为一次调用；approval 以 `Cancel(errStopped)` 保留原取消原因，其余传 nil。各服务的错误顺序、plan 的会话创建、approval 的 broker 清理与注释说明的等待界限保持原样。
 
-web 测试原先读取服务内部登记表断言释放后为空；该断言移到 `plugin.Calls` 自己的测试，web 测试保留屏障与结果断言。四个“cleanup 取消在途调用”的 mutation 改为删除新的 `Cancel` 调用；另增 `plugin-calls-release-unregisters`，删除释放时的反登记。
+web 测试原先读取服务内部登记表断言释放后为空；该断言移到 `plugin.Calls` 自己的测试，web 测试保留屏障与结果断言。四个“cleanup 取消在途调用”的 mutation 改为删除新的 `Cancel` 调用（web 的同类 mutation 与有界测试见[终审收尾记录](2026-10-07-final-review-polish.md)）；另增 `plugin-calls-release-unregisters`，删除释放时的反登记。
 
 ## Consequences
 

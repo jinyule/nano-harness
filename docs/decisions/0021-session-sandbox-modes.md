@@ -38,7 +38,7 @@ confined runner 的启动与致命诊断失败优先于文件 denial；不可用
 
 ### 模型策略上下文
 
-插件 `sandbox-policy` 通过 engine 的 scoped step-context 接缝贡献上游 `sandbox:policy` section，与委派说明共用 `Engine.RegisterContext`。每个 step 的 provider 从同一份已提交日志返回 `ContextContribution`：`Sections` 是完整当前状态的各段，`Messages` 是独立输入。engine 先收集全部贡献，再按注册顺序以空行合并 section，添加一次 “Current runtime context. This snapshot supersedes earlier runtime-context snapshots.” 声明，比较并提交一份完整快照。普通 user-role `user/message` 的来源为 `runtime-context`、plugin `agent-engine`，位于当前用户输入之后、`step/start` 与 `request/header` 之前；独立的 skill 目录与调用正文跟在快照之后。provider 失败时不发布局部快照。
+插件 `sandbox-policy` 通过 engine 的 scoped step-context 接缝贡献上游 `sandbox:policy` section，与委派说明共用 `Engine.RegisterContext`。每个 step 的 provider 从同一份已提交日志返回 `ContextContribution`：`Sections` 是完整当前状态的各段，`Messages` 是独立输入。engine 先收集全部贡献，再按 section 的显式 order 稳定排序（上游 `CONTEXT_ORDERS` 的 `SANDBOX_POLICY: 110`、`SUBAGENT_DELEGATION: 120`，同 order 保持注册顺序）后以空行合并，添加一次 “Current runtime context. This snapshot supersedes earlier runtime-context snapshots.” 声明，比较并提交一份完整快照。普通 user-role `user/message` 的来源为 `runtime-context`、plugin `agent-engine`，位于当前用户输入之后、`step/start` 与 `request/header` 之前；独立的 skill 目录与调用正文跟在快照之后。provider 失败时不发布局部快照。
 
 策略正文沿用上游文本：workspace-write 包含已解析 workspace 与平台临时区说明，read-only 包含尝试工具并遵循拒绝/升级指引，full access 说明不限制文件修改。workspace 使用 `core/text.Quote` 按 JavaScript `JSON.stringify` 渲染，保留 `&`、`<`、`>`、U+2028、U+2029，仅转义引号、反斜线与控制字符。
 

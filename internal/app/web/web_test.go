@@ -199,19 +199,38 @@ func TestService_LifecycleRejectsWorkOutsideScope(t *testing.T) {
 // observes cancellation, then holds until released before reporting its return.
 type blockingOperation struct {
 	started, cancelled, release, returned chan struct{}
+	once                                  sync.Once
 }
 
 func newBlockingOperation() *blockingOperation {
 	return &blockingOperation{started: make(chan struct{}), cancelled: make(chan struct{}), release: make(chan struct{}), returned: make(chan struct{})}
 }
 
+// run holds the provider call after cancellation until release. A call that
+// is never cancelled also returns on release, so a failed test still lets
+// cleanup finish instead of hanging until the package timeout.
 func (operation *blockingOperation) run(ctx context.Context) error {
 	close(operation.started)
-	<-ctx.Done()
-	close(operation.cancelled)
-	<-operation.release
+	select {
+	case <-ctx.Done():
+		close(operation.cancelled)
+		<-operation.release
+	case <-operation.release:
+	}
 	close(operation.returned)
 	return ctx.Err()
+}
+
+func (operation *blockingOperation) unblock() { operation.once.Do(func() { close(operation.release) }) }
+
+// awaitCancelled bounds the wait for cleanup to cancel an in-flight call.
+func (operation *blockingOperation) awaitCancelled(t *testing.T, name string) {
+	t.Helper()
+	select {
+	case <-operation.cancelled:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("cleanup did not cancel the in-flight %s", name)
+	}
 }
 
 // Quiescence covers the service's own work: Close returns only after every
@@ -223,6 +242,9 @@ func TestService_ShutdownCancelsAndWaitsForInFlightOperations(t *testing.T) {
 	current := newFixture(t, configured, webStore{}, fetcherFunc(func(ctx context.Context, _ string) (FetchResult, error) {
 		return FetchResult{}, fetch.run(ctx)
 	}))
+	// Registered after the fixture, so it runs before the fixture's own
+	// cleanup and releases calls a failed assertion left blocked.
+	t.Cleanup(func() { search.unblock(); fetch.unblock() })
 	current.model.search = func(ctx context.Context, _ llm.SearchRequest) (llm.SearchResult, error) {
 		return llm.SearchResult{}, search.run(ctx)
 	}
@@ -240,8 +262,8 @@ func TestService_ShutdownCancelsAndWaitsForInFlightOperations(t *testing.T) {
 	<-fetch.started
 	closed := make(chan error, 1)
 	go func() { closed <- current.scope.Close(context.Background()) }()
-	<-search.cancelled
-	<-fetch.cancelled
+	search.awaitCancelled(t, "search")
+	fetch.awaitCancelled(t, "fetch")
 	// Both provider calls are cancelled but held, so their operations are still
 	// registered and Close must still be waiting.
 	select {
@@ -252,8 +274,8 @@ func TestService_ShutdownCancelsAndWaitsForInFlightOperations(t *testing.T) {
 	if _, err := current.service.Search(context.Background(), []string{"late"}, searchOwner()); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("search during shutdown=%v", err)
 	}
-	close(search.release)
-	close(fetch.release)
+	search.unblock()
+	fetch.unblock()
 	if err := <-closed; err != nil {
 		t.Fatal(err)
 	}

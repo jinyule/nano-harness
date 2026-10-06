@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"strings"
@@ -19,12 +20,28 @@ type ContextRequest struct {
 	Events []session.Event
 }
 
+// Runtime-context positions, upstream's CONTEXT_ORDERS: a snapshot lists
+// its sections by ascending order, whatever order providers registered in.
+const (
+	// OrderSandboxPolicy positions the sandbox:policy section.
+	OrderSandboxPolicy = 110
+	// OrderSubagentDelegation positions a delegated child's permission scope.
+	OrderSubagentDelegation = 120
+)
+
+// ContextSection is one part of the complete runtime snapshot. Sections are
+// joined by ascending Order; equal orders keep registration order.
+type ContextSection struct {
+	Order int
+	Text  string
+}
+
 // ContextContribution separates sections of the complete runtime snapshot
 // from independent user-role inputs, such as skill catalogs and invocations.
 type ContextContribution struct {
 	// Sections describes current runtime state without a replacement preamble.
 	// Providers contribute all their sections even when an older copy is visible.
-	Sections []string
+	Sections []ContextSection
 	// Messages follows the complete snapshot in registration order.
 	Messages []session.Message
 }
@@ -43,7 +60,8 @@ type ContextProvider interface {
 type contextEntry struct{ provider ContextProvider }
 
 // RegisterContext publishes a provider for exactly the caller's scope
-// lifetime. Providers run in registration order.
+// lifetime. Providers run in registration order, which orders independent
+// messages and equal-order sections; snapshot sections follow their Order.
 func (engine *Engine) RegisterContext(provider ContextProvider, scope *plugin.Scope) error {
 	if provider == nil || scope == nil {
 		return ErrInvalidConfig
@@ -93,7 +111,7 @@ func (engine *Engine) stepContext(ctx context.Context, input runInput, turn uint
 	if err != nil {
 		return err
 	}
-	var sections []string
+	var sections []ContextSection
 	var messages []session.Message
 	for _, entry := range entries {
 		contribution, err := entry.provider.StepContext(ctx, ContextRequest{Tools: slices.Clone(names), Events: events})
@@ -103,6 +121,7 @@ func (engine *Engine) stepContext(ctx context.Context, input runInput, turn uint
 		sections = append(sections, contribution.Sections...)
 		messages = append(messages, contribution.Messages...)
 	}
+	slices.SortStableFunc(sections, func(left, right ContextSection) int { return cmp.Compare(left.Order, right.Order) })
 	snapshot, err := runtimeSnapshot(events, sections)
 	if err != nil {
 		return err
@@ -113,11 +132,15 @@ func (engine *Engine) stepContext(ctx context.Context, input runInput, turn uint
 // runtimeSnapshot compares the whole current context with the latest retained
 // engine snapshot. A hidden snapshot is reconstructed after compaction; a fork
 // preserves its prefix and appends a replacement only when its own scope differs.
-func runtimeSnapshot(events []session.Event, sections []string) ([]session.Message, error) {
+func runtimeSnapshot(events []session.Event, sections []ContextSection) ([]session.Message, error) {
 	if len(sections) == 0 {
 		return nil, nil
 	}
-	text := "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n" + strings.Join(sections, "\n\n")
+	texts := make([]string, len(sections))
+	for index, section := range sections {
+		texts[index] = section.Text
+	}
+	text := "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n" + strings.Join(texts, "\n\n")
 	surface, err := session.Surface(events)
 	if err != nil {
 		return nil, err

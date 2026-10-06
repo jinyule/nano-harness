@@ -29,7 +29,7 @@ func TestSandboxContext_RegistrationAndAuthoritativeSection(t *testing.T) {
 	for _, mode := range []session.SandboxMode{session.SandboxWorkspaceWrite, session.SandboxReadOnly, session.SandboxDangerFullAccess} {
 		events := []session.Event{{Sequence: 1, Record: session.Record{Type: session.RecordSandboxMode, Sandbox: &session.SandboxModeChange{Mode: mode}}}}
 		contribution, err := provider.StepContext(t.Context(), ContextRequest{Events: events})
-		if err != nil || len(contribution.Sections) != 1 || contribution.Sections[0] != session.SandboxPolicyText(mode, "/workspace") || len(contribution.Messages) != 0 {
+		if err != nil || len(contribution.Sections) != 1 || contribution.Sections[0] != (ContextSection{Order: OrderSandboxPolicy, Text: session.SandboxPolicyText(mode, "/workspace")}) || len(contribution.Messages) != 0 {
 			t.Fatalf("section=%+v err=%v", contribution, err)
 		}
 	}

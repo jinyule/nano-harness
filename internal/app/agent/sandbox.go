@@ -30,7 +30,7 @@ func (provider *SandboxContext) Start(_ context.Context, scope *plugin.Scope) er
 // StepContext rebuilds the sandbox:policy section from authoritative mode
 // records. The engine owns snapshot aggregation, comparison, and publication.
 func (provider *SandboxContext) StepContext(_ context.Context, request ContextRequest) (ContextContribution, error) {
-	return ContextContribution{Sections: []string{session.SandboxPolicyText(session.EffectiveSandbox(request.Events), provider.workspace)}}, nil
+	return ContextContribution{Sections: []ContextSection{{Order: OrderSandboxPolicy, Text: session.SandboxPolicyText(session.EffectiveSandbox(request.Events), provider.workspace)}}}, nil
 }
 
 // SetSandboxMode is the human-only entry point for a live root. Its event is

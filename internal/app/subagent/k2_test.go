@@ -87,7 +87,7 @@ func TestService_ChildKeepsTheRouteItInherited(t *testing.T) {
 	receive(t, h.done(id))
 	childEvents := h.events(id)
 	// Cold resume keeps the committed runtime context instead of repeating it.
-	if contexts := messages(childEvents, SourceRuntimeContext); len(contexts) != 1 {
+	if contexts := messages(childEvents, runtimeContextSource); len(contexts) != 1 {
 		t.Fatalf("runtime contexts after resume = %d", len(contexts))
 	}
 	if descriptor := childEvents[0].Record.Subagent; descriptor.Route != (session.SubagentRoute{Provider: "openai", Model: "gpt-5.6-luna", Effort: session.EffortMax}) {
@@ -191,8 +191,8 @@ func TestService_DelegationSectionComesFromDescriptor(t *testing.T) {
 		if err != nil || len(contribution.Messages) != 0 {
 			t.Fatalf("%s: contribution=%+v error=%v", name, contribution, err)
 		}
-		if name == "root" && len(contribution.Sections) != 0 || name == "child" && !slices.Equal(contribution.Sections, []string{delegationContext}) {
-			t.Fatalf("%s: sections=%q", name, contribution.Sections)
+		if name == "root" && len(contribution.Sections) != 0 || name == "child" && !slices.Equal(contribution.Sections, []agent.ContextSection{{Order: agent.OrderSubagentDelegation, Text: delegationContext}}) {
+			t.Fatalf("%s: sections=%+v", name, contribution.Sections)
 		}
 	}
 }

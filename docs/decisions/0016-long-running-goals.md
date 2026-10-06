@@ -77,7 +77,7 @@ TUI 的 `/goal` 实现上游语法：空参数显示状态（阶段、阻塞原�
 ### 版本识别、拒绝旧格式与恢复
 
 - session format 保持 v2。`goal/change` 与消息来源的三个字段是加法格式，与 [ADR-0004](0004-provider-neutral-effort.md)、ADR-0014 一致：不含它们的 v2 日志仍可解码；较旧的二进制遇到 `goal/change` 或未知来源字段按未知记录/字段拒绝整份日志。
-- composition ID 使用 `goal-tools-v2` 绑定目标停止语义（见 [ADR-0018](0018-goal-stop-outcomes.md)）。由不含目标工具的组合创建的会话恢复时因 composition mismatch 被拒绝，不迁移，也不静默接受。本仓尚无发布 tag，没有需要迁移的已发布会话。
+- composition ID 的 goal token 绑定目标停止语义：[ADR-0018](0018-goal-stop-outcomes.md) 将其提升为 `goal-tools-v2`，[ADR-0019](0019-structured-tool-results.md) 的结构化结果再提升一次；当前值以 `cmd/nano-harness/main.go` 的 `compositionID` 为准。由不含目标工具的组合创建的会话恢复时因 composition mismatch 被拒绝，不迁移，也不静默接受。本仓尚无发布 tag，没有需要迁移的已发布会话。
 - 严格 decoder 拒绝未知字段、未知操作与阶段、缺失负载、带 turn/step 的记录和任何违反折叠的事实；非法行使整份日志被拒绝，文件不被截断或改写，维护者仍可离线检查原始数据。ECMAScript 空白修补保持 format v2 和 composition ID；原先误接受的首尾 BOM 文本与 ID 现在拒绝，含 NEL 的合法文本保持原文，不自动迁移旧记录。
 - `goal/change` 与其他事实保存在同一个只追加、`0600`、写后 `fsync` 的 JSONL 中，受单 record 6 MiB 与单 session 64 MiB 限制，compaction 不删除它，保留期与会话文件相同。resume 修复中断尾部不追加、不改动目标记录；恢复后目标、阶段、revision 与轮次计数不变，自动继续一律 disarmed，需人类 `/goal resume` 或在人类 turn 中由模型 resume。
 

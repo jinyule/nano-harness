@@ -19,9 +19,6 @@ const (
 	// SourceAgentMessage so a transcript never credits the child with words
 	// it did not write.
 	SourceSettled = session.SourceSubagentSettled
-	// SourceRuntimeContext marks the engine's complete runtime snapshot,
-	// including a delegated child's fixed permission scope.
-	SourceRuntimeContext = "runtime-context"
 )
 
 // delegationContext is the upstream delegation-scope statement, contributed

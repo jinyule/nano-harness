@@ -18,7 +18,7 @@ type contextProbe struct {
 	messages int
 	err      error
 	seen     []ContextRequest
-	sections []string
+	sections []ContextSection
 }
 
 func (probe *contextProbe) StepContext(_ context.Context, request ContextRequest) (ContextContribution, error) {
@@ -146,7 +146,7 @@ func TestEngine_CompleteRuntimeSnapshotLifecycle(t *testing.T) {
 		if err := NewSandboxContext(h.engine, "/workspace").Start(t.Context(), scope); err != nil {
 			t.Fatal(err)
 		}
-		if err := h.engine.RegisterContext(&contextProbe{sections: []string{scopeSection}, kind: "skill-catalog", messages: 1}, scope); err != nil {
+		if err := h.engine.RegisterContext(&contextProbe{sections: []ContextSection{{Order: OrderSubagentDelegation, Text: scopeSection}}, kind: "skill-catalog", messages: 1}, scope); err != nil {
 			t.Fatal(err)
 		}
 		return h
@@ -247,7 +247,7 @@ func TestEngine_RejectsIncompleteRuntimeSnapshot(t *testing.T) {
 				t.Fatal(err)
 			}
 			failure := errors.New("injected")
-			second := &contextProbe{sections: []string{"scope"}}
+			second := &contextProbe{sections: []ContextSection{{Order: OrderSubagentDelegation, Text: "scope"}}}
 			journal, log := turnJournal()
 			want := failure
 			switch cause {
@@ -311,5 +311,30 @@ func TestEngine_ContainsStepContextFailures(t *testing.T) {
 				t.Fatal("a step opened after its context failed")
 			}
 		})
+	}
+}
+
+// Snapshot sections follow their declared order, as upstream sorts runtime
+// contexts; registration order only breaks ties.
+func TestEngine_SnapshotSectionsFollowOrderNotRegistration(t *testing.T) {
+	h := startEngineHarness(t, 1)
+	scope := &plugin.Scope{}
+	t.Cleanup(func() { _ = scope.Close(context.Background()) })
+	for _, probe := range []*contextProbe{
+		{sections: []ContextSection{{Order: OrderSubagentDelegation, Text: "late"}}},
+		{sections: []ContextSection{{Order: OrderSandboxPolicy, Text: "early"}}},
+		{sections: []ContextSection{{Order: OrderSandboxPolicy, Text: "tie after early"}}},
+	} {
+		if err := h.engine.RegisterContext(probe, scope); err != nil {
+			t.Fatal(err)
+		}
+	}
+	journal, log := turnJournal()
+	if err := h.engine.stepContext(t.Context(), runInput{journal: journal}, 1); err != nil {
+		t.Fatal(err)
+	}
+	want := "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nearly\n\ntie after early\n\nlate"
+	if len(log.events) != 1 || session.Text(*log.events[0].Record.Message) != want {
+		t.Fatalf("snapshot = %+v", log.events)
 	}
 }

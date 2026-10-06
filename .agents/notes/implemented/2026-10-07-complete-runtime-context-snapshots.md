@@ -11,7 +11,7 @@
 
 ## Decision
 
-`ContextProvider` 返回 `ContextContribution`，将当前 runtime 的 `Sections` 与独立输入 `Messages` 分开。engine 从同一份已提交日志收集全部 section，按 scoped 注册顺序合并，统一添加一次替代声明、比较最新保留完整快照并提交；sandbox 与 subagent provider 只从权威事件重建 section。skill 目录与调用正文仍独立提交，在完整快照之后、step/header 之前。provider 失败时不发布局部快照；成功收集后的消息提交保留既有取消开场语义。注册与 cleanup 仍由各插件 Scope 拥有，无新缓存、goroutine 或进程。
+`ContextProvider` 返回 `ContextContribution`，将当前 runtime 的 `Sections` 与独立输入 `Messages` 分开。engine 从同一份已提交日志收集全部 section，按显式 order 稳定排序后合并（最初按 scoped 注册顺序，改为上游 order 的理由见[终审收尾记录](2026-10-07-final-review-polish.md)），统一添加一次替代声明、比较最新保留完整快照并提交；sandbox 与 subagent provider 只从权威事件重建 section。skill 目录与调用正文仍独立提交，在完整快照之后、step/header 之前。provider 失败时不发布局部快照；成功收集后的消息提交保留既有取消开场语义。注册与 cleanup 仍由各插件 Scope 拥有，无新缓存、goroutine 或进程。
 
 fork 原样保留 parent 前缀，在 child 自有任务之后追加含策略与委派范围的完整快照；冷恢复不重复提交可见的同一快照，compaction 隐藏后重新贡献全部 section。策略路径复用 `core/text.Quote`，保留 HTML 字符与 Unicode 分隔符，控制字符继续按 JSON 转义。
 

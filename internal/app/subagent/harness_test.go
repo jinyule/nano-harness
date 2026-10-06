@@ -80,6 +80,9 @@ func (*testModel) Search(context.Context, llm.Credential, llm.SearchRequest) (ll
 	return llm.SearchResult{}, nil
 }
 
+// runtimeContextSource is the engine's source kind for its runtime snapshot.
+const runtimeContextSource = "runtime-context"
+
 // latestUser returns the text of the last user message and whether a tool
 // result follows it. Runtime context is harness input, not a task, so it
 // is skipped.
@@ -89,7 +92,7 @@ func latestUser(request llm.Request) (string, bool) {
 		if node.Result != nil {
 			answered = true
 		}
-		if node.Message != nil && node.Message.Role == session.RoleUser && node.Message.Source.Kind != SourceRuntimeContext {
+		if node.Message != nil && node.Message.Role == session.RoleUser && node.Message.Source.Kind != runtimeContextSource {
 			return session.Text(*node.Message), answered
 		}
 	}

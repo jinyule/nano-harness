@@ -1209,5 +1209,19 @@
     "before": "ErrInvalidAnswer = errors.New(\"the user-questions answerer returned an invalid answer batch\")",
     "after": "ErrInvalidAnswer = &Error{Code: \"BAD_ANSWER\", Message: \"the user-questions answerer returned an invalid answer batch\"}",
     "test": "^TestService_BrokerFailuresStayUnclassified$"
+  },
+  {
+    "id": "web-cleanup-cancels-operations",
+    "file": "internal/app/web/web.go",
+    "before": "service.operations.Cancel(nil)",
+    "after": "// cleanup no longer cancels in-flight operations",
+    "test": "^TestService_ShutdownCancelsAndWaitsForInFlightOperations$"
+  },
+  {
+    "id": "context-sections-follow-order",
+    "file": "internal/app/agent/context.go",
+    "before": "return cmp.Compare(left.Order, right.Order)",
+    "after": "return cmp.Compare(0, 0)",
+    "test": "^TestEngine_SnapshotSectionsFollowOrderNotRegistration$"
   }
 ]

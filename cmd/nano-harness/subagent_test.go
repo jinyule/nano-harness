@@ -27,6 +27,9 @@ const subagentRoot = "session-sub"
 // receives before its first step.
 const runtimeContextPrefix = "Current runtime context."
 
+// runtimeContextSource is the engine's source kind for its runtime snapshot.
+const runtimeContextSource = "runtime-context"
+
 // subagentModel plays every agent of one composition on a loopback
 // Responses endpoint. Notices can land in any turn, so the root follows a
 // state machine over the tool outputs already in its history; children are
@@ -325,7 +328,7 @@ func TestComposition_SubagentsEndToEnd(t *testing.T) {
 			strings.Contains(contexts[0], session.SandboxPolicyText(session.SandboxWorkspaceWrite, config.workspaceRoot)+"\n\nYou are a delegated subagent:") &&
 			strings.Contains(contexts[0], "do not retry the denied operation")
 	}
-	if contexts := notices(childRecords, appSubagent.SourceRuntimeContext); !completeSnapshot(contexts) {
+	if contexts := notices(childRecords, runtimeContextSource); !completeSnapshot(contexts) {
 		t.Errorf("child runtime context = %q", contexts)
 	}
 	forkEvents := readTranscript(t, filepath.Join(data, "sessions", review.SessionID+".jsonl"))
@@ -347,7 +350,7 @@ func TestComposition_SubagentsEndToEnd(t *testing.T) {
 			t.Error("fork system prompt differs from its parent's")
 		}
 	}
-	if contexts := notices(ownRecords, appSubagent.SourceRuntimeContext); !completeSnapshot(contexts) {
+	if contexts := notices(ownRecords, runtimeContextSource); !completeSnapshot(contexts) {
 		t.Errorf("fork must append one complete snapshot after its unchanged inherited prefix: %q", contexts)
 	}
 
@@ -374,7 +377,7 @@ func TestComposition_SubagentsEndToEnd(t *testing.T) {
 	if outcome, _ := session.LastOutcome(readTranscript(t, filepath.Join(data, "sessions", child+".jsonl"))); outcome != session.OutcomeCanceled {
 		t.Errorf("resumed child outcome = %q", outcome)
 	}
-	if contexts := notices(transcript(child), appSubagent.SourceRuntimeContext); !completeSnapshot(contexts) {
+	if contexts := notices(transcript(child), runtimeContextSource); !completeSnapshot(contexts) {
 		t.Errorf("cold resume duplicated or lost the complete runtime snapshot: %q", contexts)
 	}
 	shutdown, stop := context.WithTimeout(context.Background(), 10*time.Second)
