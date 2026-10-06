@@ -119,7 +119,7 @@
 | subagent 工具族（`0073dfb`） | 默认分支与常规文案对齐 | 正确性：并发创建重复计数、已取消 send_message 仍投递、中断后新消息不唤醒、清理失败仍宣告成功、后台 fork 准入顺序、closing output 选择、description 截断（已派 Codex-K1）。设计：child 未固定并持久化继承的 route、委派说明放在 system prompt 破坏 fork 前缀、发送者身份未持久化（待 H2 合入后派发）；生命周期事件与回执暂缓（无消费者） |
 | 交互与会话状态（`0073dfb`） | todo、提问、规划、goal、skill 主路径对齐 | todo/goal/plan 与 `/goal edit` 的 ECMAScript 空白、skill 描述按 UTF-16 计数、todo 重复项引用格式、TUI 多选不能补充自由回答、发现不完整时 `/name` 被静默吞掉；结构化错误（WP12）。待 Codex-E（共享空白判断）合入后派发 |
 
-审计小修合入进度：文件工具（Codex-H1）`7269f8f`；搜索、spill 与共享 ECMAScript 空白判断（Codex-E）`3fa09d6`；job 前台交接与回退归属（Codex-C）`596ed4d`。运行时（Codex-H2 `37358cb`）与 web 传输层（Codex-F `4afa079`）已提交、待 rebase；HTML（Codex-G）、WP15、K1、settings 偶发失败排查因 Codex 限流中断，待接手。
+审计小修合入进度：文件工具（Codex-H1）`7269f8f`；搜索、spill 与共享 ECMAScript 空白判断（Codex-E）`3fa09d6`；job 前台交接与回退归属（Codex-C）`596ed4d`。web 传输层（Codex-F）`27eb355`；运行时（Codex-H2 `37358cb`）已提交、rebase 冲突较多，交回 Codex 处理；HTML（Codex-G）、WP15、K1、settings 偶发失败排查因 Codex 限流中断，待接手。
 
 ### 后续项（不在本次范围）
 
