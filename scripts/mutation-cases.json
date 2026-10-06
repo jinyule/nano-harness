@@ -611,9 +611,23 @@
   {
     "id": "goal-admission-stop-owner",
     "file": "internal/app/goal/goal.go",
-    "before": "outcome.disarm != nil && *outcome.disarm == ref",
-    "after": "outcome.disarm != nil",
+    "before": "slices.Contains(outcome.disarm, ref)",
+    "after": "slices.ContainsFunc(outcome.disarm, func(session.GoalRef) bool { return true })",
     "test": "^TestService_SettleUsesStoppedRoundRef$"
+  },
+  {
+    "id": "goal-settle-keeps-pause",
+    "file": "internal/app/goal/goal.go",
+    "before": "outcome.disarm = append(outcome.disarm, *ref)",
+    "after": "outcome = settlement{disarm: []session.GoalRef{*ref}}",
+    "test": "^TestService_SettleWindowKeepsACancelledRoundPause$"
+  },
+  {
+    "id": "goal-failure-drops-pause",
+    "file": "internal/app/goal/goal.go",
+    "before": "if record.Outcome != session.OutcomeCanceled && outcome.pause != nil && *outcome.pause == *ref {",
+    "after": "if false && record.Outcome != session.OutcomeCanceled && outcome.pause != nil && *outcome.pause == *ref {",
+    "test": "^TestService_SettleWindowKeepsACancelledRoundPause$"
   },
   {
     "id": "prune-relieves-pressure",

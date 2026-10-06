@@ -7,7 +7,7 @@
 
 `Settle` 的 revision 条件更新保护读取旧结局后发生的重新授权，但错误与输出上限仍使用结算时当前 goal 的 Ref。人类 clear/create 或 pause/resume 先于旧轮次 durable ending 时，旧 error/max_tokens 因而撤销新授权。admission 的停止投影也没有区分归属，会拒绝新 revision。调查基于 `726a95f470246be0b5bde1e15290eaa261cb566c`。
 
-本 Note 补充[目标停止修复](2026-10-06-goal-stop-outcomes.md)，拥有轮次归属和跨 checkpoint 的证据；旧 Note 继续拥有输出原因映射、持久化 outcome、开场失败停止与读后授权交错。长期规则由 [ADR-0018](../../../docs/decisions/0018-goal-stop-outcomes.md) 细化，[ADR-0016](../../../docs/decisions/0016-long-running-goals.md) 同步 driver 与 admission。
+本 Note 补充[目标停止修复](2026-10-06-goal-stop-outcomes.md)，拥有轮次归属和跨 checkpoint 的证据；旧 Note 继续拥有输出原因映射、持久化 outcome、开场失败停止与读后授权交错。同一结算窗口内暂停与解除的累积规则由[结算窗口修复](2026-10-06-goal-settle-window.md)拥有。长期规则由 [ADR-0018](../../../docs/decisions/0018-goal-stop-outcomes.md) 细化，[ADR-0016](../../../docs/decisions/0016-long-running-goals.md) 同步 driver 与 admission。
 
 ## Decision
 

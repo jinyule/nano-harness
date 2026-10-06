@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -546,8 +547,8 @@ func (service *Service) Settle(ctx context.Context, sessionID string, after uint
 			return last, err
 		}
 	}
-	if outcome.disarm != nil {
-		service.DisarmRevision(sessionID, *outcome.disarm)
+	for _, ref := range outcome.disarm {
+		service.DisarmRevision(sessionID, ref)
 	}
 	return last, nil
 }
@@ -559,19 +560,23 @@ func (service *Service) isArmed(sessionID string) bool {
 }
 
 // settlement is what the turns after a sequence imply for continuation.
+// The two parts accumulate independently: a later stop never erases an
+// earlier pause, and only a create or resume clears both.
 type settlement struct {
 	// pause names the revision of a cancelled goal round.
 	pause *session.GoalRef
-	// disarm names the revision stopped by cancellation, failure, or output limit.
-	disarm *session.GoalRef
+	// disarm names every revision stopped by cancellation, failure, or output limit.
+	disarm []session.GoalRef
 }
 
 func (outcome settlement) revoked(ref session.GoalRef) bool {
-	return outcome.pause != nil && *outcome.pause == ref || outcome.disarm != nil && *outcome.disarm == ref
+	return outcome.pause != nil && *outcome.pause == ref || slices.Contains(outcome.disarm, ref)
 }
 
 // settle scans events after sequence after. A create or resume clears
-// everything an earlier stop implied. Earlier events still supply the
+// everything an earlier stop implied. As upstream, a failure or output limit
+// disarms its revision at once, so it also drops a pending pause of that
+// revision, while a later cancellation leaves the pause in place. Earlier events still supply the
 // current goal and the opening revision of a turn crossing the checkpoint.
 func settle(events []session.Event, after uint64) settlement {
 	var outcome settlement
@@ -601,13 +606,19 @@ func settle(events []session.Event, after uint64) settlement {
 		case record.Type == session.RecordGoalChange && (record.Goal.Operation == session.GoalOpCreate || record.Goal.Operation == session.GoalOpResume):
 			outcome = settlement{}
 		case record.Type == session.RecordTurnEnd && record.Outcome == session.OutcomeCanceled && round != nil:
-			outcome = settlement{pause: round}
+			outcome.pause = round
 		case record.Type == session.RecordTurnEnd && (record.Outcome == session.OutcomeCanceled || record.Outcome == session.OutcomeError || record.Outcome == session.OutcomeMaxTokens):
 			ref := current
 			if round != nil {
 				ref = round
 			}
-			outcome = settlement{disarm: ref}
+			if ref == nil {
+				continue
+			}
+			if record.Outcome != session.OutcomeCanceled && outcome.pause != nil && *outcome.pause == *ref {
+				outcome.pause = nil
+			}
+			outcome.disarm = append(outcome.disarm, *ref)
 		}
 	}
 	return outcome
