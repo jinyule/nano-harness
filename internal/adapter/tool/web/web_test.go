@@ -28,12 +28,24 @@ func (approver refusingApprover) Decide(context.Context, appTool.ApprovalRequest
 }
 
 type fakeService struct {
-	search func(context.Context, []string) (appWeb.SearchResult, error)
+	search func(context.Context, []string, appWeb.SearchInvocation) (appWeb.SearchResult, error)
 	fetch  func(context.Context, string) (appWeb.FetchResult, error)
 }
 
-func (service fakeService) Search(ctx context.Context, queries []string) (appWeb.SearchResult, error) {
-	return service.search(ctx, queries)
+func TestProvider_SearchWithoutJournalFailsClosed(t *testing.T) {
+	var searches atomic.Int32
+	runtime := startProvider(t, fakeService{search: func(context.Context, []string, appWeb.SearchInvocation) (appWeb.SearchResult, error) {
+		searches.Add(1)
+		return appWeb.SearchResult{}, nil
+	}})
+	results := runtime.ExecuteBatch(t.Context(), appTool.BatchRequest{Calls: []session.ToolCall{{ID: "search", Name: "web_search", Arguments: json.RawMessage(`{"queries":["go"]}`)}}})
+	if searches.Load() != 0 || !results[0].IsError || !strings.Contains(results[0].Output, "web_search requires an owning agent session") {
+		t.Fatalf("searches=%d result=%+v", searches.Load(), results[0])
+	}
+}
+
+func (service fakeService) Search(ctx context.Context, queries []string, invocation appWeb.SearchInvocation) (appWeb.SearchResult, error) {
+	return service.search(ctx, queries, invocation)
 }
 func (service fakeService) Fetch(ctx context.Context, url string) (appWeb.FetchResult, error) {
 	return service.fetch(ctx, url)
@@ -170,7 +182,7 @@ func TestTools_ExecuteConcurrentlyThroughRuntime(t *testing.T) {
 	arrived.Add(2)
 	var calls atomic.Int32
 	service := fakeService{
-		search: func(_ context.Context, queries []string) (appWeb.SearchResult, error) {
+		search: func(_ context.Context, queries []string, _ appWeb.SearchInvocation) (appWeb.SearchResult, error) {
 			calls.Add(1)
 			arrived.Done()
 			arrived.Wait()
@@ -192,7 +204,7 @@ func TestTools_ExecuteConcurrentlyThroughRuntime(t *testing.T) {
 	}
 	runtime := startProvider(t, service)
 	execute := func(calls ...session.ToolCall) []session.ToolResult {
-		return runtime.ExecuteBatch(context.Background(), appTool.BatchRequest{SessionID: "s", Turn: 1, Step: 1, Calls: calls})
+		return runtime.ExecuteBatch(context.Background(), appTool.BatchRequest{SessionID: "s", Turn: 1, Step: 1, Calls: calls, Journal: acceptingJournal{}})
 	}
 	results := execute(
 		session.ToolCall{ID: "search", Name: "web_search", Arguments: json.RawMessage(`{"queries":["go","rust"]}`)},
@@ -318,5 +330,26 @@ func TestFormatFetch_BoundsConversionSourceAndSmallBudgets(t *testing.T) {
 				t.Fatalf("got=%q\nwant=%q", got, test.want)
 			}
 		})
+	}
+}
+
+type acceptingJournal struct{}
+
+func (acceptingJournal) Append(_ context.Context, record session.Record) (session.Event, error) {
+	return session.Event{Record: record}, nil
+}
+
+func TestProvider_ForwardsAuditOwnershipAndReportsRecordFailure(t *testing.T) {
+	var captured appWeb.SearchInvocation
+	runtime := startProvider(t, fakeService{search: func(_ context.Context, _ []string, invocation appWeb.SearchInvocation) (appWeb.SearchResult, error) {
+		captured = invocation
+		return appWeb.SearchResult{}, &appWeb.Error{Code: appWeb.CodeRequestRecordFailed, Message: "could not persist web search request; request was not sent", Cause: errors.New("private disk detail")}
+	}})
+	results := runtime.ExecuteBatch(t.Context(), appTool.BatchRequest{SessionID: "child", Turn: 3, Step: 2, Journal: acceptingJournal{}, Calls: []session.ToolCall{{ID: "search", Name: "web_search", Arguments: json.RawMessage(`{"queries":["go"]}`)}}})
+	if captured.Turn != 3 || captured.Step != 2 || captured.CallID != "search" || captured.Journal != (acceptingJournal{}) {
+		t.Fatalf("ownership=%+v", captured)
+	}
+	if !results[0].IsError || results[0].Output != "Error: WEB_REQUEST_RECORD_FAILED: could not persist web search request; request was not sent" {
+		t.Fatalf("record failure=%+v", results[0])
 	}
 }

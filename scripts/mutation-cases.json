@@ -376,5 +376,19 @@
     "before": "if call.ArgumentsOmitted && !record.Result.IsError {",
     "after": "if false && call.ArgumentsOmitted && !record.Result.IsError {",
     "test": "^TestSessionV2Arguments_RejectsChangedContract$"
+  },
+  {
+    "id": "web-search-audit-failure",
+    "file": "internal/adapter/model/provider/search.go",
+    "before": "return fmt.Errorf(\"%w: %w\", llm.ErrSearchAudit, err)",
+    "after": "return nil",
+    "test": "^TestSearch_AuditFailurePreventsEveryProviderDispatch$"
+  },
+  {
+    "id": "web-search-audit-call-kind",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": "if call == nil || call.Name != \"web_search\" || call.ArgumentsOmitted {",
+    "after": "if call == nil || call.ArgumentsOmitted {",
+    "test": "^TestSessionV2WebSearch_RejectsChangedContract$"
   }
 ]

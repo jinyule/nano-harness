@@ -117,6 +117,13 @@ func (provider *Provider) searchResponses(ctx context.Context, current *snapshot
 	if model.Effort != "" {
 		payload.Reasoning = &responsesReasoning{Effort: model.Effort}
 	}
+	category := "openai-responses"
+	if credential.Kind == llm.CredentialOAuth {
+		category = "codex-responses"
+	}
+	if err := provider.recordSearch(ctx, model, request, category, 0, 0); err != nil {
+		return llm.SearchResult{}, err
+	}
 	return send(ctx, provider, endpoint, "text/event-stream", payload, headers, provider.consumeResponsesSearch)
 }
 
@@ -235,6 +242,9 @@ func (provider *Provider) searchAnthropic(ctx context.Context, current *snapshot
 	if model.Effort != "" {
 		payload.OutputConfig = &anthropicOutputConfig{Effort: model.Effort}
 	}
+	if err := provider.recordSearch(ctx, model, request, "anthropic-messages", payload.Tools[0].MaxUses, payload.MaxTokens); err != nil {
+		return llm.SearchResult{}, err
+	}
 	return send(ctx, provider, current.baseURL+"/v1/messages", "application/json", payload, headers, provider.consumeAnthropicSearch)
 }
 
@@ -352,6 +362,9 @@ func (provider *Provider) searchOpenRouter(ctx context.Context, current *snapsho
 		Tools: []openRouterSearchTool{tool}, ReasoningEffort: model.Effort, Stream: false,
 	}
 	headers := map[string]string{"Authorization": "Bearer " + credential.APIKey}
+	if err := provider.recordSearch(ctx, model, request, "openrouter-chat-completions", 0, 0); err != nil {
+		return llm.SearchResult{}, err
+	}
 	return send(ctx, provider, current.baseURL+"/chat/completions", "application/json", payload, headers, provider.consumeOpenRouterSearch)
 }
 
@@ -378,4 +391,23 @@ func (provider *Provider) consumeOpenRouterSearch(body io.Reader) (llm.SearchRes
 		}
 	}
 	return llm.SearchResult{Content: message.Content, Sources: sources.sources}, nil
+}
+
+// recordSearch excludes transport addresses, headers, and credentials. A committed
+// intent is not proof of dispatch: cancellation can still win after the append.
+func (provider *Provider) recordSearch(ctx context.Context, model llm.ModelInfo, request llm.SearchRequest, endpoint string, maxUses, maxTokens int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if request.RecordRequest == nil {
+		return llm.ErrSearchAudit
+	}
+	if err := request.RecordRequest(ctx, session.WebSearchRequest{
+		Provider: provider.id, Model: model.ID, Effort: model.Effort,
+		Endpoint: endpoint, Query: request.Query, TimeoutMS: request.TimeoutMS,
+		MaxResults: request.MaxResults, MaxUses: maxUses, MaxTokens: maxTokens,
+	}); err != nil {
+		return fmt.Errorf("%w: %w", llm.ErrSearchAudit, err)
+	}
+	return ctx.Err()
 }

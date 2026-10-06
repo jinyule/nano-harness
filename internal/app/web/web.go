@@ -13,6 +13,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/app/settings"
 	"github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
+	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
 const (
@@ -44,6 +45,8 @@ const (
 	CodeCredentialMissing Code = "WEB_PROVIDER_CREDENTIAL_MISSING" //nolint:gosec // an error code name, not a credential
 	// CodeProviderError covers provider, transport, and protocol failures.
 	CodeProviderError Code = "WEB_PROVIDER_ERROR"
+	// CodeRequestRecordFailed means the request intent could not be committed.
+	CodeRequestRecordFailed Code = "WEB_REQUEST_RECORD_FAILED"
 	// CodeAborted means the caller or service shutdown cancelled the operation.
 	CodeAborted Code = "WEB_ABORTED"
 	// CodeSearchTimeout means one search call exceeded SearchTimeout.
@@ -182,10 +185,23 @@ func (service *Service) begin(ctx context.Context) (context.Context, func(), err
 	}, nil
 }
 
+// Journal commits facts to the session that owns a search call.
+type Journal interface {
+	Append(context.Context, session.Record) (session.Event, error)
+}
+
+// SearchInvocation binds each request intent to its pending tool call.
+// Journal is mandatory; standalone searches fail closed.
+type SearchInvocation struct {
+	Journal    Journal
+	Turn, Step uint64
+	CallID     string
+}
+
 // Search runs every accepted query through the configured route with one
 // account preparation. Multiple queries run concurrently; the first failure
 // cancels the others and is returned after all have settled.
-func (service *Service) Search(ctx context.Context, queries []string) (SearchResult, error) {
+func (service *Service) Search(ctx context.Context, queries []string, invocation SearchInvocation) (SearchResult, error) {
 	accepted, err := parseQueries(queries)
 	if err != nil {
 		return SearchResult{}, err
@@ -195,6 +211,9 @@ func (service *Service) Search(ctx context.Context, queries []string) (SearchRes
 		return SearchResult{}, err
 	}
 	defer done()
+	if invocation.Journal == nil {
+		return SearchResult{}, errors.New("web_search requires an owning agent session")
+	}
 	document, _, err := service.settings.Snapshot()
 	if err != nil {
 		return SearchResult{}, err
@@ -209,7 +228,7 @@ func (service *Service) Search(ctx context.Context, queries []string) (SearchRes
 	if err != nil {
 		return SearchResult{}, service.searchError(ctx, route, err)
 	}
-	results, err := runQueries(ctx, call, accepted)
+	results, err := runQueries(ctx, call, accepted, invocation, service.searchTimeout.Milliseconds())
 	if err != nil {
 		return SearchResult{}, service.searchError(ctx, route, err)
 	}
@@ -242,7 +261,7 @@ func parseQueries(queries []string) ([]string, error) {
 	return accepted, nil
 }
 
-func runQueries(ctx context.Context, call *llm.Call, queries []string) ([]SearchResult, error) {
+func runQueries(ctx context.Context, call *llm.Call, queries []string, invocation SearchInvocation, timeoutMS int64) ([]SearchResult, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var (
@@ -251,9 +270,30 @@ func runQueries(ctx context.Context, call *llm.Call, queries []string) ([]Search
 		first error
 	)
 	results := make([]SearchResult, len(queries))
+	previous := make(chan struct{})
+	close(previous)
 	for index, query := range queries {
+		ready, committed := previous, make(chan struct{})
+		previous = committed
 		group.Go(func() {
-			found, err := call.Search(ctx, llm.SearchRequest{Query: query, MaxResults: MaxResults})
+			found, err := call.Search(ctx, llm.SearchRequest{Query: query, MaxResults: MaxResults, TimeoutMS: timeoutMS,
+				RecordRequest: func(ctx context.Context, data session.WebSearchRequest) error {
+					// Only appends are ordered; dispatched queries overlap. A failed
+					// append leaves the gate closed until cancellation releases waiters.
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-ready:
+					}
+					data.CallID, data.Index = invocation.CallID, index+1
+					_, err := invocation.Journal.Append(ctx, session.Record{Type: session.RecordWebSearchRequest, Turn: invocation.Turn, Step: invocation.Step, Search: &data})
+					if err != nil {
+						return err
+					}
+					close(committed)
+					return nil
+				},
+			})
 			if err != nil {
 				once.Do(func() {
 					first = err
@@ -323,6 +363,8 @@ func (service *Service) searchError(ctx context.Context, route settings.WebSearc
 		return &Error{Code: CodeSearchTimeout, Message: fmt.Sprintf("web search through %s timed out after %s", target, service.searchTimeout), Cause: err}
 	case ctx.Err() != nil:
 		return &Error{Code: CodeAborted, Message: "web search was cancelled", Cause: err}
+	case errors.Is(err, llm.ErrSearchAudit):
+		return &Error{Code: CodeRequestRecordFailed, Message: "could not persist web search request; request was not sent", Cause: err}
 	case errors.Is(err, llm.ErrNoCredential):
 		return &Error{Code: CodeCredentialMissing, Message: fmt.Sprintf("provider %q has no account for web search; ask the user to log in to it", route.Provider), Cause: err}
 	case errors.As(err, &failure):

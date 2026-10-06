@@ -119,7 +119,7 @@ func (model *model) applyEvent(event session.Event, live bool) {
 		model.layout()
 	case session.RecordStepStart, session.RecordApprovalDecided,
 		session.RecordApprovalPolicy, session.RecordRetryStarted, session.RecordCompactionSummary,
-		session.RecordSubagentDescriptor, session.RecordSubagentCatalog, session.RecordStepEnd:
+		session.RecordSubagentDescriptor, session.RecordSubagentCatalog, session.RecordWebSearchRequest, session.RecordStepEnd:
 		// These facts affect replay or lifecycle state but have no standalone TUI line.
 	}
 }

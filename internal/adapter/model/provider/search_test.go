@@ -141,6 +141,9 @@ func searchWith(t *testing.T, provider *Provider, credential llm.Credential, req
 	if err != nil {
 		t.Fatal(err)
 	}
+	if request.RecordRequest == nil {
+		request.RecordRequest = func(context.Context, session.WebSearchRequest) error { return nil }
+	}
 	return prepared.Search(context.Background(), credential, request)
 }
 
@@ -234,6 +237,7 @@ func TestSearch_WireRequestsAndNormalizedResults(t *testing.T) {
 		})
 	}
 
+	request.RecordRequest = func(context.Context, session.WebSearchRequest) error { return nil }
 	// Unset effort is omitted from every search wire, matching chat requests.
 	model := llm.ModelInfo{Provider: "openai", ID: "plain"}
 	if _, err := providers["openai"].searchResponses(context.Background(), &snapshot{baseURL: server.URL}, model, apiKey, request); err != nil {
@@ -348,7 +352,7 @@ func TestSearch_HTTPStatusTransportAndCancellation(t *testing.T) {
 		cancel()
 	}()
 	prepared, _ := cancelled["openrouter"].Prepare("search-model")
-	if _, err := prepared.Search(ctx, credential, llm.SearchRequest{Query: "go", MaxResults: 1}); !errors.Is(err, context.Canceled) {
+	if _, err := prepared.Search(ctx, credential, llm.SearchRequest{Query: "go", MaxResults: 1, RecordRequest: func(context.Context, session.WebSearchRequest) error { return nil }}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled search=%v", err)
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -39,33 +40,75 @@ data: {"type":"response.completed","response":{}}
 // webModelServer plays both the chat model and the server-side search model on
 // one loopback Responses endpoint, distinguishing them by the request tools.
 type webModelServer struct {
-	mu       sync.Mutex
-	searches []map[string]any
-	chats    int
+	mu               sync.Mutex
+	searches         []map[string]any
+	chats            int
+	expectedSearches int
+	allStarted       chan struct{}
+	auditPath        string
+	t                *testing.T
+	chatRequests     []map[string]any
+	queries          []string
 }
 
 func (server *webModelServer) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	var body map[string]any
-	if request.URL.Path != "/v1/responses" || json.NewDecoder(request.Body).Decode(&body) != nil {
+	if json.NewDecoder(request.Body).Decode(&body) != nil {
 		http.Error(writer, "bad request", http.StatusBadRequest)
 		return
 	}
 	writer.Header().Set("Content-Type", "text/event-stream")
 	tools, _ := body["tools"].([]any)
-	if len(tools) == 1 && tools[0].(map[string]any)["type"] == "web_search" {
+	if request.URL.Path != "/v1/responses" || len(tools) == 1 && tools[0].(map[string]any)["type"] == "web_search" {
 		server.mu.Lock()
 		server.searches = append(server.searches, body)
+		if len(server.searches) == server.expectedSearches {
+			close(server.allStarted)
+		}
 		server.mu.Unlock()
-		_, _ = io.WriteString(writer, webSearchSSE)
+		// Read the actual disk bytes while the HTTP request is in flight. A later
+		// append may have an incomplete final line, which is not this request's audit.
+		disk, err := os.ReadFile(server.auditPath)
+		if err != nil {
+			server.t.Error(err)
+		}
+		encoded, _ := json.Marshal(body)
+		found := false
+		for line := range bytes.SplitSeq(disk, []byte{'\n'}) {
+			var event session.Event
+			if json.Unmarshal(line, &event) == nil && event.Record.Search != nil {
+				prompt, _ := json.Marshal("Perform a web search for the query: " + event.Record.Search.Query)
+				found = found || bytes.Contains(encoded, prompt)
+			}
+		}
+		if !found {
+			server.t.Error("HTTP search arrived before its audit was durable")
+		}
+		select {
+		case <-server.allStarted:
+		case <-request.Context().Done():
+			return
+		}
+		switch request.URL.Path {
+		case "/v1/messages":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"content":[{"type":"web_search_tool_result","content":[]}]}`)
+		case "/chat/completions":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"choices":[{"message":{"content":"searched"}}]}`)
+		default:
+			_, _ = io.WriteString(writer, webSearchSSE)
+		}
 		return
 	}
 	server.mu.Lock()
 	server.chats++
+	server.chatRequests = append(server.chatRequests, body)
 	first := server.chats == 1
 	server.mu.Unlock()
 	if first {
 		for index, call := range []struct{ id, name, arguments string }{
-			{"call-search", "web_search", `{"queries":["go release"]}`},
+			{"call-search", "web_search", server.queryArguments()},
 			{"call-fetch", "web_fetch", `{"url":"http://docs.example.test/guide"}`},
 		} {
 			item, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": call.id, "name": call.name, "arguments": call.arguments})
@@ -78,10 +121,13 @@ func (server *webModelServer) ServeHTTP(writer http.ResponseWriter, request *htt
 }
 
 // runWebTurn assembles the real application, submits one task, and returns the durable transcript.
-func runWebTurn(t *testing.T, searchSettings string) ([]session.Record, *webModelServer, int32) {
+func runWebTurn(t *testing.T, searchSettings string, queries ...string) ([]session.Record, *webModelServer, int32) {
 	t.Helper()
 	t.Setenv("OPENAI_API_KEY", "test-key")
-	models := &webModelServer{}
+	if len(queries) == 0 {
+		queries = []string{"go release"}
+	}
+	models := &webModelServer{expectedSearches: len(queries), allStarted: make(chan struct{}), t: t}
 	modelServer := httptest.NewServer(models)
 	t.Cleanup(modelServer.Close)
 	var pageHits atomic.Int32
@@ -106,8 +152,15 @@ func runWebTurn(t *testing.T, searchSettings string) ([]session.Record, *webMode
 
 	root := t.TempDir()
 	data := t.TempDir()
+	models.auditPath = filepath.Join(data, "sessions", "session-web.jsonl")
+	models.queries = queries
 	settingsPath := filepath.Join(data, "settings.yaml")
 	settingsYAML := fmt.Sprintf("route:\n  provider: openai\n  model: test-model\nproviders:\n  openai:\n    base_url: %s\n    models:\n      - id: test-model\n        name: Test\n        context_window: 8192\n        vision: false\n        tools: true\n%s", modelServer.URL, searchSettings)
+	for _, id := range []string{"anthropic", "openrouter"} {
+		settingsYAML = strings.Replace(settingsYAML, "providers:\n", fmt.Sprintf("providers:\n  %s:\n    base_url: %s\n    models:\n      - id: test-model\n        name: Test\n        tools: true\n        context_window: 8192\n", id, modelServer.URL), 1)
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
 	if err := os.WriteFile(settingsPath, []byte(settingsYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -169,8 +222,33 @@ func toolResults(records []session.Record) map[string]session.ToolResult {
 	return results
 }
 
+func TestComposition_WebSearchAuditsNELQuery(t *testing.T) {
+	records, models, _ := runWebTurn(t, "web:\n  search:\n    provider: openai\n    model: test-model\n", "\u0085")
+	if result := toolResults(records)["call-search"]; result.IsError || len(models.searches) != 1 {
+		t.Fatalf("nonblank NEL query blocked: result=%+v searches=%d", result, len(models.searches))
+	}
+	var audits []session.WebSearchRequest
+	for _, record := range records {
+		if record.Search != nil {
+			audits = append(audits, *record.Search)
+		}
+	}
+	if len(audits) != 1 || audits[0].Query != "\u0085" {
+		t.Fatalf("NEL query audit=%+v", audits)
+	}
+}
+
 func TestComposition_WebSearchAndFetchEndToEnd(t *testing.T) {
 	records, models, pageHits := runWebTurn(t, "web:\n  search:\n    provider: openai\n    model: test-model\n")
+	auditCount := 0
+	for _, record := range records {
+		if record.Type == "web/search-request" {
+			auditCount++
+		}
+	}
+	if auditCount != 1 {
+		t.Fatalf("disk transcript has %d search request audits, want 1", auditCount)
+	}
 	var header *session.RequestHeader
 	for _, record := range records {
 		if record.Type == session.RecordRequestHeader {
@@ -224,5 +302,49 @@ func TestComposition_WebSearchUnconfiguredFailsClosed(t *testing.T) {
 	}
 	if len(models.searches) != 0 {
 		t.Fatal("unconfigured search reached a provider")
+	}
+}
+
+func (server *webModelServer) queryArguments() string {
+	encoded, _ := json.Marshal(map[string]any{"queries": server.queries})
+	return string(encoded)
+}
+
+func TestComposition_WebSearchAuditsConcurrentQueriesOnDisk(t *testing.T) {
+	for _, id := range []string{"openai", "anthropic", "openrouter"} {
+		for count := 1; count <= 4; count++ {
+			t.Run(fmt.Sprintf("%s/%d", id, count), func(t *testing.T) {
+				queries := []string{"go", "rust", "swift", "zig"}[:count]
+				records, models, _ := runWebTurn(t, fmt.Sprintf("web:\n  search:\n    provider: %s\n    model: test-model\n", id), queries...)
+				var audits []session.WebSearchRequest
+				pending := false
+				for _, record := range records {
+					if record.Call != nil && record.Call.ID == "call-search" {
+						pending = true
+					}
+					if record.Search != nil {
+						if !pending || record.Turn != 1 || record.Step != 1 || record.Search.CallID != "call-search" {
+							t.Fatalf("audit causality=%+v", record)
+						}
+						audits = append(audits, *record.Search)
+					}
+					if record.Result != nil && record.Result.CallID == "call-search" {
+						pending = false
+					}
+				}
+				if len(audits) != count || len(models.searches) != count || toolResults(records)["call-search"].IsError {
+					t.Fatalf("audits=%+v searches=%d result=%+v", audits, len(models.searches), toolResults(records)["call-search"])
+				}
+				for i, audit := range audits {
+					if audit.Index != i+1 || audit.Query != queries[i] || audit.Provider != id || audit.Model != "test-model" || audit.TimeoutMS != 60000 || audit.MaxResults != 8 {
+						t.Fatalf("audit=%+v", audit)
+					}
+				}
+				replayed, _ := json.Marshal(models.chatRequests[1]["input"])
+				if bytes.Contains(replayed, []byte("timeout_ms")) || bytes.Contains(replayed, []byte("web/search-request")) || bytes.Contains(replayed, []byte(audits[0].Endpoint)) {
+					t.Fatal("audit leaked into model surface")
+				}
+			})
+		}
 	}
 }

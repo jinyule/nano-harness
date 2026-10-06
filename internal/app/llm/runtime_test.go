@@ -230,10 +230,15 @@ func TestRuntimeRouteLoginAndCleanup(t *testing.T) {
 		t.Fatal("nil emit accepted")
 	}
 	found, err := call.Search(context.Background(), SearchRequest{Query: "go", MaxResults: 8})
-	if err != nil || found.Content != "answer" || prepared.search != (SearchRequest{Query: "go", MaxResults: 8}) || prepared.credential.APIKey != "key" {
+	if err != nil || found.Content != "answer" || (prepared.search.Query != "go" || prepared.search.MaxResults != 8) || prepared.credential.APIKey != "key" {
 		t.Fatalf("search=%#v err=%v forwarded=%#v", found, err, prepared.search)
 	}
-	for _, invalid := range []SearchRequest{{Query: " ", MaxResults: 8}, {Query: "go"}} {
+	for _, query := range []string{"\u0085", "\ufeff\u0085\ufeff"} {
+		if _, err := call.Search(t.Context(), SearchRequest{Query: query, MaxResults: 8}); err != nil || prepared.search.Query != query {
+			t.Fatalf("nonblank search query=%q: %v", query, err)
+		}
+	}
+	for _, invalid := range []SearchRequest{{Query: " ", MaxResults: 8}, {Query: "\ufeff", MaxResults: 8}, {Query: "go"}} {
 		if _, err := call.Search(context.Background(), invalid); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("invalid search %#v=%v", invalid, err)
 		}

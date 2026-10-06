@@ -50,7 +50,7 @@ provider 协议测试使用 loopback HTTP server 发出真实 JSON/SSE 字节：
 - OpenRouter Chat Completions；
 - 同一个 provider-neutral `effort` 分别映射为 Responses `reasoning.effort`、Chat Completions `reasoning_effort` 和 Messages `output_config.effort`，未设置时三种格式都省略；
 - 三者的 text、reasoning、image、tool、usage、错误、truncation 和 malformed/incomplete stream；
-- 服务端 web 检索：Responses/Codex Responses、Messages 与 Chat Completions 的精确请求体和认证头，回答与来源归一、去重和上限，缺少检索证据、工具错误码、错误对象、超大回答/响应、畸形流、HTTP 状态、取消，以及对话与检索请求都拒绝重定向且不联系目标；
+- 服务端 web 检索：Responses/Codex Responses、Messages 与 Chat Completions 的精确请求体和认证头、发送前审计的冻结 route/effort/endpoint 类别/查询/预算、记录失败与取消时 0 次请求，回答与来源归一、去重和上限，缺少检索证据、工具错误码、错误对象、超大回答/响应、畸形流、HTTP 状态、取消，以及对话与检索请求都拒绝重定向且不联系目标；
 - browser/device OAuth、PKCE callback、refresh、API key 与只读 Codex import；OAuth 的表单与 JSON 请求遇到 308 时失败且不联系重定向目标。
 
 loopback HTTP 证明协议实现，不声称证明远端服务部署。真实 provider smoke 仍单独执行。
@@ -113,6 +113,8 @@ TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event f
 `TestComposition_WebSearchAndFetchEndToEnd` 经真实 CLI config、settings 文件和 composition，让 loopback 模型在一步内调用 `web_search` 与 `web_fetch`：检索请求打到同一 Responses endpoint，抓取经注入 resolver 映射到 loopback 页面且只拨号已校验 IP；测试从磁盘 transcript 断言冻结的 schema、system prompt 指引、检索来源与 HTML 转换结果。`TestComposition_WebSearchUnconfiguredFailsClosed` 证明默认未配置时 `web_search` 返回 `WEB_PROVIDER_UNAVAILABLE` 且不联系 provider。
 
 `TestRenderHTML_MatchesUpstreamSemantics` 用表驱动 fixture 保存参考 `5badb15009ae` 的 Turndown/GFM 预期输出，覆盖删除线、任务状态、代码语言/围栏/空白、Markdown 字面量和隐式闭合的隐藏元素；只归一化 ADR-0011 中的等价排版。`TestFormatFetch_MatchesUpstreamUTF16Budget` 固定 ASCII、汉字、emoji 和 provider footer 的完整预算边界。`TestProvider_FetchSpillsCompleteFormattedOutput` 组装真实 tool runtime、spill store 与 web tools，替换网络结果边界；从磁盘读取预览定位的文件，独立比较 100,000 个汉字的 300,119 字节结果和 Markdown 展开后达到/超过 200,000 单元的结果，证明保存发生在内联截断之前。
+
+`TestComposition_WebSearchAuditsConcurrentQueriesOnDisk` 经同一真实入口覆盖三个 provider 各 1–4 个查询；loopback server 用 barrier 等待全部查询到达，并在每个 HTTP 请求到达时读取磁盘 JSONL，证明对应审计已提交。从最终 transcript 验证查询序号、归属与 call/audit/result 因果关系；下一模型请求不包含审计元数据。`TestComposition_WebSearchAuditsNELQuery` 从磁盘确认单独 U+0085 查询保留原文并发送；领域与 LLM 断言审计和请求边界均按 ECMAScript 空白集接受 NEL、拒绝 BOM。service 的 barrier 测试另外验证去重后的审计顺序与网络并发，失败 journal 证明没有检索 dispatch 且错误链保留原因、模型文本不泄漏 I/O 详情。
 
 `TestComposition_SkillCatalogToolAndGesture` 经真实 composition 和 loopback provider 证明：第一次请求带有目录且不含禁止模型调用的 skill 和任何正文，模型调用 `skill` 后下一次请求带有完整 `<skill_content>`，运行中新增的 skill 在下一 turn 产生替换目录，`/name` 注入 user-only skill，重启进程后从磁盘日志推导目录而不重复发布。
 
@@ -203,6 +205,8 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 `testdata/session-v2-skill.jsonl` 固定目录、`/name` 注入和 `skill` call/result 作为普通 v2 `user/message` 的形态。`TestSessionV2Skill_FrozenContract` 用同样的读取、投影和独立 writer 比较，并证明恢复后的日志不会重复发布同一目录、删除全部 skill 时产生空目录、已消费的 `/name` 不再待处理；`TestSessionV2Skill_RejectsMisplacedContext` 拒绝 turn 外、错位 step、空内容和来源多余字段的变体。
 
 `testdata/session-v2-image.jsonl` 固定带图片引用的 user message 与 `read_image` call/result。`TestSessionV2Image_FrozenContract` 用同样的读取、投影和独立 writer 比较；`TestSessionV2Image_RejectsChangedContract` 拒绝旧的内联 `data` 与 `sha256` 字段、未知字段、旧式或大写或过短的 ID、不支持的 media type、字节数为 0 或超过 4 MiB、宽度为 0 或超过 4096、空名称和携带图片的错误结果。
+
+`testdata/session-v2-web-search.jsonl` 固定 log-only `web/search-request`：`TestSessionV2WebSearch_FrozenContract` 用真实 Manager/Inspect/Open 读取、证明 surface 不包含审计并与独立 writer 逐字节比较；`TestSessionV2WebSearch_RejectsChangedContract` 拒绝未知字段、URL endpoint、route/预算非法、缺失负载、重复或跳号序号、重复查询以及错误 call/tool/turn/step。`TestValidateOrder_WebSearchIntentRequiresPendingCall` 拒绝 call 前或 result/step/turn 后的意图；`TestLog_WebSearchAuditRepairPreservesIntentWithoutRedispatch` 分别恢复 0、1、2 条已提交意图的中断尾部，只补 interrupted result 与闭合事实，保留原字节前缀，并证明副本不会改变 journal。
 
 修改持久化字段、枚举、顺序、版本或恢复语义时，PR 明确选择同版本兼容、严格拒绝旧版或迁移，给出样本与因果/事务证据并更新架构和 ADR。固定样本不是全部记录类型的 schema catalog，也不代替现有图片、compaction、subagent、错误恢复和 I/O rollback 测试。CI 不重写样本，nano v2 严格拒绝旧格式的承诺不变。
 

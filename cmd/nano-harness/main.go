@@ -328,7 +328,7 @@ func composeTUI(config applicationConfig, deps dependencies) (*composition, erro
 // each tool provider, and the session format. Bump a provider token whenever
 // its model-visible definitions or behavior change incompatibly.
 func compositionID(config applicationConfig) string {
-	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00tool-runtime-v2\x00fs-tools-v3\x00search-tools-v3\x00shell-tools-v3\x00job-tools-v1\x00subagent-tools-v3\x00todo-tools-v1\x00web-tools-v1\x00question-tools-v1\x00plan-tools-v1\x00skill-tools-v1\x00goal-tools-v2\x00spill-v1\x00attachments-v1\x00session-v2"
+	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00tool-runtime-v2\x00fs-tools-v3\x00search-tools-v3\x00shell-tools-v3\x00job-tools-v1\x00subagent-tools-v3\x00todo-tools-v1\x00web-tools-v2\x00question-tools-v1\x00plan-tools-v1\x00skill-tools-v1\x00goal-tools-v2\x00spill-v1\x00attachments-v1\x00session-v2"
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
 }

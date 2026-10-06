@@ -69,6 +69,8 @@ const (
 	RecordSubagentCatalog RecordType = "subagent/catalog"
 	// RecordTodoWrite commits the complete todo list written by one pending tool call.
 	RecordTodoWrite RecordType = "todo/write"
+	// RecordWebSearchRequest commits a log-only auxiliary request before dispatch.
+	RecordWebSearchRequest RecordType = "web/search-request"
 	// RecordPlanMode commits the plan mode in force from this point on.
 	RecordPlanMode RecordType = "plan/mode"
 	// RecordGoalChange commits one goal mutation or clear tombstone.
@@ -354,6 +356,7 @@ type Record struct {
 	Subagent   *SubagentDescriptor `json:"subagent,omitempty"`
 	Catalog    *SubagentCatalog    `json:"catalog,omitempty"`
 	Todo       *TodoWrite          `json:"todo,omitempty"`
+	Search     *WebSearchRequest   `json:"search,omitempty"`
 	Plan       *PlanMode           `json:"plan,omitempty"`
 	Goal       *GoalChange         `json:"goal,omitempty"`
 	Outcome    TurnOutcome         `json:"outcome,omitempty"`

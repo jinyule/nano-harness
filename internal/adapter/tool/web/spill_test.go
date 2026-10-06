@@ -28,7 +28,7 @@ func (approver noApproval) Decide(context.Context, appTool.ApprovalRequest) (ses
 
 type fetchedPage struct{ content string }
 
-func (fetchedPage) Search(context.Context, []string) (appWeb.SearchResult, error) {
+func (fetchedPage) Search(context.Context, []string, appWeb.SearchInvocation) (appWeb.SearchResult, error) {
 	return appWeb.SearchResult{}, fmt.Errorf("unexpected search")
 }
 

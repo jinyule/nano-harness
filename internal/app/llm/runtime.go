@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
@@ -223,12 +224,18 @@ type Completion struct {
 // Emit receives provider-neutral chunks in provider order.
 type Emit func(session.AssistantChunk) error
 
+// ErrSearchAudit identifies failure to durably record an auxiliary search intent.
+var ErrSearchAudit = errors.New("web search request audit failed")
+
 // SearchRequest asks one prepared model to run a provider-side web search.
 // MaxResults is a positive upper bound the provider may forward as a
 // result-count hint; the consumer still enforces it on the returned sources.
 type SearchRequest struct {
 	Query      string
 	MaxResults int
+	TimeoutMS  int64
+	// RecordRequest must durably commit the secret-free intent before dispatch.
+	RecordRequest func(context.Context, session.WebSearchRequest) error
 }
 
 // SearchSource is one citeable result. URL is always present; the other fields
@@ -297,7 +304,7 @@ func (call *Call) Stream(ctx context.Context, request Request, emit Emit) (Compl
 
 // Search runs one provider-side web search through the frozen provider snapshot.
 func (call *Call) Search(ctx context.Context, request SearchRequest) (SearchResult, error) {
-	if strings.TrimSpace(request.Query) == "" || request.MaxResults < 1 {
+	if tool.IsBlank(request.Query) || request.MaxResults < 1 {
 		return SearchResult{}, ErrInvalidConfig
 	}
 	return call.prepared.Search(ctx, call.credential, request)

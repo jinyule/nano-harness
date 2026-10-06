@@ -2,6 +2,7 @@ package jsonl
 
 import (
 	"fmt"
+	"slices"
 
 	coresession "github.com/jinyule/nano-harness/internal/core/session"
 )
@@ -24,6 +25,7 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 	approvalCalls := map[string]string{}
 	seenApprovals := map[string]struct{}{}
 	todoCalls := map[string]struct{}{}
+	searchQueries := map[string][]string{}
 	children := map[string]struct{}{}
 	var goals coresession.GoalState
 	for _, event := range events {
@@ -102,6 +104,7 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 			}
 			delete(pendingCalls, record.Result.CallID)
 			delete(todoCalls, record.Result.CallID)
+			delete(searchQueries, record.Result.CallID)
 			state.calls = remove(state.calls, record.Result.CallID)
 		case coresession.RecordTodoWrite:
 			if record.Turn != state.turn || record.Step != state.step {
@@ -115,6 +118,20 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 				return state, orderError("duplicate todo/write for call %q", record.Todo.CallID)
 			}
 			todoCalls[record.Todo.CallID] = struct{}{}
+		case coresession.RecordWebSearchRequest:
+			if record.Turn != state.turn || record.Step != state.step || state.step == 0 {
+				return state, orderError("web/search-request outside active step")
+			}
+			data := record.Search
+			call := pendingCalls[data.CallID]
+			if call == nil || call.Name != "web_search" || call.ArgumentsOmitted {
+				return state, orderError("web/search-request does not name a pending web_search call")
+			}
+			queries := searchQueries[data.CallID]
+			if data.Index != len(queries)+1 || slices.Contains(queries, data.Query) {
+				return state, orderError("web/search-request query order is invalid")
+			}
+			searchQueries[data.CallID] = append(queries, data.Query)
 		case coresession.RecordRetry, coresession.RecordRetryStarted:
 			if record.Turn != state.turn || record.Step != state.step || state.assistant {
 				return state, orderError("%s is not a request recovery fact", record.Type)

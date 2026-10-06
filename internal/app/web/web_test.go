@@ -71,6 +71,9 @@ func (model *searchModel) Search(ctx context.Context, _ llm.Credential, request 
 	model.mu.Lock()
 	model.requests = append(model.requests, request)
 	model.mu.Unlock()
+	if err := request.RecordRequest(ctx, session.WebSearchRequest{Provider: "openai", Model: "gpt-5.4", Endpoint: "openai-responses", Query: request.Query, TimeoutMS: request.TimeoutMS, MaxResults: request.MaxResults}); err != nil {
+		return llm.SearchResult{}, fmt.Errorf("%w: %w", llm.ErrSearchAudit, err)
+	}
 	return model.search(ctx, request)
 }
 
@@ -174,7 +177,7 @@ func TestService_LifecycleRejectsWorkOutsideScope(t *testing.T) {
 	if err := inactive.Start(context.Background(), closed); !errors.Is(err, plugin.ErrScopeClosed) {
 		t.Fatalf("closed scope=%v", err)
 	}
-	if _, err := inactive.Search(context.Background(), []string{"go"}); !errors.Is(err, ErrNotRunning) {
+	if _, err := inactive.Search(context.Background(), []string{"go"}, searchOwner()); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("search before start=%v", err)
 	}
 	if _, err := inactive.Fetch(context.Background(), "https://go.dev"); !errors.Is(err, ErrNotRunning) {
@@ -183,7 +186,7 @@ func TestService_LifecycleRejectsWorkOutsideScope(t *testing.T) {
 	if err := current.scope.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := current.service.Search(context.Background(), []string{"go"}); !errors.Is(err, ErrNotRunning) {
+	if _, err := current.service.Search(context.Background(), []string{"go"}, searchOwner()); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("search after close=%v", err)
 	}
 	failure := &Error{Code: CodeAborted, Message: "stopped", Cause: context.Canceled}
@@ -226,7 +229,7 @@ func TestService_ShutdownCancelsAndWaitsForInFlightOperations(t *testing.T) {
 	searchDone := make(chan error, 1)
 	fetchDone := make(chan error, 1)
 	go func() {
-		_, err := current.service.Search(context.Background(), []string{"go"})
+		_, err := current.service.Search(context.Background(), []string{"go"}, searchOwner())
 		searchDone <- err
 	}()
 	go func() {
@@ -246,7 +249,7 @@ func TestService_ShutdownCancelsAndWaitsForInFlightOperations(t *testing.T) {
 		t.Fatal("shutdown returned while provider calls were still running")
 	default:
 	}
-	if _, err := current.service.Search(context.Background(), []string{"late"}); !errors.Is(err, ErrNotRunning) {
+	if _, err := current.service.Search(context.Background(), []string{"late"}, searchOwner()); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("search during shutdown=%v", err)
 	}
 	close(search.release)
@@ -283,7 +286,7 @@ func TestService_SearchValidatesQueriesBeforeProviderCalls(t *testing.T) {
 		{[]string{"a", "b", "c", "d", "e"}, "at most 4 queries"},
 		{[]string{"go", " \t"}, "non-empty string"},
 	} {
-		if _, err := current.service.Search(context.Background(), test.queries); err == nil || !strings.Contains(err.Error(), test.message) {
+		if _, err := current.service.Search(context.Background(), test.queries, searchOwner()); err == nil || !strings.Contains(err.Error(), test.message) {
 			t.Fatalf("queries %q error=%v", test.queries, err)
 		}
 	}
@@ -298,14 +301,17 @@ func TestService_SearchValidatesQueriesBeforeProviderCalls(t *testing.T) {
 
 func TestService_SearchRequiresConfiguredRoute(t *testing.T) {
 	current := newFixture(t, settings.WebSearch{}, webStore{}, nil)
-	message := expectCode(t, func() error { _, err := current.service.Search(context.Background(), []string{"go"}); return err }(), CodeProviderUnavailable)
+	message := expectCode(t, func() error {
+		_, err := current.service.Search(context.Background(), []string{"go"}, searchOwner())
+		return err
+	}(), CodeProviderUnavailable)
 	if !strings.Contains(message, "web.search.provider") {
 		t.Fatalf("message=%q", message)
 	}
 	if err := current.settingsScope.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := current.service.Search(context.Background(), []string{"go"}); !errors.Is(err, settings.ErrNotRunning) {
+	if _, err := current.service.Search(context.Background(), []string{"go"}, searchOwner()); !errors.Is(err, settings.ErrNotRunning) {
 		t.Fatalf("stopped settings=%v", err)
 	}
 }
@@ -315,17 +321,17 @@ func TestService_SearchCapsSingleQueryResults(t *testing.T) {
 	current.model.search = func(context.Context, llm.SearchRequest) (llm.SearchResult, error) {
 		return llm.SearchResult{Content: "answer", Sources: sources("a", MaxResults+2)}, nil
 	}
-	result, err := current.service.Search(context.Background(), []string{"go release"})
+	result, err := current.service.Search(context.Background(), []string{"go release"}, searchOwner())
 	if err != nil || result.Content != "answer" || !result.Truncated || !reflect.DeepEqual(result.Sources, sources("a", MaxResults)) {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
-	if want := []llm.SearchRequest{{Query: "go release", MaxResults: MaxResults}}; !reflect.DeepEqual(current.model.requests, want) {
+	if len(current.model.requests) != 1 || current.model.requests[0].Query != "go release" || current.model.requests[0].MaxResults != MaxResults || current.model.requests[0].TimeoutMS != 60000 || current.model.requests[0].RecordRequest == nil {
 		t.Fatalf("requests=%#v", current.model.requests)
 	}
 	current.model.search = func(context.Context, llm.SearchRequest) (llm.SearchResult, error) {
 		return llm.SearchResult{Sources: sources("a", MaxResults)}, nil
 	}
-	exact, err := current.service.Search(context.Background(), []string{"go"})
+	exact, err := current.service.Search(context.Background(), []string{"go"}, searchOwner())
 	if err != nil || exact.Truncated || len(exact.Sources) != MaxResults {
 		t.Fatalf("exact=%#v err=%v", exact, err)
 	}
@@ -344,7 +350,7 @@ func TestService_SearchRunsQueriesConcurrentlyAndMerges(t *testing.T) {
 		}
 		return llm.SearchResult{Sources: []llm.SearchSource{{URL: "https://shared.example", Title: "later duplicate"}, {URL: "https://b.example/1"}}}, nil
 	}
-	result, err := current.service.Search(context.Background(), []string{"alpha", "beta", "alpha"})
+	result, err := current.service.Search(context.Background(), []string{"alpha", "beta", "alpha"}, searchOwner())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +395,7 @@ func TestService_SearchFirstFailureCancelsSiblings(t *testing.T) {
 		close(siblingCancelled)
 		return llm.SearchResult{}, ctx.Err()
 	}
-	_, err := current.service.Search(context.Background(), []string{"waits", "fails"})
+	_, err := current.service.Search(context.Background(), []string{"waits", "fails"}, searchOwner())
 	message := expectCode(t, err, CodeProviderError)
 	if !errors.Is(err, failure) || !strings.Contains(message, "rate_limit") || !strings.Contains(message, "openai/gpt-5.4") {
 		t.Fatalf("failure=%v", err)
@@ -408,7 +414,7 @@ func TestService_SearchClassifiesDeadlineCancellationAndAccountFailures(t *testi
 		<-ctx.Done()
 		return llm.SearchResult{}, &llm.Error{Code: llm.ErrorTimeout, Provider: "openai", Cause: ctx.Err()}
 	}
-	_, err := current.service.Search(context.Background(), []string{"slow"})
+	_, err := current.service.Search(context.Background(), []string{"slow"}, searchOwner())
 	expectCode(t, err, CodeSearchTimeout)
 
 	current.service.searchTimeout = SearchTimeout
@@ -423,18 +429,18 @@ func TestService_SearchClassifiesDeadlineCancellationAndAccountFailures(t *testi
 		<-started
 		cancel()
 	}()
-	_, err = current.service.Search(ctx, []string{"cancelled"})
+	_, err = current.service.Search(ctx, []string{"cancelled"}, searchOwner())
 	expectCode(t, err, CodeAborted)
 
 	missing := newFixture(t, configured, webStore{err: llm.ErrNoCredential}, nil)
-	_, err = missing.service.Search(context.Background(), []string{"go"})
+	_, err = missing.service.Search(context.Background(), []string{"go"}, searchOwner())
 	if message := expectCode(t, err, CodeCredentialMissing); !strings.Contains(message, `"openai"`) {
 		t.Fatalf("message=%q", message)
 	}
 
 	unknown := newFixture(t, configured, webStore{}, nil)
 	unknown.model.prepareErr = fmt.Errorf("%w: openai/gpt-5.4", llm.ErrUnknownModel)
-	_, err = unknown.service.Search(context.Background(), []string{"go"})
+	_, err = unknown.service.Search(context.Background(), []string{"go"}, searchOwner())
 	if !errors.Is(err, llm.ErrUnknownModel) {
 		t.Fatalf("prepare failure=%v", err)
 	}
@@ -465,4 +471,13 @@ type noImages struct{}
 
 func (noImages) ReadImage(context.Context, session.Image) ([]byte, error) {
 	return nil, session.ErrAttachmentMissing
+}
+
+type acceptingJournal struct{}
+
+func (acceptingJournal) Append(_ context.Context, record session.Record) (session.Event, error) {
+	return session.Event{Record: record}, nil
+}
+func searchOwner() SearchInvocation {
+	return SearchInvocation{Journal: acceptingJournal{}, Turn: 1, Step: 1, CallID: "search"}
 }
