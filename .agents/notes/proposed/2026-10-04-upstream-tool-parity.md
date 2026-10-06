@@ -86,11 +86,11 @@
 | 问题 | 级别 | 负责 | 状态 |
 |---|---|---|---|
 | 工具执行期间打断时，已取出的通知与 steer 丢失，turn 记成 `error` | Blocker | WP3 | 已合入 `da492ca`（含 step 上限与截断时通知留队列、测试替身对齐 ctx） |
-| 前台 `bash` 的 job 先于 Wait 结束时发出多余完成通知并写入会话 | Blocker | Codex-C（自 WP3 改派） | 修复中 |
+| 前台 `bash` 的 job 先于 Wait 结束时发出多余完成通知并写入会话 | Blocker | Codex-C（自 WP3 改派） | 已合入 `596ed4d`（`Spec.Foreground` 在注册时预留收集权） |
 | fork 子代理继承父会话 `plan/mode`，在规划模式下运行且无法退出 | Blocker | WP8 | 已合入：规划投影只看会话自身事件；锁改为按会话（S7） |
 | `web_fetch` 对 IPv6 字面量跳过 NAT64 校验（SSRF） | Blocker | WP5 | 已合入 `6d3322c` |
 | 关闭时工具先于在途 turn 撤销，前台 `bash` 可能在临时目录删除后才取消 | Suggestion | WP1 | 已合入 `2fa6aa7`：agent 层最后启动、先关闭，registry 一次性取消并等待全部在途 turn |
-| job 上限回退路径不归 Scope；超时交接竞态；macOS 进程组回收承诺 | Suggestion | Codex-C（自 WP3 改派） | 修复中 |
+| job 上限回退路径不归 Scope；超时交接竞态；macOS 进程组回收承诺 | Suggestion | Codex-C（自 WP3 改派） | 已合入 `596ed4d` |
 | `send_message` 后 `interrupt_agent` 丢弃已确认消息；one-shot 子代理被通知唤醒 | Suggestion | WP7 | 已合入 `091cb74`：取消结束且有未提交投递时保持驻留；one-shot 只在唯一 turn 期间接受通知 |
 | fork 子代理 `get_goal` 返回父目标；driver 只等 root 空闲（核实与上游一致） | Suggestion | WP10 | 已合入 `7959206` |
 | spill 清理顺序、`write` 大文件校验、spill root 位置、长工具名 | Suggestion | WP2 | 已合入 `ec3c142` |
@@ -118,6 +118,8 @@
 | shell 与后台任务（`0073dfb`） | 参数、输出与调度主路径对齐 | Linux sandbox 隔离网络（WP14 放开）；sandbox runner 自身失败被当作普通命令失败；取消直接 SIGKILL 缺少 SIGTERM→3s 宽限；`workdir` 链接加 `..` 解析错误目录；非法 UTF-8 膨胀挤掉 job 状态行；空 kill reason 与错误优先级；ADR-0009 中 owner 释放、旧 ID 复用的记录不准确。部署预算配置保持固定并补 ADR。待 Codex-C、Codex-E 合入后派发 |
 | subagent 工具族（`0073dfb`） | 默认分支与常规文案对齐 | 正确性：并发创建重复计数、已取消 send_message 仍投递、中断后新消息不唤醒、清理失败仍宣告成功、后台 fork 准入顺序、closing output 选择、description 截断（已派 Codex-K1）。设计：child 未固定并持久化继承的 route、委派说明放在 system prompt 破坏 fork 前缀、发送者身份未持久化（待 H2 合入后派发）；生命周期事件与回执暂缓（无消费者） |
 | 交互与会话状态（`0073dfb`） | todo、提问、规划、goal、skill 主路径对齐 | todo/goal/plan 与 `/goal edit` 的 ECMAScript 空白、skill 描述按 UTF-16 计数、todo 重复项引用格式、TUI 多选不能补充自由回答、发现不完整时 `/name` 被静默吞掉；结构化错误（WP12）。待 Codex-E（共享空白判断）合入后派发 |
+
+审计小修合入进度：文件工具（Codex-H1）`7269f8f`；搜索、spill 与共享 ECMAScript 空白判断（Codex-E）`3fa09d6`；job 前台交接与回退归属（Codex-C）`596ed4d`。运行时（Codex-H2 `37358cb`）与 web 传输层（Codex-F `4afa079`）已提交、待 rebase；HTML（Codex-G）、WP15、K1、settings 偶发失败排查因 Codex 限流中断，待接手。
 
 ### 后续项（不在本次范围）
 
