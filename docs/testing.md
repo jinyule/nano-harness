@@ -115,6 +115,10 @@ settings 锁的取消测试使用 channel 固定取得锁期间的取消；`test
 
 credential 锁的永久测试覆盖预先取消的 modify/delete、取得锁与读取期间取消、取消与锁期限同时就绪，以及同进程等待者在 holder 未退出时返回取消。channel 与虚拟时间固定交错；旧 mutex 的不可取消等待在私有测试子进程中成为具名失败，外层拥有子进程与临时目录。独立子进程实际持锁，主测试的取消等待者不得删除它的锁或修改文件，holder 退出后锁可复用。回调开始后的成功刷新完整保存，取消错误保留原文件；真实 `cmd` composition 的 logout 从磁盘字节与无密钥账户列表验证取消不删除账户。负载样本与证据见 [credential 锁调查记录](../.agents/notes/implemented/2026-10-06-credential-lock-cancellation.md)。
 
+## subagent 结构化错误证据
+
+`TestTools_PersistSubagentErrorClassification` 经真实 tool runtime 让五个 subagent 工具返回被包装、并与清理错误合并的 `app/subagent.Error`，逐一断言九个 Code 都以 `SubagentError/<Code>` 写入 `error`、正文逐字不变且没有 meta；普通错误与未完成的前台 run（`subagent run failed`）没有分类。`TestError_ClassifiesToolResults` 用真实服务的 `NOT_RESUMABLE` 证明分类经 `errors.As` 穿过 `errors.Join`。PTY 场景从磁盘断言写给目录外 id 的 `send_message` 结果带 `SubagentError/NOT_RESUMABLE`。
+
 ## 搜索与 shell 结构化结果证据
 
 `TestSearch_PersistsFailureClassifications` 和根路径测试通过真实 runtime、JSONL journal 与磁盘解码独立断言四类 `SEARCH_*`，覆盖正则/glob、启动、信号、退出、畸形输出、原始输出上限、超时、取消、缺失根、特殊文件与 I/O；语义检查仍无分类。真实 rg 测试固定 0/1/100/101 个 glob 路径的修改时间顺序与 0/1/250/251 个 grep 匹配。SaveText/spill 测试独立比较首次出现分组、CRLF 与 UTF-8 行预览、计数与裁剪前缀；成功保存、失败与无 store 都保留 meta，完整 artifact 保留全部 251 个匹配。单个超大路径可裁到空，最终 JSON 不超过 65,536 字节。

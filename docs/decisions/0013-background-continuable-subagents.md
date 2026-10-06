@@ -72,7 +72,7 @@ session format 仍为 v2，变化都在记录层：
 5. **消息来源**：`agent-message` 与 `subagent-settled` 的 source 必须带 `sender_session_id`（发送消息的会话，或结算的 child），其他 source kind 与 assistant 消息不得带它；decoder 同时拒绝缺失和多余的发送者。上游 source 的 `form` 与结算 `summary` 只服务界面展示，本仓不持久化：消息正文已含发送者与结算摘要，TUI 按 kind 区分显示。
 6. **runtime context**：delegated child 的委派说明是完整 `runtime-context` 快照的一段，快照以 `user/message` 持久化，见第 7 节。
 
-旧二进制遇到新记录或 descriptor v3 时按未知记录或非法字段拒绝；composition token 现为 `subagent-tools-v4`（v3 引入本 ADR 的记录，v4 引入继承 route、发送者身份与 runtime context），旧组合创建的会话按 composition mismatch 拒绝恢复，不迁移。本仓尚无发布 tag，没有需要迁移的会话。新记录与其他事实同存于 `0600`、写后 `fsync` 的只追加日志，受单 record 6 MiB、单 session 64 MiB 限制；fork 种子计入 child 的 64 MiB，parent 接近上限时 fork 失败。
+旧二进制遇到新记录或 descriptor v3 时按未知记录或非法字段拒绝；composition token 现为 `subagent-tools-v5`（v3 引入本 ADR 的记录，v4 引入继承 route、发送者身份与 runtime context，v5 让这些工具的 tool/result 按 [ADR-0019](0019-structured-tool-results.md) 持久化 `SubagentError` 分类），旧组合创建的会话按 composition mismatch 拒绝恢复，不迁移。本仓尚无发布 tag，没有需要迁移的会话。新记录与其他事实同存于 `0600`、写后 `fsync` 的只追加日志，受单 record 6 MiB、单 session 64 MiB 限制；fork 种子计入 child 的 64 MiB，parent 接近上限时 fork 失败。
 
 ### 5. 冷恢复语义
 

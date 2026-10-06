@@ -197,3 +197,12 @@ type refusingContexts struct{}
 func (refusingContexts) RegisterContext(agent.ContextProvider, *plugin.Scope) error {
 	return agent.ErrNotRunning
 }
+
+func TestError_ClassifiesToolResults(t *testing.T) {
+	h := startHarness(t)
+	err := h.service.SendMessage(context.Background(), "root", "missing", "hi")
+	var failure interface{ ToolError() session.ToolError }
+	if !errors.As(errors.Join(err, errors.New("cleanup")), &failure) || failure.ToolError() != (session.ToolError{Name: "SubagentError", Code: string(CodeNotResumable)}) || err.Error() != `subagent "missing" is unavailable` {
+		t.Fatalf("classification of %v = %#v", err, failure)
+	}
+}

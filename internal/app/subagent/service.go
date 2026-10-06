@@ -85,6 +85,12 @@ func (failure *Error) Error() string { return failure.Message }
 // Unwrap exposes an underlying cause, such as a transcript failure.
 func (failure *Error) Unwrap() error { return failure.Err }
 
+// ToolError classifies the failure in tool/result as upstream's
+// SubagentError with its Code; the model-visible text stays Message.
+func (failure *Error) ToolError() session.ToolError {
+	return session.ToolError{Name: "SubagentError", Code: string(failure.Code)}
+}
+
 func fail(code Code, format string, values ...any) *Error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, values...)}
 }

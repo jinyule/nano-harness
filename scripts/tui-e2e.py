@@ -355,6 +355,7 @@ def verify(binary):
             assert results[6]["output"] == "CHILD_FORK_OK", results[6]
             assert results[7]["output"] == "(no subagents)", results[7]
             assert results[8]["output"] == 'Error: subagent "missing-child" is unavailable', results[8]
+            assert results[8].get("error") == {"name": "SubagentError", "code": "NOT_RESUMABLE"}, results[8]
             assert results[9]["output"] == "interrupt requested for agent missing-child", results[9]
             catalog = [entry["catalog"] for entry in root_records if entry["type"] == "subagent/catalog"]
             assert [(entry["label"], entry["mode"]) for entry in catalog] == [("reader", "one-shot"), ("reviewer", "one-shot")], catalog
