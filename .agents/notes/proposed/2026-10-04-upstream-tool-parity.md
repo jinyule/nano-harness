@@ -120,7 +120,11 @@
 | subagent 工具族（`0073dfb`） | 默认分支与常规文案对齐 | 正确性：并发创建重复计数、已取消 send_message 仍投递、中断后新消息不唤醒、清理失败仍宣告成功、后台 fork 准入顺序、closing output 选择、description 截断（已派 Codex-K1）。设计：child 未固定并持久化继承的 route、委派说明放在 system prompt 破坏 fork 前缀、发送者身份未持久化（待 H2 合入后派发）；生命周期事件与回执暂缓（无消费者） |
 | 交互与会话状态（`0073dfb`） | todo、提问、规划、goal、skill 主路径对齐 | todo/goal/plan 与 `/goal edit` 的 ECMAScript 空白、skill 描述按 UTF-16 计数、todo 重复项引用格式、TUI 多选不能补充自由回答、发现不完整时 `/name` 被静默吞掉；结构化错误（WP12）。待 Codex-E（共享空白判断）合入后派发 |
 
-审计小修合入进度：文件工具（Codex-H1）`7269f8f`；搜索、spill 与共享 ECMAScript 空白判断（Codex-E）`3fa09d6`；job 前台交接与回退归属（Codex-C）`596ed4d`。web 传输层（Codex-F）`27eb355`；HTML 转换语义与抓取输出预算（Codex-G）`5acbfac`；运行时（Codex-H2 `37358cb`）已提交、rebase 冲突较多，交回 Codex 处理；WP15、K1、settings 偶发失败排查因 Codex 限流中断后已续接。
+审计小修合入进度：文件工具（Codex-H1）`7269f8f`；搜索、spill 与共享 ECMAScript 空白判断（Codex-E）`3fa09d6`；job 前台交接与回退归属（Codex-C）`596ed4d`。web 传输层（Codex-F）`27eb355`；HTML 转换语义与抓取输出预算（Codex-G）`5acbfac`；运行时（Codex-H2 `37358cb`）已提交、rebase 冲突较多，交回 Codex 处理；运行时（Codex-H2）`726a95f`；settings 锁偶发失败 `ae02f02`；WP15 已合入。K1、审计 3/5 修复与 credentials 锁排查进行中。
+
+### 第二轮审查（`25a304d..bbfd8a5`，Codex）
+
+对已合入修复的复审又发现 5 个 Blocker，均已分派：B1 旧轮次的结算撤销新 goal 授权（Codex goal 会话）；B2 多层解压绕过字节预算且不响应取消（Codex fetch 会话）；B3 截断的 compaction 摘要被成功落盘（并入 opus WP13）；B4 同一附件 ID 的后续引用跳过元数据校验（opus）；B5 前台超时到交接之间取消仍交出存活进程（Codex shell 会话）。另有建议：plan cleanup 应等待会话锁内的调用；ADR-0017 中关于 `/attach` 孤儿对象的文案过时。
 
 ### 后续项（不在本次范围）
 
