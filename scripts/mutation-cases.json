@@ -614,5 +614,12 @@
     "before": "if _, err := provider.jobs.Get(invocation.SessionID, arguments.JobID); err != nil {",
     "after": "if _, err := provider.jobs.Get(invocation.SessionID, arguments.JobID); false && err != nil {",
     "test": "^TestJobOutput_IdentityErrorsPrecedeInvalidWait$"
+  },
+  {
+    "id": "bash-handoff-cancellation",
+    "file": "internal/adapter/tool/shell/bash.go",
+    "before": "if ctx.Err() != nil {\n\t\treturn provider.abortForeground(ctx, owner, id)\n\t}",
+    "after": "if false && ctx.Err() != nil {\n\t\treturn provider.abortForeground(ctx, owner, id)\n\t}",
+    "test": "^TestBash_ForegroundHandoffCancellationKillsOwnedJob$"
   }
 ]

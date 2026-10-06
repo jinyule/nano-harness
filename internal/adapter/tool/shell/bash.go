@@ -218,19 +218,15 @@ func (provider *Provider) foreground(ctx context.Context, invocation appTool.Inv
 	}
 	view, err := provider.jobs.Wait(ctx, owner, id, timeout)
 	if err != nil {
-		// Only the call's cancellation or shutdown ends a wait on its own
-		// live job; the command goes with the call. The record leaves once
-		// the kill settles, since the model never saw the ID.
-		reason := "tool call aborted"
-		_, _, _ = provider.jobs.Kill(owner, id, &reason)
-		_, _ = provider.jobs.Wait(context.WithoutCancel(ctx), owner, id, terminationGrace+2*time.Second)
-		_ = provider.jobs.Remove(owner, id)
-		return appTool.Result{}, errors.New("tool call aborted")
+		return provider.abortForeground(ctx, owner, id)
 	}
 	return provider.foregroundResult(ctx, owner, id, view, run, timeoutMS)
 }
 
 func (provider *Provider) foregroundResult(ctx context.Context, owner, id string, view appJob.View, run *processRun, timeoutMS float64) (appTool.Result, error) {
+	if ctx.Err() != nil {
+		return provider.abortForeground(ctx, owner, id)
+	}
 	if view.Status == appJob.StatusRunning || view.Status == appJob.StatusStopping {
 		// One consuming read hands over the output so far, so job_output
 		// continues exactly after it. It fails only once shutdown dropped
@@ -246,6 +242,17 @@ func (provider *Provider) foregroundResult(ctx context.Context, owner, id string
 	// Removal fails only after shutdown already dropped the record.
 	_ = provider.jobs.Remove(owner, id)
 	return finish(ctx, *run, timeoutMS)
+}
+
+// abortForeground retains ownership through cancellation and settlement:
+// the caller has not received the ID, so this command cannot become a job
+// the model must stop later. No consuming Read releases the reservation.
+func (provider *Provider) abortForeground(ctx context.Context, owner, id string) (appTool.Result, error) {
+	reason := "tool call aborted"
+	_, _, _ = provider.jobs.Kill(owner, id, &reason)
+	_, _ = provider.jobs.Wait(context.WithoutCancel(ctx), owner, id, terminationGrace+2*time.Second)
+	_ = provider.jobs.Remove(owner, id)
+	return appTool.Result{}, errors.New("tool call aborted")
 }
 
 func finish(ctx context.Context, run processRun, timeoutMS float64) (appTool.Result, error) {

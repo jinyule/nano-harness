@@ -97,6 +97,8 @@ spill 与先读后写另有专门证据：预览算法用上游 retention 的 Py
 
 job 输出回归验证逐字节拆分与整块写入的解码一致、替换后字节计量、非法 UTF-8 与大值结果在无 spill 时保留状态和丢失提示、metadata 超限保留括号信封。重复 kill 用 producer 结算 barrier 固定两次意图先于 settle；wait 参数测试证明未知/他人 job 错误先于无效 timeout。`TestComposition_JobOutputKeepsDecodedLossAndStatus` 从真实配置、磁盘工具结果和下一次 provider wire 证明丢失信封进入模型上下文。
 
+`TestBash_ForegroundHandoffCancellationKillsOwnedJob` 用真实 job service、runner 启动 channel 和阻塞取消固定顺序：先让 `Wait` 超时，再取消调用，然后进入首次读取的交接路径；必须返回 `tool call aborted`、join runner、删除未交出的 job 且没有通知。`TestBash_ForegroundHandoffCancellationRunsTERMTrap` 用相同交错执行真实 bash，交接返回前清理文件必须存在，证明取消保留 TERM 宽限。定向 mutation 删除交接入口的取消判断，由前一个测试拒绝。
+
 ## Session、设置、账户与图片
 
 - JSONL：创建、append/fsync、close/reopen、list/inspect、连续 sequence、全部非法 transition、unknown field/version、torn line、权限、composition mismatch、writer lock、I/O rollback 和 interrupted-tail repair。`todo/write` 另覆盖缺失 call、跨 step/turn、同一 call 重复写入、result 之后写入、call ID 复用，以及中断修复后计划仍可从日志投影。fork 种子覆盖与 header 一次写入、事件行与 parent 逐字节相同、恢复时的自有事件边界，以及非连续、schema 非法、turn 未闭合、超出单 record 或单 session 上限的种子被拒且不留文件。

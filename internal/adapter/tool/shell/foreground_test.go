@@ -3,7 +3,9 @@ package shell
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +63,92 @@ func TestBash_ForegroundHandoffUsesReadStatus(t *testing.T) {
 				t.Fatalf("handoff reported completion twice: %q", texts)
 			}
 		})
+	}
+}
+
+func TestBash_ForegroundHandoffCancellationKillsOwnedJob(t *testing.T) {
+	started, stopped := make(chan struct{}), make(chan struct{})
+	runner := runnerFunc(func(ctx context.Context, _ platformProcess.Request) (platformProcess.Result, error) {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+		return platformProcess.Result{ExitCode: -1, Signal: "SIGTERM"}, ctx.Err()
+	})
+	h := newHarness(t, runner)
+	run := &processRun{}
+	spec := h.provider.job(appTool.Invocation{SessionID: "session-1"}, "held command", platformProcess.Request{TerminationGrace: terminationGrace}, run)
+	spec.Foreground = true
+	id, err := h.jobs.Launch(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	view, err := h.jobs.Wait(ctx, "session-1", id, time.Nanosecond)
+	if err != nil || view.Status != appJob.StatusRunning {
+		t.Fatalf("timeout = %+v, %v", view, err)
+	}
+	// Cancellation is ordered after timeout and before the consuming handoff.
+	cancel()
+	result, handoffErr := h.provider.foregroundResult(ctx, "session-1", id, view, run, 1)
+	remaining := h.jobs.List("session-1")
+	if handoffErr == nil || handoffErr.Error() != "tool call aborted" || result.Text != "" || len(remaining) != 0 {
+		t.Fatalf("cancelled handoff = %q, %v; remaining jobs = %+v", result.Text, handoffErr, remaining)
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("handoff cancellation returned before the runner stopped")
+	}
+	if len(h.notifier.texts()) != 0 {
+		t.Fatal("cancelled undisclosed job sent a completion notice")
+	}
+}
+
+func TestBash_ForegroundHandoffCancellationRunsTERMTrap(t *testing.T) {
+	ready := &readyWriter{ready: make(chan struct{})}
+	runner := runnerFunc(func(ctx context.Context, request platformProcess.Request) (platformProcess.Result, error) {
+		request.Stdout = io.MultiWriter(request.Stdout, ready)
+		return platformProcess.New().Run(ctx, request)
+	})
+	h := newHarness(t, runner)
+	if h.provider.bashPath == "" {
+		t.Skip("bash is not installed")
+	}
+	run := &processRun{}
+	request := platformProcess.Request{
+		Path: h.provider.bashPath, Args: []string{"-c", `trap 'printf cleaned > term-cleanup; exit 0' TERM; printf ready; while :; do :; done`},
+		Root: h.root.Path(), Cwd: h.root.Path(), TempDir: h.provider.temporary(), Mode: platformProcess.ModeHost, TerminationGrace: terminationGrace,
+	}
+	spec := h.provider.job(appTool.Invocation{SessionID: "session-1"}, "TERM trap", request, run)
+	spec.Foreground = true
+	id, err := h.jobs.Launch(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ready.ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("command never reached readiness")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	view, err := h.jobs.Wait(ctx, "session-1", id, time.Nanosecond)
+	if err != nil || view.Status != appJob.StatusRunning {
+		t.Fatalf("timeout = %+v, %v", view, err)
+	}
+	cancel()
+	started := time.Now()
+	result, handoffErr := h.provider.foregroundResult(ctx, "session-1", id, view, run, 1)
+	if handoffErr == nil || handoffErr.Error() != "tool call aborted" || result.Text != "" || len(h.jobs.List("session-1")) != 0 {
+		t.Fatalf("cancelled real handoff = %q, %v; remaining jobs = %+v", result.Text, handoffErr, h.jobs.List("session-1"))
+	}
+	if data, err := os.ReadFile(filepath.Join(h.root.Path(), "term-cleanup")); err != nil || string(data) != "cleaned" {
+		t.Fatalf("handoff cancellation did not join TERM cleanup: %q, %v", data, err)
+	}
+	if time.Since(started) > 5*time.Second {
+		t.Fatal("handoff cancellation exceeded settlement budget")
 	}
 }
 
