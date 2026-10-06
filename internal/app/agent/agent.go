@@ -440,7 +440,7 @@ func (agent *Agent) Compact(ctx context.Context) (bool, error) {
 		return false, errors.New("agent must be idle before manual compaction")
 	}
 	agent.mu.Unlock()
-	return agent.engine.compaction.Maybe(ctx, compaction.Request{Journal: agent.journal, Force: true, Manual: true})
+	return agent.engine.compaction.Maybe(ctx, compaction.Request{Journal: agent.journal, Force: true, Manual: true, Route: agent.route})
 }
 
 // selectPlan applies a plan-mode selection while holding the worker's state

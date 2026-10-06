@@ -23,7 +23,7 @@
 
 `internal/app/compaction.Service.Maybe` 的顺序：
 
-1. 读取会话事件并折叠 surface。压力请求在估算 token 低于 `context_window × threshold_ratio` 时直接返回。
+1. 读取会话事件并折叠 surface。压力请求在估算 token 低于 `context_window × threshold_ratio` 时直接返回。`context_window` 取本次请求 route 所指模型在当前设置目录中的值：root 用热切换的设置 route，delegated child 用它继承的 route（[ADR-0013](0013-background-continuable-subagents.md#7-继承-route-与委派-runtime-context)）；目录未列出该模型时压力请求不触发。摘要调用使用同一 route 及其 effort。
 2. 除手动请求外，对 surface 上每个工具结果计算 `session.PruneToolOutput(output)`；需要裁剪的依次追加 `compaction/prune`，并在内存 surface 中替换，等价于日志重新折叠后的结果。
 3. 压力请求：若有裁剪且重新估算已低于阈值，结束并报告 surface 已改变，不发起摘要调用。否则照旧选择最旧前缀，在 `compaction/start`…`compaction/end` 事务中摘要；摘要模型读到的是裁剪后的 surface。
 4. 强制请求分两种。context-window 错误触发的恢复先裁剪、再无条件摘要，与上游 overflow 一致；只能裁剪而没有可摘要前缀时仍报告 surface 已改变，engine 随之重试新的 step，下一次没有可裁剪内容时按原规则失败。用户的 `/compact` 设置 `Request.Manual`，跳过裁剪，与上游手动 compaction 一致。
@@ -32,6 +32,8 @@
 `Maybe` 的布尔结果表示 surface 是否改变（裁剪或摘要），engine 对 context-window 恢复只依赖这一含义。
 
 ### 摘要发布与失败
+
+`compaction/summary` 的 `shadowed_seqs` 按序号升序记录。之前的摘要节点排在它保留的较早消息前面，序号却更大，第二次摘要的前缀因此不是有序序列；服务在记录前排序，surface 折叠按集合匹配，不受顺序影响。修正前，同一会话的第二次摘要会因记录校验失败而使 turn 出错。
 
 `Maybe` 在发布 `compaction/summary` 前检查 provider-neutral 的停止原因（归一规则见 [ADR-0018](0018-goal-stop-outcomes.md#决策)）。`StopMaxTokens` 表示 incomplete checkpoint，即使已返回非空文本也使 compaction 失败，不追加 summary，不遮蔽历史，也不重试该截断响应。参考提交 `5badb15009ae` 的 `compaction-basic/src/summarizer.ts` 在 `max-tokens` 时抛出 `MAX_TOKENS`，同样拒绝发布 checkpoint；本仓沿用自己的稳定标识 `max_tokens`。
 

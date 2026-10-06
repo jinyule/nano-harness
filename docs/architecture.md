@@ -141,7 +141,7 @@ Submit user message
 - 一个 agent 串行处理 turn；一个 turn 最多 256 个 step，产品默认 32。一个 step 是一次模型调用与其产生的全部工具执行。
 - 每个 step 在 `step/start` 之前经过规划模式边界：提交待生效的 `plan/mode` 选择、必要时追加用户切换提示，并取得本 step 的规划段落，见[用户提问与规划模式](#用户提问与规划模式)。
 - 规划模式边界之后、`step/start` 之前运行 step 上下文扩展点：`Engine.RegisterContext` 注册的 `ContextProvider` 随注册方 Scope 存在，按注册顺序收到该 step 可见的工具名和已提交日志，返回的消息作为本 turn 的 `user/message`（step 为 0）先提交再进入请求。provider 错误结束 turn，取消映射为 `canceled`。当前唯一的 provider 是运行时 skill；后台任务通知仍由 engine 在 turn 开始和工具 step 边界直接提交。
-- 每个 step 从权威 log 重新折叠 model surface。request header 在调用前固定 provider、model、effort、system、tool schema 和 context window；provider 请求携带 header 冻结的 effort，不再另读当时的模型目录。root 跟随热切换的设置 route，delegated child 使用它继承的 route（见 [Subagent](#subagent)）；compaction summary 同样记录其冻结的 provider、model 和 effort。
+- 每个 step 从权威 log 重新折叠 model surface。request header 在调用前固定 provider、model、effort、system、tool schema 和 context window；provider 请求携带 header 冻结的 effort，不再另读当时的模型目录。root 跟随热切换的设置 route，delegated child 使用它继承的 route（见 [Subagent](#subagent)），包括其 compaction 的阈值与摘要调用；compaction summary 同样记录其冻结的 provider、model 和 effort。
 - streaming chunk 按 provider 顺序持久化。完成的 assistant message 和全部 tool call 先提交，工具才能执行；每个 call 最终得到唯一 tool result。
 - 超出参数预算的提案先转换为保留 ID/名称、`arguments:{}` 和 `arguments_omitted:true` 的调用，再提交日志；runtime 为其产生错误结果，turn 继续。provider 越界后停止累积与提交该调用的参数 delta，继续消费有界响应；普通参数仍按原顺序提交。限值与持久化策略见 [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败)。
 - 没有输出提交的 retryable provider 失败按热策略指数退避；一旦流内容已提交就不自动重试，避免重复事实。

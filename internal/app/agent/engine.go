@@ -159,7 +159,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			result.Err, result.Outcome = err, session.OutcomeCanceled
 			return result
 		}
-		if _, err := engine.compaction.Maybe(ctx, compaction.Request{Journal: input.journal, Turn: turn}); err != nil {
+		if _, err := engine.compaction.Maybe(ctx, compaction.Request{Journal: input.journal, Turn: turn, Route: input.route}); err != nil {
 			result.Err, result.Outcome = fmt.Errorf("proactive compaction: %w", err), session.OutcomeError
 			return result
 		}
@@ -242,7 +242,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 				}
 				stepOpen = false
 				openStep = 0
-				compacted, compactErr := engine.compaction.Maybe(ctx, compaction.Request{Journal: input.journal, Turn: turn, Force: true})
+				compacted, compactErr := engine.compaction.Maybe(ctx, compaction.Request{Journal: input.journal, Turn: turn, Force: true, Route: input.route})
 				if compactErr != nil || !compacted {
 					result.Err, result.Outcome = errors.Join(err, compactErr), session.OutcomeError
 					return result

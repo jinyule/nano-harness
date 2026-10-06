@@ -65,13 +65,16 @@ func (prepared *compactionPrepared) Stream(_ context.Context, _ llm.Credential, 
 type compactionProvider struct {
 	prepared *compactionPrepared
 	err      error
+	// models records every model ID prepared.
+	models []string
 }
 
 func (*compactionProvider) ID() string { return "openai" }
 func (*compactionProvider) Models() []llm.ModelInfo {
 	return []llm.ModelInfo{{Provider: "openai", ID: "gpt-5.6-luna"}}
 }
-func (provider *compactionProvider) Prepare(string) (llm.PreparedModel, error) {
+func (provider *compactionProvider) Prepare(model string) (llm.PreparedModel, error) {
+	provider.models = append(provider.models, model)
 	return provider.prepared, provider.err
 }
 func (*compactionProvider) AuthMethods() []llm.AuthMethod { return nil }

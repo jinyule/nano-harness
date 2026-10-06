@@ -84,7 +84,7 @@ session format 仍为 v2，变化都在记录层：
 
 ### 7. 继承 route 与委派 runtime context
 
-**继承 route。** 创建 child 时，服务读取 parent 最新的 `request/header`，把其中的 provider、model 和 effort 写入 descriptor 的 `route`；parent 还没有发出请求时委派失败。child 的每个 step 与冷恢复都使用这一 route：request header、system prompt 中的 route 行、`PrepareCall`、retry 策略键和工具执行 route 都取自它，`llm.Request.Effort` 携带 header 冻结的 effort（含省略），provider 以它代替目录中当时的 effort。context window 仍按该 provider/model 查当前设置目录。root 与 parent 自身继续跟随热切换的设置 route（[ADR-0002](0002-provider-neutral-agent-harness.md)）。route 所指的模型从设置中移除后，child 的请求以 `PrepareCall` 的未知模型错误失败，不改用其他模型。child 的 compaction 摘要调用仍使用设置 route，留待 compaction 改造时对齐。
+**继承 route。** 创建 child 时，服务读取 parent 最新的 `request/header`，把其中的 provider、model 和 effort 写入 descriptor 的 `route`；parent 还没有发出请求时委派失败。child 的每个 step 与冷恢复都使用这一 route：request header、system prompt 中的 route 行、`PrepareCall`、retry 策略键和工具执行 route 都取自它，`llm.Request.Effort` 携带 header 冻结的 effort（含省略），provider 以它代替目录中当时的 effort。context window 仍按该 provider/model 查当前设置目录。root 与 parent 自身继续跟随热切换的设置 route（[ADR-0002](0002-provider-neutral-agent-harness.md)）。route 所指的模型从设置中移除后，child 的请求以 `PrepareCall` 的未知模型错误失败，不改用其他模型。child 的 compaction 同样使用继承的 route：压力阈值和保留量按该 provider/model 在当前设置目录中的 context window 计算，摘要调用在该 route 上发出并携带继承的 effort，`compaction/summary` 记录这一 provider、model 和 effort；设置热切换与冷恢复都不改变它。上游 `compaction-basic` 在没有单独配置摘要模型时同样取会话最新请求的 route（child 即继承的 route），但不显式传 effort、由模型默认值决定；本仓传继承的 effort，使摘要请求与 child 其他请求一致。目录中已不再列出该模型时窗口未知，压力 compaction 不触发，context-window 错误与手动请求仍强制执行。
 
 **委派 runtime context。** child 与 parent 使用同一 system prompt 组装，不再有 child 专属段落，因此同 route 的 fork 请求在继承历史之前与 parent 前缀一致。委派说明改由 subagent 服务注册的 step context provider 贡献：有 descriptor 的会话在 step 开始前，若 replay surface 中没有可见的 `runtime-context` 消息，就提交一条
 

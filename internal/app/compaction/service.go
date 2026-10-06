@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,6 +43,11 @@ type Request struct {
 	Turn    uint64
 	Force   bool
 	Manual  bool
+	// Route is a delegated agent's inherited route: its model's context
+	// window sets the thresholds and it carries the summary request,
+	// including its effort. The zero value uses the hot settings route and
+	// that model's catalog effort.
+	Route session.SubagentRoute
 }
 
 // Service owns compaction model calls and hot policy reads.
@@ -105,13 +111,12 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 	if err != nil {
 		return false, err
 	}
-	configured := document.Providers[document.Route.Provider]
-	var model settings.Model
-	for _, candidate := range configured.Models {
-		if candidate.ID == document.Route.Model {
-			model = candidate
-			break
-		}
+	route := request.Route
+	model := findModel(document, document.Route.Provider, document.Route.Model)
+	if route == (session.SubagentRoute{}) {
+		route = session.SubagentRoute{Provider: document.Route.Provider, Model: document.Route.Model, Effort: model.Effort}
+	} else {
+		model = findModel(document, route.Provider, route.Model)
 	}
 	events, err := request.Journal.Events(ctx)
 	if err != nil {
@@ -122,7 +127,7 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 		return false, err
 	}
 	threshold := int(float64(model.ContextWindow) * document.Compaction.ThresholdRatio)
-	if !request.Force && estimateSurface(surface) < threshold {
+	if !request.Force && (model.ContextWindow == 0 || estimateSurface(surface) < threshold) {
 		return false, nil
 	}
 	pruned := false
@@ -142,7 +147,7 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 	if _, err := request.Journal.Append(ctx, session.Record{Type: session.RecordCompactionStart, Turn: request.Turn, Compaction: &session.CompactionData{ID: id}}); err != nil {
 		return false, err
 	}
-	call, err := service.llm.PrepareCall(ctx, document.Route.Provider, document.Route.Model)
+	call, err := service.llm.PrepareCall(ctx, route.Provider, route.Model)
 	if err != nil {
 		return false, service.finishError(ctx, request, id, err)
 	}
@@ -151,7 +156,7 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 	for attempt := 0; ; attempt++ {
 		completion, err = call.Stream(ctx, llm.Request{
 			Purpose: "compaction", System: compactionPrompt,
-			Surface: shadowed, MaxTokens: document.Compaction.MaxTokens,
+			Surface: shadowed, MaxTokens: document.Compaction.MaxTokens, Effort: &route.Effort,
 		}, func(session.AssistantChunk) error { return nil })
 		if err == nil || attempt >= document.Compaction.Retries {
 			break
@@ -175,10 +180,13 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 	for index, node := range shadowed {
 		sequences[index] = node.Sequence
 	}
+	// An earlier summary sits in front of the older messages it retained but
+	// carries a later sequence; the record lists sequences in order.
+	slices.Sort(sequences)
 	data := &session.CompactionData{
 		ID: id, ShadowedSeqs: sequences, ShadowedTokenCount: count,
 		Summary:  []session.ContentBlock{{Type: session.ContentText, Text: text}},
-		Provider: modelInfo.Provider, Model: modelInfo.ID, Effort: modelInfo.Effort,
+		Provider: modelInfo.Provider, Model: modelInfo.ID, Effort: route.Effort,
 	}
 	if _, err := request.Journal.Append(ctx, session.Record{Type: session.RecordCompactionSummary, Turn: request.Turn, Compaction: data}); err != nil {
 		return false, service.finishError(ctx, request, id, err)
@@ -187,6 +195,18 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 		return false, err
 	}
 	return true, nil
+}
+
+// findModel returns the settings catalog entry of provider/model, or the
+// zero model, whose window disables pressure-triggered compaction, when the
+// catalog no longer lists it.
+func findModel(document settings.Document, provider, model string) settings.Model {
+	for _, candidate := range document.Providers[provider].Models {
+		if candidate.ID == model {
+			return candidate
+		}
+	}
+	return settings.Model{}
 }
 
 // prune records the bounded replacement of every visible tool result over

@@ -99,6 +99,10 @@ func latestUser(request llm.Request) (string, bool) {
 func (model *testModel) Stream(ctx context.Context, _ llm.Credential, request llm.Request, _ llm.Emit) (llm.Completion, error) {
 	model.mu.Lock()
 	model.seen = append(model.seen, request)
+	if request.Purpose == "compaction" {
+		model.mu.Unlock()
+		return llm.Completion{Message: session.Message{Role: session.RoleAssistant, Source: session.MessageSource{Kind: "provider", Plugin: "openai"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: "summary"}}}}, nil
+	}
 	text, answered := latestUser(request)
 	chosen := reply{text: "ok"}
 	for _, candidate := range model.rules {

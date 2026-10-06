@@ -649,5 +649,19 @@
     "before": "if ctx.Err() != nil {\n\t\treturn provider.abortForeground(ctx, owner, id)\n\t}",
     "after": "if false && ctx.Err() != nil {\n\t\treturn provider.abortForeground(ctx, owner, id)\n\t}",
     "test": "^TestBash_ForegroundHandoffCancellationKillsOwnedJob$"
+  },
+  {
+    "id": "compaction-inherited-route",
+    "file": "internal/app/compaction/service.go",
+    "before": "route := request.Route",
+    "after": "route := session.SubagentRoute{}",
+    "test": "^TestMaybe_UsesTheInheritedRouteForThresholdAndSummary$"
+  },
+  {
+    "id": "compaction-sorted-shadow",
+    "file": "internal/app/compaction/service.go",
+    "before": "slices.Sort(sequences)",
+    "after": "sequences = slices.Clip(sequences)",
+    "test": "^TestMaybe_SecondCompactionRecordsSortedShadowedSequences$"
   }
 ]
