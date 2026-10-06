@@ -15,6 +15,8 @@
 
 范围限定在 `internal/platform/process`、`internal/adapter/tool/shell`、`internal/adapter/tool/job` 与 `internal/app/job`；不改 agent 包，不改错误码的结构化通道（WP12）。
 
+D/S producer 的结构化分类与搜索 metadata 由[搜索与 shell producer 记录](2026-10-06-structured-search-shell-results.md)补充；本记录继续拥有上述机制与原验证证据。
+
 ## Decision
 
 会话三档的实际 launch mode 文案与 read-only runner 失败优先级由[WP14 Note](2026-10-06-session-sandbox-modes.md)补充；本 Note 保留诊断字节、TERM 宽限、管道排空与 job 文案的证据。

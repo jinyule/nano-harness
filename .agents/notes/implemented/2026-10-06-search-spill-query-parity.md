@@ -11,6 +11,8 @@
 
 集成基线为 `feat/upstream-tool-parity` 的 `566a7d452501bca5711b7557df70dc708416ecb7`：保留 WP11 的附件引用与请求时读取、WP3 的取消及通知持久化、WP8 的会话自身规划投影和锁，以及 ADR 的取代指向。新增 cmd 测试复用已显式配置 `attachmentRoot` 的 `todoConfig`；mutation 清单保留附件用例并追加本次用例，ID 与变异位置唯一。
 
+D/S producer 的结构化分类与搜索 metadata 由[搜索与 shell producer 记录](2026-10-06-structured-search-shell-results.md)补充；本记录继续拥有上述机制与原验证证据。
+
 ## Decision
 
 - `app/tool.IsBlank` 是无副作用纯函数，固定 ECMAScript WhiteSpace 与 LineTerminator 集合；glob pattern/path、grep path/include 与 app/web 查询复用，原参数不修改，grep 非空空格正则保留。

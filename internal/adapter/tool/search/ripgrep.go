@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -38,25 +39,25 @@ func (provider *Provider) run(ctx context.Context, tool string, arguments []stri
 	})
 	switch {
 	case ctx.Err() != nil || err == nil && result.TimedOut:
-		return "", false, fmt.Errorf("%s was aborted before completion (tool timeout or caller cancellation)", tool)
+		return "", false, &searchFailure{text: fmt.Sprintf("%s was aborted before completion (tool timeout or caller cancellation)", tool), code: "SEARCH_ABORTED", cause: errors.Join(ctx.Err(), err)}
 	case err != nil:
-		return "", false, fmt.Errorf("%s could not start its search command (ripgrep launch failed): %w", tool, err)
+		return "", false, searchError("SEARCH_FAILED", fmt.Errorf("%s could not start its search command (ripgrep launch failed): %w", tool, err))
 	case result.Signal != "":
-		return "", false, fmt.Errorf("%s search command was killed by signal %s", tool, result.Signal)
+		return "", false, searchError("SEARCH_FAILED", fmt.Errorf("%s search command was killed by signal %s", tool, result.Signal))
 	case result.ExitCode != 0 && result.ExitCode != 1:
 		stderr := strings.TrimSpace(result.Stderr.Text)
 		if stderr != "" && result.Stderr.Truncated {
 			stderr += " [stderr truncated]"
 		}
 		if invalidPattern.MatchString(stderr) {
-			return "", false, fmt.Errorf("%s pattern rejected by ripgrep: %s", tool, stderr)
+			return "", false, searchError("SEARCH_INVALID_PATTERN", fmt.Errorf("%s pattern rejected by ripgrep: %s", tool, stderr))
 		}
 		if stderr != "" {
 			stderr = ": " + stderr
 		}
-		return "", false, fmt.Errorf("%s search failed (exit %d)%s", tool, result.ExitCode, stderr)
+		return "", false, searchError("SEARCH_FAILED", fmt.Errorf("%s search failed (exit %d)%s", tool, result.ExitCode, stderr))
 	case result.Stdout.Truncated:
-		return "", false, fmt.Errorf("%s produced more raw output than the %d-byte cap; narrow pattern, path, or include and retry", tool, provider.rawLimit)
+		return "", false, searchError("SEARCH_RAW_OUTPUT_OVERFLOW", fmt.Errorf("%s produced more raw output than the %d-byte cap; narrow pattern, path, or include and retry", tool, provider.rawLimit))
 	}
 	return result.Stdout.Text, result.ExitCode == 1, nil
 }

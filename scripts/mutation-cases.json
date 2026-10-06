@@ -999,5 +999,61 @@
     "before": " && session.Text(*node.Message) == delegationContext",
     "after": "",
     "test": "^TestService_DelegationContextReappearsOnlyWhenHidden$"
+  },
+  {
+    "id": "search-failure-classification",
+    "file": "internal/adapter/tool/search/failure.go",
+    "before": "return &searchFailure{text: cause.Error(), code: code, cause: cause}",
+    "after": "return cause",
+    "test": "^TestSearch_PersistsFailureClassifications$"
+  },
+  {
+    "id": "search-glob-meta-through-save",
+    "file": "internal/adapter/tool/search/glob.go",
+    "before": "result.Text = renderGlob(paths, &ref)",
+    "after": "result.Text = renderGlob(paths, &ref)\n\tresult.Meta = nil",
+    "test": "^TestSearch_PersistsMetadataThroughSaveAndSpill$"
+  },
+  {
+    "id": "search-grep-meta-through-save",
+    "file": "internal/adapter/tool/search/grep.go",
+    "before": "result.Text = renderGrep(matches, &ref)",
+    "after": "result.Text = renderGrep(matches, &ref)\n\tresult.Meta = nil",
+    "test": "^TestSearch_PersistsMetadataThroughSaveAndSpill$"
+  },
+  {
+    "id": "search-grep-meta-group-order",
+    "file": "internal/adapter/tool/search/grep.go",
+    "before": "groups[match.path] = index",
+    "after": "groups[match.path] = 0",
+    "test": "^TestSearch_PersistsMetadataThroughSaveAndSpill$"
+  },
+  {
+    "id": "tool-meta-through-spill",
+    "file": "internal/app/tool/runtime.go",
+    "before": "text = retainInline(ctx, invocation, candidate.Name, text)",
+    "after": "before := text\n\t\t\ttext = retainInline(ctx, invocation, candidate.Name, text)\n\t\t\tif text != before { result.Meta = nil }",
+    "test": "^TestRuntime_SpillKeepsMetadataAndPanicsDropIt$"
+  },
+  {
+    "id": "shell-sandbox-classification",
+    "file": "internal/adapter/tool/shell/bash.go",
+    "before": "return appTool.Result{}, &toolFailure{text: run.err.Error(), info: session.ToolError{Name: \"SandboxUnavailableError\", Code: \"SANDBOX_UNAVAILABLE\"}, cause: run.err}",
+    "after": "return appTool.Result{}, run.err",
+    "test": "^TestBash_PersistsSandboxClassificationForActualModes$"
+  },
+  {
+    "id": "shell-aborted-wait-classification",
+    "file": "internal/adapter/tool/shell/bash.go",
+    "before": "return appTool.Result{}, aborted(ctx.Err())\n}\n\nfunc finish",
+    "after": "return appTool.Result{}, errors.New(\"tool call aborted\")\n}\n\nfunc finish",
+    "test": "^TestBash_PersistsAbortedWaitAndFallback$"
+  },
+  {
+    "id": "shell-aborted-fallback-classification",
+    "file": "internal/adapter/tool/shell/bash.go",
+    "before": "return appTool.Result{}, aborted(errors.Join(ctx.Err(), run.err))",
+    "after": "return appTool.Result{}, errors.New(\"tool call aborted\")",
+    "test": "^TestBash_PersistsAbortedWaitAndFallback$"
   }
 ]

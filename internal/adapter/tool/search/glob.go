@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
+	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
 // globMaxResults is the inline path cap of one glob call.
@@ -67,16 +68,22 @@ func (provider *Provider) glob(ctx context.Context, invocation appTool.Invocatio
 	if !empty {
 		paths = strings.FieldsFunc(stdout, func(char rune) bool { return char == '\n' })
 	}
+	result := appTool.Text(renderGlob(paths, nil))
+	result.Meta = &session.ToolMeta{Glob: &session.GlobMeta{
+		Paths: append([]string{}, paths[:min(len(paths), globMaxResults)]...),
+		Total: int64(len(paths)), Truncated: len(paths) > globMaxResults,
+	}}
 	if len(paths) <= globMaxResults {
-		return appTool.Text(renderGlob(paths, nil)), nil
+		return result, nil
 	}
 	ref, err := invocation.SaveText(ctx, "glob-results.txt", strings.Join(paths, "\n"))
 	if err != nil {
 		// Like upstream, an unsaved complete result changes the footer, not
 		// the outcome of the search.
-		return appTool.Text(renderGlob(paths, nil)), nil
+		return result, nil
 	}
-	return appTool.Text(renderGlob(paths, &ref)), nil
+	result.Text = renderGlob(paths, &ref)
+	return result, nil
 }
 
 // renderGlob shows a result that fits whole; a larger one keeps the first

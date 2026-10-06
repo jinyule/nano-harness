@@ -7,6 +7,8 @@
 
 [ADR-0019](../../../docs/decisions/0019-structured-tool-results.md) 决定把上游的错误分类 `{name, code}` 和 8 个工具的结果 metadata 持久化到 `tool/result`，模型可见文本不变；[WP12 实施计划](../proposed/2026-10-06-structured-tool-results-plan.md)把它拆成批次。本批是 F 基础批：所有工具共用的会话格式、严格校验、resume 分类和 runtime 自有分类。它建立在 R 批的取消对齐之上（[取消只替换成功结果](2026-10-07-tool-cancel-keeps-body-failure.md)），Execute 返回的错误因此能保留领域分类。
 
+D/S producer 的结构化分类与搜索 metadata 由[搜索与 shell producer 记录](2026-10-06-structured-search-shell-results.md)补充；本记录继续拥有上述机制与原验证证据。
+
 非目标：任何工具 producer 的分类或 metadata（文件、搜索、web、shell、subagent、goal、question 各批负责）、provider wire 的跨协议证据（收尾批）、TUI 卡片和旧会话迁移。
 
 ## Decision

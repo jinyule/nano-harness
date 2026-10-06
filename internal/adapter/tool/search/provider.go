@@ -106,13 +106,13 @@ func (provider *Provider) locate(ctx context.Context, invocation appTool.Invocat
 	lexical, resolved, err := resolve(requested)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return location{}, fmt.Errorf("%s search failed: %q not found", tool, requested)
+		return location{}, &searchFailure{text: fmt.Sprintf("%s search failed: %q not found", tool, requested), code: "SEARCH_FAILED", cause: err}
 	case err != nil:
-		return location{}, fmt.Errorf("%s search failed: %w", tool, err)
+		return location{}, searchError("SEARCH_FAILED", fmt.Errorf("%s search failed: %w", tool, err))
 	}
 	info, err := lstatPath(resolved)
 	if err != nil {
-		return location{}, fmt.Errorf("%s search failed: %w", tool, err)
+		return location{}, searchError("SEARCH_FAILED", fmt.Errorf("%s search failed: %w", tool, err))
 	}
 	relative := provider.root.Relative(lexical)
 	if relative == ".." || strings.HasPrefix(relative, "../") {

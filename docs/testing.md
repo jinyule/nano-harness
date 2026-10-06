@@ -115,6 +115,14 @@ settings 锁的取消测试使用 channel 固定取得锁期间的取消；`test
 
 credential 锁的永久测试覆盖预先取消的 modify/delete、取得锁与读取期间取消、取消与锁期限同时就绪，以及同进程等待者在 holder 未退出时返回取消。channel 与虚拟时间固定交错；旧 mutex 的不可取消等待在私有测试子进程中成为具名失败，外层拥有子进程与临时目录。独立子进程实际持锁，主测试的取消等待者不得删除它的锁或修改文件，holder 退出后锁可复用。回调开始后的成功刷新完整保存，取消错误保留原文件；真实 `cmd` composition 的 logout 从磁盘字节与无密钥账户列表验证取消不删除账户。负载样本与证据见 [credential 锁调查记录](../.agents/notes/implemented/2026-10-06-credential-lock-cancellation.md)。
 
+## 搜索与 shell 结构化结果证据
+
+`TestSearch_PersistsFailureClassifications` 和根路径测试通过真实 runtime、JSONL journal 与磁盘解码独立断言四类 `SEARCH_*`，覆盖正则/glob、启动、信号、退出、畸形输出、原始输出上限、超时、取消、缺失根、特殊文件与 I/O；语义检查仍无分类。真实 rg 测试固定 0/1/100/101 个 glob 路径的修改时间顺序与 0/1/250/251 个 grep 匹配。SaveText/spill 测试独立比较首次出现分组、CRLF 与 UTF-8 行预览、计数与裁剪前缀；成功保存、失败与无 store 都保留 meta，完整 artifact 保留全部 251 个匹配。单个超大路径可裁到空，最终 JSON 不超过 65,536 字节。
+
+`TestBash_PersistsSandboxClassificationForActualModes` 在 read-only/workspace-write 下使用真实缺失和失败 backend，磁盘必须有 `SandboxUnavailableError/SANDBOX_UNAVAILABLE`，正文使用实际模式且命令没有运行；full access 则从真实文件证明 host 执行。取消测试覆盖前台等待、job 上限回退与交接屏障，分类为 `AbortError/ABORTED`，错误链保留取消原因。普通启动失败没有分类，非零退出、信号与超时仍是成功文本，bash 没有 metadata。
+
+`TestComposition_PersistsSearchAndShellStructuredResults` 走真实配置/composition 与 loopback SSE，从磁盘独立比较两个 meta 和两种分类，并逐字比较下一模型请求的正文，排除 error/meta 字段。旧 search/shell composition 的 Open/Inspect 拒绝且文件不变。修复前测试在原 producer 上以缺失字段失败；默认 mutation 覆盖分类传播、SaveText 后丢 meta、重复文件分组与 runtime spill 丢 meta。
+
 ## 会话 sandbox 证据
 
 `TestRecord_SandboxModeContract` 与 `session-v2-sandbox.jsonl` 的 frozen writer/reader 测试固定三档枚举、严格字段、零 turn/step、即刻切换、resume 修复保留模式与旧 composition 拒绝。反例覆盖未知/重复/null 字段、非法 source、root/child 归属与 descriptor 后 delegation 的因果顺序。`TestService_SandboxCapturedAtDelegationAndRestored` 比较 spawn/fork 的当前父 override、较旧种子与冷恢复，子会话保持 `never`，父后续切换不传播。

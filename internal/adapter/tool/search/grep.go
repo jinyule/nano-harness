@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
+	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
 const (
@@ -108,7 +109,7 @@ func (provider *Provider) grep(ctx context.Context, invocation appTool.Invocatio
 	}
 	// ripgrep would block reading a FIFO or device named explicitly.
 	if !start.info.IsDir() && !start.info.Mode().IsRegular() {
-		return appTool.Result{}, fmt.Errorf("grep search failed: %q is not a regular file or directory", start.relative)
+		return appTool.Result{}, searchError("SEARCH_FAILED", fmt.Errorf("grep search failed: %q is not a regular file or directory", start.relative))
 	}
 	command := []string{"--json", "--regexp=" + arguments.Pattern}
 	if arguments.Include != nil {
@@ -124,8 +125,10 @@ func (provider *Provider) grep(ctx context.Context, invocation appTool.Invocatio
 			return appTool.Result{}, err
 		}
 	}
+	result := appTool.Text(renderGrep(matches, nil))
+	result.Meta = &session.ToolMeta{Grep: grepMeta(matches)}
 	if len(matches) <= grepMaxMatches {
-		return appTool.Text(renderGrep(matches, nil)), nil
+		return result, nil
 	}
 	// The artifact holds every match with its line preview, so it is the
 	// complete search rather than a longer page.
@@ -134,9 +137,10 @@ func (provider *Provider) grep(ctx context.Context, invocation appTool.Invocatio
 	if err != nil {
 		// Like upstream, an unsaved complete result changes the footer, not
 		// the outcome of the search.
-		return appTool.Text(renderGrep(matches, nil)), nil
+		return result, nil
 	}
-	return appTool.Text(renderGrep(matches, &ref)), nil
+	result.Text = renderGrep(matches, &ref)
+	return result, nil
 }
 
 // parseMatches reads every match record from complete `rg --json` output.
@@ -193,7 +197,23 @@ func parseMatches(stdout string) ([]grepMatch, error) {
 }
 
 func malformed(detail string) error {
-	return fmt.Errorf("grep received malformed ripgrep --json output (%s)", detail)
+	return searchError("SEARCH_FAILED", fmt.Errorf("grep received malformed ripgrep --json output (%s)", detail))
+}
+
+// grepMeta uses the same kept matches and previews as the model text.
+func grepMeta(matches []grepMatch) *session.GrepMeta {
+	meta := &session.GrepMeta{Files: []session.GrepFile{}, Total: int64(len(matches)), Truncated: len(matches) > grepMaxMatches}
+	groups := map[string]int{}
+	for _, match := range matches[:min(len(matches), grepMaxMatches)] {
+		index, seen := groups[match.path]
+		if !seen {
+			index = len(meta.Files)
+			groups[match.path] = index
+			meta.Files = append(meta.Files, session.GrepFile{Path: match.path, Matches: []session.GrepMatch{}})
+		}
+		meta.Files[index].Matches = append(meta.Files[index].Matches, session.GrepMatch{LineNumber: int64(match.line), Line: previewLine(match.text)})
+	}
+	return meta
 }
 
 // previewLine bounds one matched line to grepMaxLineBytes at a rune boundary.

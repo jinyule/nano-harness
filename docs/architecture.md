@@ -161,7 +161,7 @@ Submit user message
 - 批次开始前，runtime 按 schema 校验并解码每个调用，再用 `Concurrent(A)` 分类。缺少必填、类型不符、null、非有限数、`-0`、重复键和未声明成员（包括根对象）都成为 `invalid arguments: ...` 结果，并按上游遍历顺序列出全部违规。上游根对象对未知成员开放，本仓更严格，模型可见 schema 不变。
 - `Concurrent(A)` 为 true 的相邻调用每个 agent 最多同时运行 10 个，槽位覆盖 Check、approval 与执行，任一调用完成即可补位；其余调用、未知工具和无效参数形成独占 barrier。前一组全部退出后才进入下一组，结果顺序始终与原始 call 顺序一致。
 - 每个调用轮到执行时依次运行 `Check(ctx, Invocation, A)`、`Approval(A)` 和 `Execute`。`Check` 因此能观察同一批次前序调用的效果和会话范围的状态，并在提问前拒绝语义错误、不安全路径或未读的写入目标。`Check` 收到的 `Invocation.Approved` 恒为 false，且不得产生副作用：之后可能不执行，approval 期间状态也可能变化，所以 `Execute` 必须重新检查它依赖的条件；`Approval` 返回非空原因时请求一次性 approval，原因截断到 1 KiB。执行函数仍须在执行点确认 `Invocation.Approved`。
-- `tool.Result` 由文本和可选的一张规范化图片引用组成。runtime 统一替换非法 UTF-8，对只含文本的结果（含错误）应用 spill 策略，再把完整文本截断到 256 KiB；附件已提交的图片引用原样进入 `session.ToolResult`。
+- `tool.Result` 由文本、可选的一张规范化图片引用和类型化 metadata 组成。runtime 统一替换非法 UTF-8，对只含文本的结果（含错误）应用 spill 策略，再把完整文本截断到 256 KiB；附件已提交的图片引用原样进入 `session.ToolResult`。
 - spill 策略与上游 Base 相同：估算超过 12,500 token（`ceil(UTF-16 单元/4)+4`）的结果保存到 spill store，模型看到首尾预览和 `(Omitted N bytes. Full formatted result stored at: <locator>. <hint>)`。携带图片的结果和声明 `KeepInline` 的工具（`read`）不进入策略；错误预览保留 `is_error`；没有 store、没有会话或保存失败时保留原结果。
 - `Runtime.Catalog(allow)` 一次冻结按名称排序的 schema 和可见工具贡献的 guidance。guidance 按上游 section order 排序，engine 把它追加在 system prompt 的工具列表之后，与 schema 一起写入 `request/header`。
 - `Invocation` 携带 session、cwd、delegation、approval 结果、本 step 的 route（provider、model 与模型是否声明图片输入），以及当前 tool/call 的 call ID、turn、step 和调用方 durable journal。需要记录会话事实的工具在 tool/result 之前向该 journal 追加；没有 journal 的调用方必须失败关闭。
@@ -184,6 +184,8 @@ Submit user message
 | `internal/adapter/tool/plan` | `plan-tools` | `exit_plan_mode` |
 | `internal/adapter/tool/skill` | `skill-tools` | `skill`，以及 step 前的 skill 目录与 `/name` 注入 |
 | `internal/adapter/tool/goal` | `goal-tools` | `get_goal`、`create_goal`、`update_goal` |
+
+`search-tools` 从实际 rg 结果生成 glob/grep metadata，沿用正文的结果上限、首次出现分组和行预览；runtime 对最终 JSON 执行 65,536 字节硬上限，SaveText 降级或正文 spill 保留 metadata。搜索 adapter 在失败产生处声明 `SearchError`；shell adapter 为前台 sandbox 不可用和工具自身取消声明分类，保留平台按实际模式生成的文案与错误链。映射与字段由 [ADR-0019](decisions/0019-structured-tool-results.md) 拥有；这些纯值包装不增加运行时 effect，既有 Scope 所有权与关闭顺序不变。
 
 `internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。`cmd` 用 `WithReadOnly` 把当前 spill 分区只读地交给 `read`、`read_image` 与 `grep`。这些工具在执行点用 `ReadableFrom` 从调用方已提交的原始日志授权精确的历史 spill 文件，恢复时更换写入 root 不会撤销日志中的定位符；fork 继承与 compaction 遮蔽的结果也可读回。`shell-tools` 收到不含该分区的 root。
 

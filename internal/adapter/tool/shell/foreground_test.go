@@ -12,6 +12,7 @@ import (
 
 	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
+	"github.com/jinyule/nano-harness/internal/core/session"
 	platformProcess "github.com/jinyule/nano-harness/internal/platform/process"
 )
 
@@ -95,6 +96,10 @@ func TestBash_ForegroundHandoffCancellationKillsOwnedJob(t *testing.T) {
 	remaining := h.jobs.List("session-1")
 	if handoffErr == nil || handoffErr.Error() != "tool call aborted" || result.Text != "" || len(remaining) != 0 {
 		t.Fatalf("cancelled handoff = %q, %v; remaining jobs = %+v", result.Text, handoffErr, remaining)
+	}
+	var failure appTool.Failure
+	if !errors.Is(handoffErr, context.Canceled) || !errors.As(handoffErr, &failure) || failure.ToolError() != (session.ToolError{Name: "AbortError", Code: "ABORTED"}) {
+		t.Fatalf("handoff cause/classification lost: %v", handoffErr)
 	}
 	select {
 	case <-stopped:

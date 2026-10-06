@@ -13,6 +13,8 @@ WP14 的维护者决定是对齐 Base 的会话级文件策略与 Linux 联网�
 
 重叠 Note 部分保留：[核心 harness](2026-08-24-core-agent-harness.md) 拥有组件建立证据，[Base 工具定义](2026-10-04-upstream-tool-definitions.md) 拥有 schema/工具映射，[工具运行时](2026-10-06-tool-runtime-upstream-alignment.md) 拥有并发与参数预算；三者双向链接本 Note，sandbox 当前规则以 ADR-0021 为准。文件发布、spill、后台任务、规划和 runtime skill 的 Note 继续拥有各自规则，没有被完整取代；不归档它们。[shell 文案](2026-10-07-shell-job-upstream-text.md)继续拥有 TERM 宽限、排空与 job detail，[委派 route/context](2026-10-06-subagent-route-context-sender.md)继续拥有固定 route、统一 system 与 sender；两者双向链接本 Note，三档模式与上下文共存由本 Note 补充。[对齐计划](../proposed/2026-10-04-upstream-tool-parity.md) 的 WP14 状态已同步。
 
+D/S producer 的结构化分类与搜索 metadata 由[搜索与 shell producer 记录](2026-10-06-structured-search-shell-results.md)补充；本记录继续拥有上述机制与原验证证据。
+
 ## Decision
 
 实现 `session.SandboxMode`、严格 `sandbox/mode` decoder 与 JSONL 因果/归属校验，默认 workspace-write；人类 `/sandbox MODE` 立即提交，拒绝模型或 delegated 切换。模式只折叠权威日志；resume 保留最新事件。spawn/fork 捕获委派时的显式父 override，child 新 delegation 记录覆盖 seed 中旧策略，approval 保持 `never`；父后续切换与一次性授权不传播。

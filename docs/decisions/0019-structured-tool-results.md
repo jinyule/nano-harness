@@ -86,7 +86,7 @@ producer 要在外部提交前完成可能失败的 meta 构造。write/edit 的
 | `ToolNotFoundError` / `UNKNOWN_TOOL` | runtime 中不存在或已撤销贡献的工具。 |
 | `ToolArgsError` / `INVALID_ARGS` | prepare 的 schema 解码与校验失败，即文本以 `invalid arguments:` 开头的结果。工具 Check 中的语义检查是普通错误，不归这一类。 |
 | `ToolOutputError` / `INVALID_TOOL_OUTPUT` | 第 2 节的 meta 契约违规。 |
-| `AbortError` / `ABORTED_BEFORE_DISPATCH`、`ABORTED` | 第 2 节的取消检查点。bash 自己返回的 `tool call aborted`（前台等待或交接时调用被取消）同样是 `AbortError/ABORTED`，与上游 tool-bash 设置的 name 和 code 一致。 |
+| `AbortError` / `ABORTED_BEFORE_DISPATCH`、`ABORTED` | 第 2 节的取消检查点。bash 自己返回的 `tool call aborted`（后台启动前、前台等待或交接、job 上限回退执行时调用被取消，或关闭已撤销交接记录）同样是 `AbortError/ABORTED`，与上游 tool-bash 设置的 name 和 code 一致。 |
 | `ToolOutcomeUnknownError` / `TOOL_OUTCOME_UNKNOWN` | JSONL resume 修复写入的 `Error: interrupted before a result was committed`。nano 在执行批次前提交全部 tool/call，未决调用都可能已经开始，因此不写 `TOOL_NOT_STARTED`。 |
 | `FsError` / `FS_NOT_FOUND`、`FS_NOT_REGULAR_FILE` | read/read_image 的目标不存在，或路径中间段不是目录（上游同样把 ENOTDIR 归为 `FS_NOT_FOUND`）；edit 观察到目标缺失；目标是目录或特殊文件。上游的 `FS_NOT_DIRECTORY` 只用于目录列举，本仓文件工具没有对应路径。 |
 | `FsError` / `FS_NOT_TEXT`、`FS_TOO_LARGE` | read/edit 遇到二进制或非法 UTF-8；edit 超过 10 MiB；read_image 超过源字节上限。read 的窗口截断是成功，不是 `FS_TOO_LARGE`。 |
@@ -96,7 +96,7 @@ producer 要在外部提交前完成可能失败的 meta 构造。write/edit 的
 | `FsError` / `FS_PERMISSION_DENIED`、`FS_SANDBOX_DENIED`、`FS_IO_ERROR` | `fs.ErrPermission`；workspace 越界或符号链接拒绝；其他 stat/open/read/摘要/暂存/同步/link/rename 失败。`FS_SANDBOX_DENIED` 的具体条件在 WP14 会话 sandbox 模式合入后按实际路径重新核对。 |
 | `SearchError` / `SEARCH_INVALID_PATTERN`、`SEARCH_FAILED`、`SEARCH_RAW_OUTPUT_OVERFLOW`、`SEARCH_ABORTED` | rg 拒绝正则或 glob；搜索根失败、显式特殊文件、启动失败、信号、非 0/1 退出、`--json` 输出畸形；stdout 超过 20,000,000 字节；搜索超时或调用方取消。rg 缺失或版本过低是启动错误，不产生工具结果。 |
 | `WebError` / `app/web` 的全部 Code | 包括上游同名码和本仓已有的 `WEB_SEARCH_TIMEOUT`、`WEB_REQUEST_RECORD_FAILED`；文本保持 `<CODE>: <message>`。非 2xx HTTP 是成功结果。 |
-| `SandboxUnavailableError` / `SANDBOX_UNAVAILABLE` | 前台 bash 的 runner 缺失或失败，即 `errors.Is(err, process.ErrSandboxUnavailable)`；文本已是上游 `SandboxUnavailableError` 的原文。platform 不依赖领域层，分类在 shell adapter 补上。后台 job 的 runner 失败只记录为 failed 状态，不是工具错误。 |
+| `SandboxUnavailableError` / `SANDBOX_UNAVAILABLE` | 前台 bash 的 runner 缺失或失败，即 `errors.Is(err, process.ErrSandboxUnavailable)`；文本保留上游 `SandboxUnavailableError` 原文，按实际 launch mode 使用 `read-only` 或 `workspace-write`，runner 故障保留 `Runner failure: <行>`。`danger-full-access` 使用 host runner，不要求 sandbox 后端。platform 不依赖领域层，分类在 shell adapter 补上。后台 job 的 runner 失败只记录为 failed 状态，不是工具错误。 |
 | `SubagentError` / `app/subagent` 的全部 Code | `INVALID_REQUEST`、`DEPTH_LIMIT`、`ACTIVATION_LIMIT_REACHED`、`UNAUTHORIZED`、`NOT_RESUMABLE`、`PARENT_UNAVAILABLE`、`ABORTED`、`ABORTED_BEFORE_DISPATCH`、`ACTIVATION_TEARDOWN_FAILED`。`DEPTH_LIMIT` 是本仓已有码，上游深度错误没有码。`SubagentError/ABORTED` 与 runtime 的 `AbortError/ABORTED` 码相同，靠 name 区分。 |
 | `GoalError` / `app/goal` 的全部 `GOAL_*` | 领域拒绝。 |
 | `HarnessError` / `GOAL_TOOL_*` | goal 工具的 `toolError`。name 与上游 `new HarnessError` 一致，不另起 `GoalToolError`。 |
@@ -163,9 +163,10 @@ diff 规则：
 
 沿用 nano session v2。新增字段是加法，由 composition 身份识别；meta 内不设版本号，因为 composition 已标识运行时语义，会话格式版本标识编码。模型 schema 和 prompt 不变，插件启动顺序和 Scope cleanup 不变，cmd 继续注入同一批实例。纯 DTO 不增加插件、服务定位器或全局错误注册表。
 
-`52d3715` 的 composition 身份为 `tool-runtime-v2`、`fs-tools-v3`、`search-tools-v3`、`shell-tools-v3`、`job-tools-v2`、`subagent-tools-v4`、`todo-tools-v1`、`web-tools-v2`、`question-tools-v1`、`plan-tools-v1`、`skill-tools-v1`、`goal-tools-v2`、`spill-v1`、`attachments-v1`、`tool-result-prune-v1`、`session-v2`。WP14 还会提升 fs 与 shell 并增加 `sandbox-policy-v1`。WP12 之前的取消对齐只改变被取消调用的结果文本，不改变已持久化记录的含义，与 K1 引入该行为时一样不提升 `tool-runtime`。WP12 按批次合入，每批从合入时的实际基线各提升一次：
+`52d3715` 的 composition 身份为 `tool-runtime-v2`、`fs-tools-v3`、`search-tools-v3`、`shell-tools-v3`、`job-tools-v2`、`subagent-tools-v4`、`todo-tools-v1`、`web-tools-v2`、`question-tools-v1`、`plan-tools-v1`、`skill-tools-v1`、`goal-tools-v2`、`spill-v1`、`attachments-v1`、`tool-result-prune-v1`、`session-v2`。WP14 已把 fs 与 shell 提升为 v4，并增加 `sandbox-policy-v1`。WP12 之前的取消对齐只改变被取消调用的结果文本，不改变已持久化记录的含义，与 K1 引入该行为时一样不提升 `tool-runtime`。WP12 按批次合入，每批从合入时的实际基线各提升一次：
 
 - 基础批把 `tool-runtime` 提升一档：runtime 自有分类、meta 通道和 resume 修复分类都在这一档。
+- 搜索 D 批把 `search-tools-v3` 提升为 v4；shell S 批在 WP14 的 v4 上提升为 v5。
 - 每个 producer 批提升自己的 provider token：fs、search、web、shell、subagent、goal、question。question 批同时提升 plan，因为 exit_plan_mode 的结果会带上传播来的提问分类。
 - jobs、todo、skill 自身的结果契约不变，token 不变；它们的 runtime 分类随 `tool-runtime` 一起变化。
 - `session-v2`、`spill-v1`、`attachments-v1` 不因这些加法字段改变。

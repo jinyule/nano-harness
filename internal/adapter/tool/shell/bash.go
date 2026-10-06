@@ -147,7 +147,7 @@ func (provider *Provider) bash(ctx context.Context, invocation appTool.Invocatio
 	}
 	if arguments.background() {
 		if ctx.Err() != nil {
-			return appTool.Result{}, errors.New("tool call aborted")
+			return appTool.Result{}, aborted(ctx.Err())
 		}
 		id, err := provider.jobs.Launch(provider.job(invocation, arguments.Command, request, &processRun{}))
 		if err != nil {
@@ -237,7 +237,7 @@ func (provider *Provider) foregroundResult(ctx context.Context, owner, id string
 		// the record, which leaves nothing to hand over.
 		read, err := provider.jobs.Read(owner, id)
 		if err != nil {
-			return appTool.Result{}, errors.New("tool call aborted")
+			return appTool.Result{}, aborted(err)
 		}
 		if read.Job.Status == appJob.StatusRunning || read.Job.Status == appJob.StatusStopping {
 			return appTool.Text(promoted(read.Delta(), id, timeoutMS)), nil
@@ -258,12 +258,15 @@ func (provider *Provider) abortForeground(ctx context.Context, owner, id string)
 	// draining pipes; one more second covers settlement.
 	_, _ = provider.jobs.Wait(context.WithoutCancel(ctx), owner, id, 2*terminationGrace+time.Second)
 	_ = provider.jobs.Remove(owner, id)
-	return appTool.Result{}, errors.New("tool call aborted")
+	return appTool.Result{}, aborted(ctx.Err())
 }
 
 func finish(ctx context.Context, run processRun, timeoutMS float64) (appTool.Result, error) {
 	if ctx.Err() != nil || errors.Is(run.err, context.Canceled) {
-		return appTool.Result{}, errors.New("tool call aborted")
+		return appTool.Result{}, aborted(errors.Join(ctx.Err(), run.err))
+	}
+	if errors.Is(run.err, platformProcess.ErrSandboxUnavailable) {
+		return appTool.Result{}, &toolFailure{text: run.err.Error(), info: session.ToolError{Name: "SandboxUnavailableError", Code: "SANDBOX_UNAVAILABLE"}, cause: run.err}
 	}
 	if run.err != nil {
 		return appTool.Result{}, run.err
