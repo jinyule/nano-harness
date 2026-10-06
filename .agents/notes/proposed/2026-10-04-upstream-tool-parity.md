@@ -67,6 +67,7 @@
 | 2026-10-05 | 委派深度保持本仓的 4（上游 1）；`interrupt_agent` 也作用于运行中的 one-shot 后代 | WP7 | ADR-0013 |
 | 2026-10-05 | 规划模式不在执行点拦截写入（每次写入本就需要 approval） | WP8 | ADR-0014 |
 | 2026-10-05 | 工具结果图片的三种 wire 映射；发送前确定性图片预算（20 张、10 MiB） | WP9 | ADR-0015 |
+| 2026-10-06 | 启动顺序改为工具、jobs、subagent/goal 服务在前，agent registry、root bootstrap、goal driver 最后（仅在前端之前）；关闭时先停前端与 goal driver，再由 registry 同时取消并等待所有 agent，之后才撤销工具、停止 jobs、删除临时目录 | 整体审查、WP1 | `docs/architecture.md` |
 | 2026-10-06 | 所有 provider 请求（含 OAuth）拒绝跟随重定向；IPv6 字面量同样做 NAT64 校验 | 整体审查 | ADR-0011 |
 | 2026-10-06 | 会话日志内联图片会在约 10 张大图后写满 64 MiB：先以 8 MiB 保留容量拒绝新图片（`fe565ad`），再按上游迁移到附件存储（WP11），届时取代容量拒绝 | 整体审查、维护者 | ADR-0015、ADR-0017 |
 | 2026-10-06 | WP11 设计：对象按 `sha256` 存于 `<attachment-root>/v1/objects/`（0700/0600、独占创建、fsync、硬链接发布、发布后只读），不自动删除；图片块只存 `{id, name, media_type, bytes, width, height}`；session 仍为 v2，靠 `attachments-v1` composition token 拒绝旧会话；`/attach` 在消息提交前才写入存储（对齐上游）；附件缺失或损坏时本次请求以占位文本代替并提示用户（偏离上游的请求失败，避免会话永久不可用；维护者 2026-10-06 确认不必严格遵循上游）；移除 8 MiB 图片保留容量检查 | WP9 提案、协调者与维护者确认 | ADR-0017（草稿） |
@@ -81,7 +82,7 @@
 | 前台 `bash` 的 job 先于 Wait 结束时发出多余完成通知并写入会话 | Blocker | WP3 | 修复中 |
 | fork 子代理继承父会话 `plan/mode`，在规划模式下运行且无法退出 | Blocker | WP8 | 修复中 |
 | `web_fetch` 对 IPv6 字面量跳过 NAT64 校验（SSRF） | Blocker | WP5 | 已合入 `6d3322c` |
-| 关闭时工具先于在途 turn 撤销，前台 `bash` 可能在临时目录删除后才取消 | Suggestion | WP1 | 修复中 |
+| 关闭时工具先于在途 turn 撤销，前台 `bash` 可能在临时目录删除后才取消 | Suggestion | WP1 | 已合入 `2fa6aa7`：agent 层最后启动、先关闭，registry 一次性取消并等待全部在途 turn |
 | job 上限回退路径不归 Scope；超时交接竞态；macOS 进程组回收承诺 | Suggestion | WP3 | 修复中 |
 | `send_message` 后 `interrupt_agent` 丢弃已确认消息；one-shot 子代理被通知唤醒 | Suggestion | WP7 | 修复中 |
 | fork 子代理 `get_goal` 返回父目标；driver 只等 root 空闲（核实与上游一致） | Suggestion | WP10 | 已合入 `7959206` |
