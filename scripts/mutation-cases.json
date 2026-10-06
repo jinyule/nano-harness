@@ -210,6 +210,13 @@
     "test": "^TestService_CancelledExitKeepsPlanMode$"
   },
   {
+    "id": "plan-cleanup-cancels-calls",
+    "file": "internal/app/plan/plan.go",
+    "before": "for _, cancel := range service.calls {\n\t\t\tcancel()\n\t\t}",
+    "after": "for range service.calls {\n\t\t}",
+    "test": "^TestService_CleanupWaitsForInFlightCalls$"
+  },
+  {
     "id": "todo-call-kind",
     "file": "internal/adapter/session/jsonl/order.go",
     "before": "if call == nil || call.Name != \"todo_write\" || call.ArgumentsOmitted {",

@@ -18,19 +18,40 @@ type memoryJournal struct {
 	// failAt fails the append whose 1-based position among appends matches.
 	failAt  int
 	appends int
-	// entered and release, when set, hold every Events call open.
+	// entered and release, when set, hold every Events call open until
+	// release or the call's context ends.
 	entered chan struct{}
 	release chan struct{}
 }
 
 func (journal *memoryJournal) Header() session.Header { return session.Header{SessionID: journal.id} }
 
-func (journal *memoryJournal) Events(context.Context) ([]session.Event, error) {
+func (journal *memoryJournal) Events(ctx context.Context) ([]session.Event, error) {
 	if journal.entered != nil {
 		journal.entered <- struct{}{}
-		<-journal.release
+		select {
+		case <-journal.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	return append([]session.Event(nil), journal.events...), journal.eventsErr
+}
+
+// stubbornJournal reports when a read observes cancellation, then finishes
+// that read successfully once released, like a journal whose read was
+// already past its last cancellation check.
+type stubbornJournal struct {
+	*memoryJournal
+	entered, cancelled, release chan struct{}
+}
+
+func (journal *stubbornJournal) Events(ctx context.Context) ([]session.Event, error) {
+	close(journal.entered)
+	<-ctx.Done()
+	close(journal.cancelled)
+	<-journal.release
+	return journal.memoryJournal.Events(context.Background())
 }
 
 func (journal *memoryJournal) Append(_ context.Context, record session.Record) (session.Event, error) {
@@ -271,7 +292,9 @@ func TestService_CancelledExitKeepsPlanMode(t *testing.T) {
 	entered := make(chan struct{})
 	done := make(chan error, 1)
 	// Hold the session's lock so Exit waits where it checks the context.
-	locked := service.session("s", false)
+	service.mu.Lock()
+	locked := service.sessions["s"]
+	service.mu.Unlock()
 	locked.mu.Lock()
 	go func() {
 		close(entered)
@@ -362,5 +385,88 @@ func TestService_SessionsDoNotWaitForEachOther(t *testing.T) {
 	slow.release <- struct{}{}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestService_CleanupCancelsInFlightCalls(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		// queue first leaves a selection for the boundary to commit.
+		queue bool
+		call  func(*Service, *memoryJournal) error
+	}{
+		{"select", false, func(service *Service, journal *memoryJournal) error {
+			_, err := service.Select(context.Background(), journal, true, false)
+			return err
+		}},
+		{"step", true, func(service *Service, journal *memoryJournal) error {
+			_, err := service.Step(context.Background(), journal, 1)
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, scope := startPlan(t)
+			journal := &memoryJournal{id: "s"}
+			if test.queue {
+				if change, err := service.Select(t.Context(), journal, true, true); err != nil || change != Queued {
+					t.Fatalf("queue = %s, %v", change, err)
+				}
+			}
+			journal.entered, journal.release = make(chan struct{}, 1), make(chan struct{})
+			result := make(chan error, 1)
+			go func() { result <- test.call(service, journal) }()
+			<-journal.entered
+			// Close runs while the call holds the session's lock inside its
+			// journal read; nothing else will ever release that read.
+			if err := scope.Close(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			close(journal.release)
+			err := <-result
+			if journal.appends != 0 {
+				t.Fatalf("an in-flight call committed after cleanup returned: %v", journal.tail(0))
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("in-flight call = %v", err)
+			}
+		})
+	}
+}
+
+func TestService_CleanupWaitsForInFlightCalls(t *testing.T) {
+	service, scope := startPlan(t)
+	journal := &stubbornJournal{memoryJournal: &memoryJournal{id: "s"}, entered: make(chan struct{}), cancelled: make(chan struct{}), release: make(chan struct{})}
+	result := make(chan error, 1)
+	go func() {
+		_, err := service.Select(context.Background(), journal, true, false)
+		result <- err
+	}()
+	<-journal.entered
+	closed := make(chan error, 1)
+	go func() { closed <- scope.Close(context.Background()) }()
+	select {
+	case <-journal.cancelled:
+	case <-time.After(10 * time.Second):
+		close(journal.release)
+		t.Fatal("cleanup did not cancel the in-flight journal read")
+	}
+	if _, err := service.Select(t.Context(), &memoryJournal{id: "other"}, true, false); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("select during cleanup = %v", err)
+	}
+	select {
+	case err := <-closed:
+		t.Fatalf("cleanup returned with a call in flight: %v", err)
+	default:
+	}
+	close(journal.release)
+	if err := <-result; err != nil {
+		t.Fatalf("in-flight select = %v", err)
+	}
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	// The read that finished despite cancellation committed before cleanup returned.
+	if got := journal.tail(0); !equal(got, []string{"plan/mode=on"}) {
+		t.Fatalf("records = %v", got)
 	}
 }

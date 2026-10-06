@@ -59,6 +59,7 @@ TUI 是唯一 broker，与 approval 共用同一交互锁逐题提问：输入�
 - engine 在每个 step 的主动 compaction 之后、`step/start` 之前调用 `Service.Step(ctx, journal, turn)`：提交待生效选择，在需要时追加用户切换提示，并返回本 step 请求使用的规划段落。任一追加失败使 turn 以 error 结束，选择保留到后续边界重试。上游仅警告并继续；本仓主动停止，保证模型状态只能来自已提交事实。
 - `Service.Active(sessionID)` 报告最近一次边界或提交后的模式，供本 step 内的工具使用；`Service.Exit(ctx, sessionID)` 在该会话的状态锁内检查 context；已取消时用 `%w` 保留取消原因且不改变待生效选择，否则记录一次获批退出。接受退出选择之后的取消不撤销已经接受的选择。
 - 服务按会话加锁：每个会话的选择、边界和退出（包括其中的日志读取与 `fsync` 追加）由该会话自己的锁串行化，服务锁只保护生命周期和会话表，因此并发子代理的边界互不等待。锁顺序为 agent worker 状态锁 → 会话锁。会话表项在第一次选择或边界时创建，保留到服务停止，每项只有一把锁和几个布尔值；不在运行中删除表项，避免持锁调用方与新表项各自持有不同的锁。
+- 插件 cleanup 先拒绝新的 `Select`、`Step` 和 `Exit` 并丢弃会话表，再取消进行中调用的 context，等待它们全部返回后才返回。阻塞在会话锁或日志读取中的调用收到取消；已越过日志最后一次取消检查的读取或追加照常完成，但都发生在 cleanup 返回之前。因此 cleanup 返回后不会再追加 `plan/mode` 或切换提示，等待时长取决于日志对取消的响应。
 
 用户切换提示是 `source.kind = "plan-mode"` 的 `user/message`，文本沿用上游：`The user switched this session to plan mode.` 或 `The user switched this session back to the default mode.`。只有用户选择会请求提示，而且只在最近一次 `request/header` 描述的是另一种模式时追加；首个请求之前或往返切换后净变化为零时不追加。它位于 turn 的用户输入之后、`step/start` 之前；上游把它放在同一 step 的消息里，位置不同但模型同样在下一请求看到它。
 

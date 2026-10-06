@@ -274,7 +274,7 @@ list_agents                → parent 自己的 subagent/catalog；descendants �
 - engine 在每个 step 的 `step/start` 前调用 `Step`：提交待生效选择；若是用户切换且最近一次 `request/header` 描述的是另一种模式，追加 `source.kind = "plan-mode"` 的切换提示；规划模式生效时返回 Base `section` 原文，prompt assembler 把它放在角色段落之后、工具段落之前。
 - `exit_plan_mode` 在本 step 处于规划模式时通过提问接缝提交计划审查；获批后用 `Exit(ctx, sessionID)` 在该会话的状态锁内检查取消，再安排在下一个边界静默退出，其余答案保持规划模式并把反馈作为错误结果返回。
 
-待生效选择只在进程内。规划模式不改变工具目录、approval、sandbox 或 allowlist，写类工具仍在执行点请求一次性 approval，评估见 ADR-0014。
+插件 cleanup 先拒绝新调用，再取消并等待进行中的 `Select`、`Step` 和 `Exit`，返回后不会再有规划记录追加。待生效选择只在进程内。规划模式不改变工具目录、approval、sandbox 或 allowlist，写类工具仍在执行点请求一次性 approval，评估见 ADR-0014。
 
 ## 运行时 Skill
 

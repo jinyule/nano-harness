@@ -89,23 +89,32 @@ type state struct {
 }
 
 // Service owns pending selections and the boundary commit. Its mutex
-// guards only the lifecycle and the session map; an entry, once created,
-// lives until the service stops, so a session's lock is never replaced
-// while a caller holds it.
+// guards only the lifecycle, the session map, and the calls in flight; an
+// entry, once created, lives until the service stops, so a session's lock
+// is never replaced while a caller holds it.
 type Service struct {
 	mu       sync.Mutex
 	started  bool
 	running  bool
 	sessions map[string]*state
+	// calls cancels each Select, Step, or Exit in flight; group joins them.
+	nextCall uint64
+	calls    map[uint64]context.CancelFunc
+	group    sync.WaitGroup
 }
 
 // New constructs an inactive service.
-func New() *Service { return &Service{sessions: map[string]*state{}} }
+func New() *Service {
+	return &Service{sessions: map[string]*state{}, calls: map[uint64]context.CancelFunc{}}
+}
 
 // ID returns the stable plugin identity.
 func (*Service) ID() string { return "plan-mode" }
 
-// Start activates selections until scope cleanup discards every pending one.
+// Start activates selections until scope cleanup. Cleanup rejects new
+// calls, cancels every call in flight, and returns only after each has
+// returned, so nothing is appended once it returns; it also discards every
+// pending selection.
 func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -116,7 +125,13 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 		service.mu.Lock()
 		service.running = false
 		service.sessions = map[string]*state{}
+		for _, cancel := range service.calls {
+			cancel()
+		}
 		service.mu.Unlock()
+		// A call holding a session's lock may be inside a journal read or
+		// append; the wait is bounded by the journal's cancellation latency.
+		service.group.Wait()
 		return nil
 	}); err != nil {
 		return err
@@ -131,10 +146,11 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 // interleave with a turn starting. The commit is the only effect: a failed
 // append returns its error and leaves the session unchanged.
 func (service *Service) Select(ctx context.Context, journal Journal, active, inTurn bool) (Change, error) {
-	current := service.session(journal.Header().SessionID, true)
-	if current == nil {
-		return "", ErrNotRunning
+	ctx, current, done, err := service.begin(ctx, journal.Header().SessionID, true)
+	if err != nil {
+		return "", err
 	}
+	defer done()
 	current.mu.Lock()
 	defer current.mu.Unlock()
 	events, err := journal.Events(ctx)
@@ -172,10 +188,11 @@ func (service *Service) Select(ctx context.Context, journal Journal, active, inT
 // force for the step's request, or "" outside plan mode. A failed append
 // returns its error and keeps the selection pending for a later boundary.
 func (service *Service) Step(ctx context.Context, journal Journal, turn uint64) (string, error) {
-	current := service.session(journal.Header().SessionID, true)
-	if current == nil {
-		return "", ErrNotRunning
+	ctx, current, done, err := service.begin(ctx, journal.Header().SessionID, true)
+	if err != nil {
+		return "", err
 	}
+	defer done()
 	current.mu.Lock()
 	defer current.mu.Unlock()
 	events, err := journal.Events(ctx)
@@ -211,7 +228,9 @@ func (service *Service) Step(ctx context.Context, journal Journal, turn uint64) 
 // Active reports whether the session's latest step boundary or commit left
 // it in plan mode. Tools call it while their step runs.
 func (service *Service) Active(sessionID string) bool {
-	current := service.session(sessionID, false)
+	service.mu.Lock()
+	current := service.sessions[sessionID]
+	service.mu.Unlock()
 	if current == nil {
 		return false
 	}
@@ -226,16 +245,11 @@ func (service *Service) Active(sessionID string) bool {
 // session's lock, so cancellation before the selection rejects it without
 // changing pending state; cancellation after it does not undo it.
 func (service *Service) Exit(ctx context.Context, sessionID string) error {
-	service.mu.Lock()
-	running := service.running
-	service.mu.Unlock()
-	if !running {
-		return ErrNotRunning
+	ctx, current, done, err := service.begin(ctx, sessionID, false)
+	if err != nil {
+		return err
 	}
-	current := service.session(sessionID, false)
-	if current == nil {
-		return ErrInactive
-	}
+	defer done()
 	current.mu.Lock()
 	defer current.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -248,19 +262,36 @@ func (service *Service) Exit(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-// session returns the state of id, creating it when create is set. It
-// returns nil when the service is not running or, without create, when the
-// session never reached a selection or boundary.
-func (service *Service) session(id string, create bool) *state {
+// begin admits one call for session id while the service runs, creating
+// the session's state when create is set, and returns the call's context,
+// which cleanup cancels. It reports ErrNotRunning once cleanup has begun
+// and ErrInactive, without create, for a session that never reached a
+// selection or boundary. done must run once the call stops touching the
+// state and the journal.
+func (service *Service) begin(ctx context.Context, id string, create bool) (context.Context, *state, func(), error) {
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	if !service.running {
-		return nil
+		return nil, nil, nil, ErrNotRunning
 	}
 	current := service.sessions[id]
-	if current == nil && create {
+	if current == nil {
+		if !create {
+			return nil, nil, nil, ErrInactive
+		}
 		current = &state{}
 		service.sessions[id] = current
 	}
-	return current
+	call, cancel := context.WithCancel(ctx)
+	service.nextCall++
+	key := service.nextCall
+	service.calls[key] = cancel
+	service.group.Add(1)
+	return call, current, func() {
+		cancel()
+		service.mu.Lock()
+		delete(service.calls, key)
+		service.mu.Unlock()
+		service.group.Done()
+	}, nil
 }
