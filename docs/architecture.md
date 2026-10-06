@@ -166,7 +166,7 @@ Submit user message
 - `Runtime.Catalog(allow)` 一次冻结按名称排序的 schema 和可见工具贡献的 guidance。guidance 按上游 section order 排序，engine 把它追加在 system prompt 的工具列表之后，与 schema 一起写入 `request/header`。
 - `Invocation` 携带 session、cwd、delegation、approval 结果、本 step 的 route（provider、model 与模型是否声明图片输入），以及当前 tool/call 的 call ID、turn、step 和调用方 durable journal。需要记录会话事实的工具在 tool/result 之前向该 journal 追加；没有 journal 的调用方必须失败关闭。
 - `Runtime.UseSpill` 在插件 Scope 内发布唯一的 `SpillStore`。`Invocation.CreateSpill`/`SaveText` 按调用方会话打开或保存 spill 文件，没有 store 或会话时返回 `ErrSpillUnavailable`，工具据此使用上游的降级文案。
-- 每个调用在轮到调度及即将进入 Execute 时检查取消，截止后返回 `Error: tool call aborted before dispatch`；已进入 Execute 的调用被取消时返回 `Error: tool call aborted`，取消优先于成功结果。未知工具、panic、拒绝、执行错误和取消都成为有界 tool result，文本使用上游的 `Error: <message>` 格式；resume 为未决调用补写的结果同样使用这一格式。
+- 每个调用在轮到调度及即将进入 Execute 时检查取消，截止后返回 `Error: tool call aborted before dispatch`；已进入 Execute 的调用被取消时，成功结果替换为 `Error: tool call aborted`，Execute 返回的错误保留原文本，与上游只在成功时替换的规则一致。未知工具、panic、拒绝、执行错误和取消都成为有界 tool result，文本使用上游的 `Error: <message>` 格式；resume 为未决调用补写的结果同样使用这一格式。
 - 参数超限的调用不进入 schema 分类、Check、approval 或执行；错误结果为 `Error: tool arguments exceed 786432 bytes; submit a smaller call`。system prompt 明确 workspace 文件策略、`read`/`grep`/`read_image` 对本 workspace spill 分区的只读例外，以及 `bash` 的一次性批准升级。
 
 内置工具与上游 Base 组合同名同定义（`ask_user_question` 取 Web preset 的默认阻塞定义），映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)，后台任务与 `bash` 后台变体见 [ADR-0009](decisions/0009-background-jobs.md)，提问与规划模式见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)，`read_image` 见 [ADR-0015](decisions/0015-multimodal-tool-results.md)，长期目标见 [ADR-0016](decisions/0016-long-running-goals.md)：

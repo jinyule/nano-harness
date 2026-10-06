@@ -63,6 +63,7 @@ loopback HTTP 证明协议实现，不声称证明远端服务部署。真实 pr
 - assistant message 与全部 tool call 在工具执行前提交，每个 call 恰有一个 result；
 - 相邻 parallel tool 可以并发，Check、approval 与执行合计最多 10 个在途调用；屏障固定至少 10 个同时执行，峰值计数拒绝过量 dispatch，单个槽位释放即可启动下一调用；exclusive tool 形成 barrier，返回顺序稳定；
 - approval asked/decided 成对，UI 缺失、取消、policy never 和 delegated request 均失败关闭；
+- runtime 的取消截止线：批次前、前序调用中、Check 中取消都返回 `tool call aborted before dispatch` 且不进入 Execute；body 内取消后成功结果变为 `tool call aborted`，body 返回的错误保留原文本（`TestRuntime_CancellationKeepsTheBodyFailure`，定向 mutation 恢复旧检查顺序后被它拒绝）；
 - retry 只发生在没有已提交 stream 内容的可重试失败，并记录 sleep 前/后事实；
 - proactive 与 context-window compaction 保留 raw log，只替换 replay surface；压力触发先做无模型裁剪，裁剪后低于阈值时不发摘要请求，仍超阈值时摘要读到裁剪后的 surface，context-window 恢复总是裁剪后摘要，手动 compaction 不裁剪，裁剪记录追加失败保留已提交的裁剪；继承 route 决定阈值、摘要模型与 effort，目录未列出的模型不触发压力 compaction；第二次摘要的遮蔽序号升序记录并能折叠；摘要在各阶段失败时布尔结果等于此前是否提交了裁剪，摘要已提交而收尾失败时为 true；
 - followup、steer、interrupt、idle、one-shot、shutdown drain 和 panic containment；

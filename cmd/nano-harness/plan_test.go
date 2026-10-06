@@ -147,7 +147,9 @@ func TestComposition_CancelledPlanReviewCannotScheduleExit(t *testing.T) {
 	}
 	records := assembled.records(t)
 	results := orderedToolResults(records)
-	if len(results) != 1 || !results[0].IsError || results[0].Output != "Error: tool call aborted" {
+	// Like upstream plan-mode, the aborted question's own failure is the
+	// result; the runtime does not replace a failure with its abort text.
+	if len(results) != 1 || !results[0].IsError || results[0].Output != "Error: ask_user_question was aborted before the user answered" {
 		t.Errorf("cancelled review result = %+v", results)
 	}
 	for _, record := range records {

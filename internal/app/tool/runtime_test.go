@@ -435,3 +435,21 @@ func TestRuntime_CancellationStopsDispatchAndSupersedesSuccess(t *testing.T) {
 		})
 	}
 }
+
+// Upstream replaces only a successful body result with the abort result; a
+// failure the body returns after cancellation keeps its own text.
+func TestRuntime_CancellationKeepsTheBodyFailure(t *testing.T) {
+	runtime, scope := startRuntime(t, &fakeApprover{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := runtime.Register(simpleTool("write", false, "", func(ctx context.Context, _ Invocation) (Result, error) {
+		cancel()
+		return Text("ignored"), fmt.Errorf("write aborted: %w", ctx.Err())
+	}), scope); err != nil {
+		t.Fatal(err)
+	}
+	results := runtime.ExecuteBatch(ctx, BatchRequest{Calls: []session.ToolCall{{ID: "1", Name: "write", Arguments: json.RawMessage(`{}`)}}})
+	if len(results) != 1 || !results[0].IsError || results[0].Output != "Error: write aborted: context canceled" {
+		t.Fatalf("results = %#v, want the body failure", results)
+	}
+}

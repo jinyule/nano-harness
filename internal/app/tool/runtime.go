@@ -312,12 +312,14 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 		return result
 	}
 	output, err := validated.call.execute(ctx, invocation)
-	if ctx.Err() != nil {
-		result.Output, result.IsError = "Error: tool call aborted", true
-		return result
-	}
+	// Like upstream, cancellation supersedes only a successful body result;
+	// a failure the body returned keeps its own text.
 	if err != nil {
 		result.Output, result.IsError = errorText(err), true
+		return result
+	}
+	if ctx.Err() != nil {
+		result.Output, result.IsError = "Error: tool call aborted", true
 		return result
 	}
 	result.Output = output.Text

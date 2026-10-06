@@ -469,6 +469,13 @@
     "test": "^TestRuntime_OversizedArgumentsNeverReachToolCallbacks$"
   },
   {
+    "id": "tool-cancel-keeps-body-failure",
+    "file": "internal/app/tool/runtime.go",
+    "before": "// a failure the body returned keeps its own text.\n\tif err != nil {",
+    "after": "// a failure the body returned keeps its own text.\n\tif err != nil && ctx.Err() == nil {",
+    "test": "^TestRuntime_CancellationKeepsTheBodyFailure$"
+  },
+  {
     "id": "agent-arguments-before-journal",
     "file": "internal/app/agent/engine.go",
     "before": "completion.Calls[index] = completion.Calls[index].LimitArguments()",

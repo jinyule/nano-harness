@@ -24,7 +24,7 @@
 ## Decision
 
 - reservation 在发布 handle 的同一临界区转交给 resident child，catalog 写入期间仍只占一个名额；创建失败撤销 reservation。
-- tool runtime 在调度与 Execute 前检查取消；已进入 body 的取消覆盖成功结果。`Agent.NotifyContext` 在收件箱锁内检查调用取消，subagent 服务归一化调度前及接受时的两类 abort 文案与原因。被拒消息不入队、不写 recipient 日志、不释放现有 resident。
+- tool runtime 在调度与 Execute 前检查取消；已进入 body 的取消覆盖成功结果，body 返回的错误保留原文本（见[取消只替换成功结果](2026-10-07-tool-cancel-keeps-body-failure.md)）。`Agent.NotifyContext` 在收件箱锁内检查调用取消，subagent 服务归一化调度前及接受时的两类 abort 文案与原因。被拒消息不入队、不写 recipient 日志、不释放现有 resident。
 - worker 使用当前 turn 的 Done 信号区分中断前后输入。中断后的消息保留 wake，旧 turn 不再 drain notices；旧 turn 退出后下一 turn 提交新旧待投递消息。中断前消息仍单独等待下一次唤醒，one-shot 仍只运行一个 turn。
 - release 聚合 child-first cleanup 错误，独立 cleanup 标记通过 `%w` 与 `errors.Is` 穿过组合错误，包括创建/冷恢复失败后的 rollback；归类 `ACTIVATION_TEARDOWN_FAILED`，并供并发 release 调用方读取。清理失败将 continuable 通知改为 error 且清空输出，后台 job 将清理失败优先于取消记为 failed。
 - 后台 one-shot 先 jobs.Launch，再在 job 信号下创建 child。调用只等待启动结束，确保 catalog 在调用方活动 step 内提交；启动失败通过 job 的 failed detail 呈现，已准入 job 的 kill 覆盖启动阶段。job 服务拥有 producer goroutine，subagent Scope 仍拥有 child 与 settlement watchers，Registry Scope 拥有 worker 与 transcript。
