@@ -42,10 +42,15 @@ var (
 	ErrCancelled = &Error{Code: "ASK_CANCELLED", Message: "the user cancelled ask_user_question"}
 	// ErrDelegated reports a question from an agent owned by another agent.
 	ErrDelegated = &Error{Code: "DELEGATED_CALLER", Message: "human interaction is unavailable while the calling agent is owned by another live agent; include the unresolved question or decision in the child agent's final result"}
-	// ErrUnavailable reports that no broker accepted the request.
+	// ErrUnavailable reports that no broker was registered to accept the request.
 	ErrUnavailable = &Error{Code: "NO_PROVIDER", Message: "no user-questions answerer accepted the request"}
 	// ErrInvalidAnswer reports a broker answer that does not fit the request.
-	ErrInvalidAnswer = &Error{Code: "BAD_ANSWER", Message: "the user-questions answerer returned an invalid answer batch"}
+	// Upstream never checks a blocking answer batch, so it is unclassified.
+	ErrInvalidAnswer = errors.New("the user-questions answerer returned an invalid answer batch")
+	// errBrokerFailed keeps the unavailable text for a registered broker that
+	// failed. Upstream propagates such a failure as a plain error rather than
+	// NO_PROVIDER, so it carries no classification.
+	errBrokerFailed = errors.New(ErrUnavailable.Message)
 )
 
 // Error is a failure the upstream user-questions seam classifies as a
@@ -133,7 +138,7 @@ type Answer struct {
 
 // Broker presents one request and returns one answer per question, in any
 // order. It returns ErrCancelled when the user dismisses the request; any
-// other failure is treated as an unavailable answerer.
+// other failure reports the unavailable text without a classification.
 type Broker interface {
 	Ask(context.Context, Request) ([]Answer, error)
 }
@@ -244,7 +249,7 @@ func (service *Service) Ask(ctx context.Context, request Request) ([]Answer, err
 		if errors.Is(err, ErrCancelled) {
 			return nil, ErrCancelled
 		}
-		return nil, ErrUnavailable
+		return nil, errBrokerFailed
 	}
 	return orderAnswers(request.Questions, answers)
 }

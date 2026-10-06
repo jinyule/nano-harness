@@ -3,6 +3,8 @@
 - Status: implemented
 - Date: 2026-10-07
 
+> 后续修正：已注册 broker 的故障与非法答案批不再分类，见[提问 broker 故障不再归为 NO_PROVIDER](2026-10-07-question-broker-failure.md)。
+
 ## Context
 
 这是 [WP12 实施记录](2026-10-06-structured-tool-results.md)的 H（goal）与 I（question）批，基于集成分支 `fc0022f`，[基础批](2026-10-07-structured-tool-results-base.md)已提供 `tool.Failure` 与 tool/result 的 `error` 字段。goal 的领域错误和工具错误已有 Code，提问接缝只有普通哨兵与 `RequestError`，分类在 runtime 渲染文本时丢失。映射由 [ADR-0019](../../../docs/decisions/0019-structured-tool-results.md) 拥有。

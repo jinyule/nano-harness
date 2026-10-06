@@ -121,7 +121,7 @@ credential 锁的永久测试覆盖预先取消的 modify/delete、取得锁与�
 
 ## goal 与提问结构化结果证据
 
-`TestTools_PersistUpstreamClassifications` 经真实 tool runtime 与 goal 服务，逐条断言正文不变时的分类：五种 `GOAL_TOOL_*` 为 `HarnessError`，未找到、陈旧 revision、非法 objective 与非法迁移为 `GoalError`，日志读取失败没有分类；`TestError_ClassifiesAsGoalError` 覆盖全部九个 `GOAL_*`。`TestError_ClassifiesTheUpstreamFailures` 固定五个提问哨兵与空请求、三种 intent 违规的 `UserQuestionError` 码，验证包装后 `errors.Is/As` 仍成立，题数和重复选项等请求错误没有分类。适配器测试从结果记录断言 `ask_user_question` 的取消、委派与空请求，以及 `exit_plan_mode` 传播的 `NO_PROVIDER`/`BAD_ANSWER`；继续规划、跳过、反馈与关闭的文本不变且没有分类。修复前这些断言以缺失字段失败。
+`TestTools_PersistUpstreamClassifications` 经真实 tool runtime 与 goal 服务，逐条断言正文不变时的分类：五种 `GOAL_TOOL_*` 为 `HarnessError`，未找到、陈旧 revision、非法 objective 与非法迁移为 `GoalError`，日志读取失败没有分类；`TestError_ClassifiesAsGoalError` 覆盖全部九个 `GOAL_*`。`TestError_ClassifiesTheUpstreamFailures` 固定五个提问哨兵与空请求、三种 intent 违规的 `UserQuestionError` 码，验证包装后 `errors.Is/As` 仍成立，题数和重复选项等请求错误没有分类。适配器测试从结果记录断言 `ask_user_question` 的取消、委派与空请求，以及已注册 broker 故障与非法答案批保持原文本且没有分类（`TestService_BrokerFailuresStayUnclassified` 另断言只有未注册 broker 时才是 `NO_PROVIDER`）；`exit_plan_mode` 对这两种故障同样没有分类；继续规划、跳过、反馈与关闭的文本不变且没有分类。修复前这些断言以缺失字段失败。
 
 `TestComposition_GoalRoundsEnforceAuthorityAndTheRoundLimit` 与 `TestComposition_QuestionFailuresPersistTheirClassification` 走真实 composition，从磁盘读出 `GOAL_TOOL_AUTHORITY_REQUIRED`/`GOAL_TOOL_BLOCK_THRESHOLD` 与 `ASK_CANCELLED`/`EMPTY_QUESTIONS`，并确认 provider 请求只带正文。旧 goal、question、plan composition 的会话被 Open/Inspect 拒绝且文件不变。mutation 覆盖两种 goal 分类名、取消码和 intent 分类。
 

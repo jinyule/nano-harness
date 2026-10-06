@@ -1195,5 +1195,19 @@
     "before": "total += max(1, len(node.Result.Output)/4)",
     "after": "total += max(1, len(fmt.Sprint(*node.Result))/4)",
     "test": "^TestEstimateSurface_IgnoresToolErrorsAndMetadata$"
+  },
+  {
+    "id": "question-broker-failure-unclassified",
+    "file": "internal/app/question/question.go",
+    "before": "return nil, errBrokerFailed",
+    "after": "return nil, ErrUnavailable",
+    "test": "^TestService_BrokerFailuresStayUnclassified$"
+  },
+  {
+    "id": "question-invalid-answer-unclassified",
+    "file": "internal/app/question/question.go",
+    "before": "ErrInvalidAnswer = errors.New(\"the user-questions answerer returned an invalid answer batch\")",
+    "after": "ErrInvalidAnswer = &Error{Code: \"BAD_ANSWER\", Message: \"the user-questions answerer returned an invalid answer batch\"}",
+    "test": "^TestService_BrokerFailuresStayUnclassified$"
   }
 ]

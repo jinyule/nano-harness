@@ -220,8 +220,8 @@ func TestExitPlanMode_KeepPlanningDismissalAndFailures(t *testing.T) {
 		{"skipped", review([]string{}, ""), "Error: The user chose to keep planning; revise the plan and present it again.", nil},
 		{"feedback", review([]string{}, "split the migration"), "Error: The user chose to keep planning; their feedback: split the migration", nil},
 		{"dismissed", func(appQuestion.Request) ([]appQuestion.Answer, error) { return nil, appQuestion.ErrCancelled }, "Error: The user dismissed the plan review to speak instead; stay in plan mode, stop here, and wait for their message.", nil},
-		{"unavailable", func(appQuestion.Request) ([]appQuestion.Answer, error) { return nil, context.DeadlineExceeded }, "Error: no user-questions answerer accepted the request", &session.ToolError{Name: "UserQuestionError", Code: "NO_PROVIDER"}},
-		{"invalid answer", func(appQuestion.Request) ([]appQuestion.Answer, error) { return nil, nil }, "Error: the user-questions answerer returned an invalid answer batch", &session.ToolError{Name: "UserQuestionError", Code: "BAD_ANSWER"}},
+		{"unavailable", func(appQuestion.Request) ([]appQuestion.Answer, error) { return nil, context.DeadlineExceeded }, "Error: no user-questions answerer accepted the request", nil},
+		{"invalid answer", func(appQuestion.Request) ([]appQuestion.Answer, error) { return nil, nil }, "Error: the user-questions answerer returned an invalid answer batch", nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			current.answer = test.answer

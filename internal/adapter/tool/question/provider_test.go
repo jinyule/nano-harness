@@ -3,6 +3,7 @@ package question
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	appQuestion "github.com/jinyule/nano-harness/internal/app/question"
@@ -129,7 +130,12 @@ func TestAskUserQuestion_ReturnsTheAnswerBatch(t *testing.T) {
 
 func TestAskUserQuestion_FailuresBecomeErrorResults(t *testing.T) {
 	current := start(t)
-	current.answer = func(appQuestion.Request) ([]appQuestion.Answer, error) { return nil, appQuestion.ErrCancelled }
+	current.answer = func(request appQuestion.Request) ([]appQuestion.Answer, error) {
+		if request.Questions[0].ID == "fail" {
+			return nil, errors.New("terminal gone")
+		}
+		return nil, appQuestion.ErrCancelled
+	}
 	for _, test := range []struct {
 		name      string
 		arguments string
@@ -141,6 +147,7 @@ func TestAskUserQuestion_FailuresBecomeErrorResults(t *testing.T) {
 		{"delegated", `{"questions":[{"id":"a","question":"?"}]}`, true, "Error: human interaction is unavailable while the calling agent is owned by another live agent; include the unresolved question or decision in the child agent's final result", &session.ToolError{Name: "UserQuestionError", Code: "DELEGATED_CALLER"}},
 		{"empty", `{"questions":[]}`, false, "Error: ask_user_question requires at least one question", &session.ToolError{Name: "UserQuestionError", Code: "EMPTY_QUESTIONS"}},
 		{"duplicate", `{"questions":[{"id":"a","question":"?"},{"id":"a","question":"?"}]}`, false, `Error: question id "a" must be unique within this call`, nil},
+		{"broker failure", `{"questions":[{"id":"fail","question":"?"}]}`, false, "Error: no user-questions answerer accepted the request", nil},
 		{"schema", `{"questions":[{"id":"a"}]}`, false, `Error: invalid arguments: missing required property "questions[0].question"`, &session.ToolError{Name: "ToolArgsError", Code: "INVALID_ARGS"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -150,8 +157,8 @@ func TestAskUserQuestion_FailuresBecomeErrorResults(t *testing.T) {
 			}
 		})
 	}
-	if len(current.seen) != 1 {
-		t.Fatalf("broker saw %d requests; only the cancelled one is valid", len(current.seen))
+	if len(current.seen) != 2 {
+		t.Fatalf("broker saw %d requests; only the cancelled and failed ones are valid", len(current.seen))
 	}
 }
 

@@ -188,7 +188,7 @@ func TestService_AskFailsClosed(t *testing.T) {
 		t.Fatalf("cancelled = %v", err)
 	}
 	answer = func(context.Context, Request) ([]Answer, error) { return nil, errors.New("terminal gone") }
-	if _, err := service.Ask(t.Context(), request); !errors.Is(err, ErrUnavailable) {
+	if _, err := service.Ask(t.Context(), request); !errors.Is(err, errBrokerFailed) {
 		t.Fatalf("broker failure = %v", err)
 	}
 	interrupted, stop := context.WithCancel(t.Context())
@@ -310,7 +310,6 @@ func TestError_ClassifiesTheUpstreamFailures(t *testing.T) {
 		"ASK_CANCELLED":    ErrCancelled,
 		"DELEGATED_CALLER": ErrDelegated,
 		"NO_PROVIDER":      ErrUnavailable,
-		"BAD_ANSWER":       ErrInvalidAnswer,
 	} {
 		wrapped := fmt.Errorf("ask: %w", err)
 		var failure interface{ ToolError() session.ToolError }
@@ -339,6 +338,55 @@ func TestError_ClassifiesTheUpstreamFailures(t *testing.T) {
 		classified := errors.As(err, &failure)
 		if !errors.As(err, &requestErr) || requestErr.Error() != err.Error() || classified != (test.code != "") || classified && failure.ToolError() != (session.ToolError{Name: "UserQuestionError", Code: test.code}) {
 			t.Errorf("%s: error = %v, classified %t", name, err, classified)
+		}
+	}
+}
+
+// TestService_BrokerFailuresStayUnclassified keeps the upstream boundary:
+// NO_PROVIDER means no answerer was registered. A registered broker that
+// fails, or answers a batch that does not fit the request, keeps the same
+// text but carries no classification, as upstream propagates such failures
+// as plain errors and never checks a blocking answer batch.
+func TestService_BrokerFailuresStayUnclassified(t *testing.T) {
+	service, _ := startService(t)
+	request := Request{SessionID: "s", Questions: []Question{choice()}}
+	classification := func(err error) (session.ToolError, bool) {
+		var failure interface{ ToolError() session.ToolError }
+		if errors.As(err, &failure) {
+			return failure.ToolError(), true
+		}
+		return session.ToolError{}, false
+	}
+	if _, err := service.Ask(t.Context(), request); err == nil || err.Error() != "no user-questions answerer accepted the request" {
+		t.Fatalf("no broker = %v", err)
+	} else if class, ok := classification(err); !ok || class != (session.ToolError{Name: "UserQuestionError", Code: "NO_PROVIDER"}) {
+		t.Fatalf("no broker classification = %+v, %t", class, ok)
+	}
+	var answer func(context.Context, Request) ([]Answer, error)
+	if err := service.RegisterBroker(brokerFunc(func(ctx context.Context, request Request) ([]Answer, error) {
+		return answer(ctx, request)
+	}), &plugin.Scope{}); err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct {
+		answer func(context.Context, Request) ([]Answer, error)
+		text   string
+	}{
+		"plain broker failure":      {func(context.Context, Request) ([]Answer, error) { return nil, errors.New("terminal gone") }, "no user-questions answerer accepted the request"},
+		"classified broker failure": {func(context.Context, Request) ([]Answer, error) { return nil, ErrDelegated }, "no user-questions answerer accepted the request"},
+		"missing answer":            {func(context.Context, Request) ([]Answer, error) { return nil, nil }, "the user-questions answerer returned an invalid answer batch"},
+		"label not offered": {func(context.Context, Request) ([]Answer, error) {
+			return []Answer{{ID: "mode", Selected: []string{"Other"}}}, nil
+		}, "the user-questions answerer returned an invalid answer batch"},
+	} {
+		answer = test.answer
+		_, err := service.Ask(t.Context(), request)
+		if err == nil || err.Error() != test.text {
+			t.Errorf("%s: error = %v", name, err)
+			continue
+		}
+		if class, ok := classification(err); ok {
+			t.Errorf("%s: classified as %+v", name, class)
 		}
 	}
 }

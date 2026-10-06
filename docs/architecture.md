@@ -187,7 +187,7 @@ Submit user message
 
 `web-tools` 的 `web_search` metadata 复制正文渲染的去重来源、合并回答与截断标记，`web_fetch` metadata 记录最终 URL、HTTP 状态和正文渲染的实际截断，不复制页面内容；`app/web.Error` 声明 `WebError` 与原代码。`search-tools` 从实际 rg 结果生成 glob/grep metadata，沿用正文的结果上限、首次出现分组和行预览；runtime 对最终 JSON 执行 65,536 字节硬上限，SaveText 降级或正文 spill 保留 metadata。搜索 adapter 在失败产生处声明 `SearchError`；shell adapter 为前台 sandbox 不可用和工具自身取消声明分类，保留平台按实际模式生成的文案与错误链。映射与字段由 [ADR-0019](decisions/0019-structured-tool-results.md) 拥有；这些纯值包装不增加运行时 effect，既有 Scope 所有权与关闭顺序不变。
 
-goal 领域拒绝 `app/goal.Error` 声明 `GoalError` 加原有 `GOAL_*` 码，goal 工具的权限与参数拒绝声明上游 `new HarnessError` 的 `HarnessError` 加 `GOAL_TOOL_*`；提问接缝的哨兵与空请求、intent 违规是 `question.Error`，声明 `UserQuestionError` 加上游码，`exit_plan_mode` 原样传播它们，自己的继续规划、关闭与未激活错误不分类。正文、`errors.Is/As` 与模型请求不变；这些纯值不增加运行时 effect。
+goal 领域拒绝 `app/goal.Error` 声明 `GoalError` 加原有 `GOAL_*` 码，goal 工具的权限与参数拒绝声明上游 `new HarnessError` 的 `HarnessError` 加 `GOAL_TOOL_*`；提问接缝的哨兵与空请求、intent 违规是 `question.Error`，声明 `UserQuestionError` 加上游码；`NO_PROVIDER` 只用于没有注册 broker，已注册 broker 的故障和非法答案批保留原文本、不分类，`exit_plan_mode` 原样传播它们，自己的继续规划、关闭与未激活错误不分类。正文、`errors.Is/As` 与模型请求不变；这些纯值不增加运行时 effect。
 
 `internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。`cmd` 用 `WithReadOnly` 把当前 spill 分区只读地交给 `read`、`read_image` 与 `grep`。这些工具在执行点用 `ReadableFrom` 从调用方已提交的原始日志授权精确的历史 spill 文件，恢复时更换写入 root 不会撤销日志中的定位符；fork 继承与 compaction 遮蔽的结果也可读回。`shell-tools` 收到不含该分区的 root。
 
