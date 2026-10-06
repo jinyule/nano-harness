@@ -169,7 +169,7 @@ Submit user message
 - 每个调用在轮到调度及即将进入 Execute 时检查取消，截止后返回 `Error: tool call aborted before dispatch`；已进入 Execute 的调用被取消时，成功结果替换为 `Error: tool call aborted`，Execute 返回的错误保留原文本，与上游只在成功时替换的规则一致。未知工具、panic、拒绝、执行错误和取消都成为有界 tool result，文本使用上游的 `Error: <message>` 格式；resume 为未决调用补写的结果同样使用这一格式。runtime 为未知工具、schema 错误、两类取消和 metadata 违规写入上游分类；Check 与 Execute 的错误经消费方接口 `tool.Failure`（`errors.As`）带出领域分类，其余失败不分类。成功结果的 `Result.Meta` 由 runtime 裁剪到预算后校验，成员不属于本工具或校验失败时结果改为 `ToolOutputError/INVALID_TOOL_OUTPUT`；spill 只改文本，保留分类与 metadata。
 - 参数超限的调用不进入 schema 分类、Check、approval 或执行；错误结果为 `Error: tool arguments exceed 786432 bytes; submit a smaller call`。system prompt 说明各档文件策略与独立 approval；当前模式由持久化 runtime-context 提供，见[会话 sandbox](#会话-sandbox)。
 
-内置工具与上游 Base 组合同名同定义（`ask_user_question` 取 Web preset 的默认阻塞定义），映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)，后台任务与 `bash` 后台变体见 [ADR-0009](decisions/0009-background-jobs.md)，提问与规划模式见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)，`read_image` 见 [ADR-0015](decisions/0015-multimodal-tool-results.md)，长期目标见 [ADR-0016](decisions/0016-long-running-goals.md)：
+内置工具与上游 Base 组合同名同定义（`ask_user_question` 取 Web preset 的默认阻塞定义），映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)，后台任务与 `bash` 后台变体见 [ADR-0009](decisions/0009-background-jobs.md)，提问与规划模式见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)，`read_image` 见 [ADR-0015](decisions/0015-multimodal-tool-results.md)，长期目标见 [ADR-0016](decisions/0016-long-running-goals.md)；各工具族的对齐状态与有意偏差汇总在[参考分析](reference-deepseek-harness.md#base-工具集对齐)：
 
 | 包 | 插件 ID | 工具 |
 |---|---|---|

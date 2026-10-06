@@ -46,7 +46,7 @@
 
 模型获得与参考一致的检索与抓取工具，三个 provider 共享同一消费方契约，provider wire 和账户仍由 provider 拥有。检索复用现有账户，不新增凭据面；抓取以可测试的地址策略阻断 SSRF 与 DNS 重绑定。工具在设置变化时 schema 不变，失败以稳定代码返回给模型。
 
-代价与风险：每次检索向所选账户额外计费；Codex Responses 边界是否接受 `web_search` 工具只有协议测试证据，尚无 live 验证。抓取不支持 HTTP 代理，需要代理的网络中会连接失败。没有逐次确认，模型可以把数据编码进公网 URL 外发；本决策只防止访问非公网目的地。结构化来源只存在于渲染文本，UI 不能重建参考的 web 结果卡片。provider 检索工具版本（如 `web_search_20250305`）或 annotation 形状变化时，需要同步更新协议测试与本 ADR。
+代价与风险：每次检索向所选账户额外计费；Codex Responses 边界是否接受 `web_search` 工具只有协议测试证据，尚无 live 验证。抓取不支持 HTTP 代理，需要代理的网络中会连接失败。没有逐次确认，模型可以把数据编码进公网 URL 外发；本决策只防止访问非公网目的地。结构化来源与回答由 [ADR-0019](0019-structured-tool-results.md) 的 metadata 持久化，但尚无 UI 卡片消费它们。provider 检索工具版本（如 `web_search_20250305`）或 annotation 形状变化时，需要同步更新协议测试与本 ADR。
 
 ## 被否决方案
 
@@ -62,4 +62,4 @@
 
 ## 复审触发条件
 
-provider 删除或替换服务端检索工具、Codex Responses live 验证拒绝 `web_search`、用户需要 HTTP 代理或逐次确认外联、UI 需要持久化结构化来源、新增 provider，或参考实现改变 web 工具 schema、上限与可见性语义时，重新评估本决策。
+provider 删除或替换服务端检索工具、Codex Responses live 验证拒绝 `web_search`、用户需要 HTTP 代理或逐次确认外联、UI 需要结构化来源卡片、新增 provider，或参考实现改变 web 工具 schema、上限与可见性语义时，重新评估本决策。
