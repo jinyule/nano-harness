@@ -49,9 +49,9 @@
 | WP9 | `read_image` 与多模态工具结果 | WP2 | 0015 | 已合入 `05e4012` |
 | WP10 | 长期目标 `create_goal`/`get_goal`/`update_goal` 与 round driver | WP3、WP8 | 0016 | 已合入 `d8ba519` |
 | WP11 | 图片移入会话日志之外的内容寻址附件存储（对齐上游 `attachment`/`attachment-local`），`/attach` 与 `read_image` 共用 | WP9 | 0017 | 已合入 `4e9d97e`（含透明缩放修复与转换并发上限 2） |
-| WP12 | 结构化工具结果：所有工具产出上游的错误分类（name/code/info）与结果 `meta` 并持久化到 `tool/result`；模型可见文本不变，TUI 卡片暂缓 | 小修合入后 | 0019 | 待开始 |
+| WP12 | 结构化工具结果：所有工具产出上游的错误分类 `{name, code}` 与结果 `meta` 并持久化到 `tool/result`；模型可见文本不变，TUI 卡片暂缓 | 小修合入后 | 0019 | 进行中：设计 `52a9a35`、R `7c60a92`、F `802fc42` 已合入；producer 批与 K 收尾批进行中 |
 | WP13 | compaction 先做上游 tool-result-pruner 的无模型裁剪（首 4096、尾 1024 码点，持久化裁剪事实），再决定是否摘要 | — | 0020 | 已合入 `57b56a9`（与 B3 截断摘要修复合为一个提交；opus 实现，B3 因每周限额由 Codex 接手完成） |
-| WP14 | 会话级 sandbox 模式：read-only、workspace-write、danger-full-access 三档，持久化 `sandbox/mode` 与策略上下文；Linux sandbox 与上游一致放开网络 | WP11 后的路径与 runner 修复 | 0021 | 已实现，见[实施证据](../implemented/2026-10-06-session-sandbox-modes.md) |
+| WP14 | 会话级 sandbox 模式：read-only、workspace-write、danger-full-access 三档，持久化 `sandbox/mode` 与策略上下文；Linux sandbox 与上游一致放开网络 | WP11 后的路径与 runner 修复 | 0021 | 已合入 `3e1d726` |
 | WP15 | web_search 发送前持久化检索请求（route、endpoint、预算），写入失败不发送 | — | 0022 | 已合入 `0eb3586`，见[实施证据](../implemented/2026-10-06-web-search-request-audit.md) |
 | WP16 | job 完成通知持久化（对齐上游 durable inbox），重启后未送达的完成事实不丢失 | WP3 engine 修复 | 0023 | 已合入 `27a6e8f` |
 
@@ -150,6 +150,14 @@
 - shell 审计 3 `cd6912b` 与 B5 `2d519a0`、plan cleanup `005a3a8`、K2 `576547a`（descriptor v3、`subagent-tools-v4`、委派说明改为 runtime context、`sender_session_id`）、K2 后续 `d79501d` 已合入。K2 后续让 child compaction 使用继承 route，并顺带修复已合入 compaction 的缺陷：同一会话第二次摘要的 ShadowedSeqs 无序导致必然失败。
 - plan cleanup 排查发现 approval、retry、compaction 有同类关闭窗口，已合入 `f0b343e`。第四轮 core 的 N1/N2 已合入 `7799a5e`。C1 已合入 `5866270`：暂停与解除分开累积；“取消后出错”与上游一致，不暂停。有意偏差：“取消后重新授权再取消”时，本仓解除新 revision，上游保留授权；这沿用 B1 的非轮次停止规则，参考分析需列出。五个服务各有约 20 行相同的在途调用登记代码，收尾时评估是否抽象。
 - 2026-10-06 23:1x Codex 再次撞上 429。维护者要求撞到即停、不重试，`codex-lane.sh` 已改为首个 429 即退出。维护者告知 Codex 限额 2026-10-07 02:29 解除，WP14、r3tools、mutgate 届时续接。
+
+### 本轮合入（2026-10-07）
+
+- 第三、四轮审查的修复已全部合入：A1/A2 `4f4c193`、C1 `5866270`、shell 文案对齐 `7667d02`、subagent 确定性覆盖 `52d3715`、tools/wiring 小修 `5d786ab`（单层压缩输入上限 5,000,000 字节，本仓比上游更严，理由是公网资源预算；审计 query 与调用参数绑定）、附加 mutation 清单进门禁 `1d5dc58`。
+- WP12：设计 `52a9a35`（Accepted）、R `7c60a92`、F `802fc42`（`tool-runtime-v3`）已合入。web、goal、question、subagent 批交 opus，文件、搜索、shell 批交 Codex，最后是 K 收尾批。
+- WP14 已合入 `3e1d726`（ADR-0021）：sandbox 三档模式、`sandbox/mode` 记录、Linux 改用 PID namespace 并允许联网；`sandbox:policy` 与委派说明共用 scoped context 扩展点。原生 Linux 联网仍无实测证据。
+- Codex 第五轮只读审查覆盖 `005a3a8..3e1d726`，与 opus 第三、四轮审查一起构成联合评审。
+- 2026-10-07 02:49 opus 撞上 session limit（04:30 重置），之后续接原 agent。维护者要求 opus 上限为 3。
 
 ### 后续项（不在本次范围）
 
