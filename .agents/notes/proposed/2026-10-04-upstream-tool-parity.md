@@ -96,7 +96,7 @@
 | 目标结算无 revision 条件，可能撤销后来的人类授权（Codex 审查） | Suggestion | Codex-A | 已合入（Codex-A） |
 | 提问 context 已取消时有效答案仍通过，可能安排退出规划模式（Codex 审查） | Suggestion | Codex-B | 已合入（Codex-B，另修 `approval/decided` 多余 `call_id`） |
 | `todo/write` 未校验所引用调用是否为 `todo_write`（Codex 审查） | Suggestion | Codex-B | 已合入（Codex-B，另修 `approval/decided` 多余 `call_id`） |
-| mutation 计数、README、ADR 互相引用等文档不一致 | 文档 | Codex-D | 修复中：会变化的计数只保留一个权威位置 |
+| mutation 计数、README、ADR 互相引用等文档不一致 | 文档 | Codex-D | 已合入：会变化的计数改为引用清单、脚本与 fixture；ADR 取代关系补齐 |
 
 ### 上游能力对齐审计
 
