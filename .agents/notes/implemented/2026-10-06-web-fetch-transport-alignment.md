@@ -17,6 +17,8 @@ URL 规范化在解析与拨号前完成；解析器、Host、TLS、同源校验
 
 拨号在已校验地址集合内按地址族交替回退：首个成功后取消并 join 其余尝试，关闭未采用和取消期间得到的连接，再交给每跳独立 transport。`DialFunc` 明确支持并发与 context 取消。不能只把 race dialer 塞进 Transport：Transport 在取消请求时可能先返回、拨号回调仍未结束；同步抓取 owner 保证 `Fetch` 返回前已回收拨号。`app/web` 的 Scope cleanup 仍通过取消、等待抓取操作拥有这些短期 effect，没有新增常驻插件、连接池或全局状态。
 
+本 Note 记录的包内 mutation 清单已按原 ID 与顺序并入默认 `scripts/mutation-cases.json`，当前入口为 `make mutation`；接入证据由[清单门禁 Note](2026-10-06-mutation-manifest-gate.md)拥有，下文手工命令保留为当时的执行记录。
+
 ## Consequences
 
 正常 URL、IDNA、压缩文本、emoji 预算和双栈网络回退与参考的语义接近，并保留逐跳公网校验、固定 IP、NAT64、同源重定向、拒绝凭据与代理的边界。br/zstd-only 服务不可用，损坏压缩流按标准库严格校验而失败；异常 URL、少见标点及空 fragment 的序列化不承诺完整 WHATWG 一致。正文代理对边界可少一个 UTF-16 单元，结果始终是有效 UTF-8。

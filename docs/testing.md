@@ -158,7 +158,7 @@ TUI 回归测试还覆盖 v2 粘贴、按键释放、secret 遮罩、小窗口�
 
 文件工具的 `TestWrite_CancellationDuringSyncDoesNotPublish`（创建、替换）与 `TestEdit_CancellationDuringSyncDoesNotPublish` 用真实临时文件和 Sync channel 屏障确定取消发生在发布前；断言取消原因、link/rename 未调用、目标字节与观察摘要不变、staging 无残留。`TestFileTools_PhysicalParentTraversalMatrix` 通过真实 tool runtime 和 ripgrep 覆盖 read、write、edit、glob/grep 的 path 与 read_image，比较实际文件、搜索结果、交给附件存储的源字节、返回的图片引用及物理路径观察。workspace 的相对/绝对路径和只读分区矩阵补充边界，approval 期间替换被遍历的目录与直接执行测试证明写入执行点不能绕过拒绝。offset 测试逐字比较范围错误与最大合法值的越界诊断。
 
-新增文件回归的定向变异保存在 `internal/adapter/tool/file/testdata/mutation-cases.json`；运行 `python3 scripts/mutation-check.py --manifest internal/adapter/tool/file/testdata/mutation-cases.json --report .cache/mutation/file-report.json`，在私有源码副本中分别移除发布前取消、提前清理父目录段、接受缺失目录遍历、去掉 offset 上界。默认 `make mutation` 的既有用例仍独立必需。
+文件发布取消、物理父目录遍历、缺失目录遍历与 offset 上界，以及 fetch 解压预算、取消、URL/IDNA、UTF-16 和拨号回退的定向变异均进入下文的[默认 mutation 门禁](#定向-mutation-与断言有效性)。
 
 测试必须拥有自己创建的 server、listener、临时目录、进程和 goroutine，并用 `t.Cleanup` 或显式 shutdown 回收。关闭测试证明返回后已静止，不只发出 cancel。
 
@@ -199,13 +199,15 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 
 ## 定向 mutation 与断言有效性
 
-`make mutation` 执行 [`scripts/mutation-cases.json`](../scripts/mutation-cases.json) 列出的全部已审查回归；用例 ID、变异位置与定向测试由该清单维护。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
+`make mutation` 执行唯一默认清单 [`scripts/mutation-cases.json`](../scripts/mutation-cases.json) 列出的全部已审查回归，包括 file 与 fetch 的回归；用例 ID、变异位置与定向测试由该清单维护，新增用例按现有顺序追加，不另建包内附加清单。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
+
+清单必须是非空 JSON 数组，每项恰好含字符串字段 `id`、`file`、`before`、`after`、`test`。ID 非空、无首尾空白且全清单唯一；重复 JSON 字段拒绝。`file` 必须是 cmd/internal 下无父目录段的相对产品 Go 源码路径，不接受测试文件；`before` 非空且与 `after` 不同；`test` 以 `^Test` 开始、以 `$` 结束。格式与唯一性在运行任何 Go 命令前校验。
 
 执行器使用 Python 3 标准库，在 Unix 私有临时目录复制当前 cmd/internal、go.mod/go.sum（包含未提交源码与测试），拒绝源 symlink；不在工作树变异，不运行用户数据，不复用历史结果。每项先运行明确选择的真实测试且至少一个测试通过，再变异、独立编译、以 `-count=1` 重跑。只有 Go JSON 输出中的具名测试失败可认定 killed；build-error、timeout、infrastructure-error、no-tests、baseline failure、stale-site 和 survived 全部失败。当前列举的每个 site 都执行，不依赖 coverage 筛选，因此没有“缺失 coverage 就跳过”的成功路径。空集合、重复 ID 或找不到唯一替换位置均拒绝。超时终止并等待整个测试进程组；临时树最终清理。
 
 正例和反例必须共同约束可接受输入：仅断言非法记录返回错误，无法发现误拒全部合法输入。修改高风险行为时，同步维护 owning tests 与对应 mutation；新增 site 必须说明目标回归，不为提高分数添加无价值变异。等价变异先审查并解释，不以宽泛排除隐藏存活。未来若引入自动枚举器或 coverage 过滤，必须新增 invalid/uncovered/no-sites 分类和缺失证据负例；若引入缓存，键包含测试、依赖、工具链、命令、平台和 coverage 来源。
 
-`python3 scripts/mutation-check_test.py` 用真实 Go 模块证明有效断言杀死变异、删除断言后存活（无缓存）、编译失败不算 killed、零测试/陈旧 site/空集合失败，并验证进程超时分类。结果写入 `.cache/mutation/report.json`，CI 保存报告；超时不是成功证据。
+`python3 scripts/mutation-check_test.py` 固定 file/fetch 的回归 ID 必须进入默认清单，通过真实 CLI 拒绝格式、字段类型与唯一性错误，并用真实 Go 模块证明有效断言杀死变异、删除断言后存活（无缓存）、编译失败不算 killed、零测试/陈旧 site/空集合失败。它还通过真实 `make mutation` 验证 killed 时成功、survived 时失败，并验证进程超时分类。结果写入 `.cache/mutation/report.json`，CI 保存报告；超时不是成功证据。
 
 ## 持久化固定样本
 

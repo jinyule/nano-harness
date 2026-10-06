@@ -18,6 +18,8 @@
 - 组件仍通过真实 `cmd` composition 启动；工具注册和 TUI broker 的 Scope 撤回保持原有所有权，没有新增 goroutine、进程或缓存。长期契约分别修补 [ADR-0010](../../../docs/decisions/0010-todo-write-session-record.md)、[ADR-0012](../../../docs/decisions/0012-runtime-skills.md)、[ADR-0014](../../../docs/decisions/0014-user-questions-and-plan-mode.md)、[ADR-0016](../../../docs/decisions/0016-long-running-goals.md)，不新建 ADR。
 - ADR-0012 与安全文档明确 delegated 固定 `never`，只能加载正文，不能通过 bash 访问 workspace 外的 skill 资源。ADR-0016 明确 fork child 执行局部委派、没有继承父目标，guidance 的 disarmed 语句只表示不会自动续跑父目标；实际 get_goal 返回 null。
 
+composition ID 保持不变的决定仍由 ADR-0010 与 ADR-0016 拥有；调用点注释与架构版本策略的统一见[清单门禁 Note](2026-10-06-mutation-manifest-gate.md)。
+
 ## Consequences
 
 todo/goal 的工具入口、事实校验和恢复使用同一空白集；model-visible Unicode 文本与上游按已明确的边界对齐。多选补充增加一次 Enter，显式调用遇不完整发现会结束 turn，需要用户修复目录后重试。截断代理对的 U+FFFD 是本仓合法 UTF-8 边界上的有意差异。

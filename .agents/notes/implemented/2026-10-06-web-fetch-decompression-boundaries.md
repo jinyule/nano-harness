@@ -15,6 +15,8 @@
 
 网络源和各层输出使用同一操作 context，在有界读取前后检查取消；即使网络字节已读尽，缓存 decoder 也不能在取消后继续返回正文。抓取期限与调用方/shutdown 取消沿既有错误分类优先于资源或 codec 错误。解码在调用 goroutine 同步执行，抓取操作拥有并关闭全部 decoder；没有新增 goroutine、插件、生命周期 effect 或依赖，app/web 的 Scope 继续取消并等待抓取操作。
 
+本 Note 记录的包内 mutation 清单已按原 ID 与顺序并入默认 `scripts/mutation-cases.json`，当前入口为 `make mutation`；接入证据由[清单门禁 Note](2026-10-06-mutation-manifest-gate.md)拥有，下文手工命令保留为当时的执行记录。
+
 ## Consequences
 
 小传输体或小最终正文不能绕过中间展开预算，连续空 member 也会触发预算与取消检查。需要超过编码项上限或中间预算的资源明确失败；最终超限仍返回有界且标记截断的正文。读取检查点之间的标准库运算和 OS 调度可能使返回略晚于期限，不提供硬实时保证；注入的网络边界仍须遵守 context，不能强制中断一个忽略取消的外部 Reader。

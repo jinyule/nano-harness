@@ -42,12 +42,13 @@ make check          # 提交前门禁
 make ci             # 漏洞与发布配置在内的完整门禁
 make agent-notes    # Agent Note 格式与 CI 变更携带检查
 make skills         # 本地 skills frontmatter、元数据与链接门禁
+make mutation       # 默认清单的全部定向回归，包括 file/fetch
 make change-scope BASE_REF=origin/main # 精确查看 outgoing change
 make build          # 真实二进制入口 smoke
 make clean
 ```
 
-Git hook 只做快速检查：pre-commit 处理 staged whitespace/gofmt，pre-push 运行 `make quick`。hook 不替代交付前的一次 `make check`，其中包含逐产品文件 coverage 和定向 mutation。漏洞、跨平台和 release dry-run 按变更面运行，完整矩阵由 CI 执行。
+Git hook 只做快速检查：pre-commit 处理 staged whitespace/gofmt，pre-push 运行 `make quick`。hook 不替代交付前的一次 `make check`，其中包含逐产品文件 coverage 和[定向 mutation](testing.md#定向-mutation-与断言有效性)。漏洞、跨平台和 release dry-run 按变更面运行，完整矩阵由 CI 执行。
 
 ### 本机数据目录
 

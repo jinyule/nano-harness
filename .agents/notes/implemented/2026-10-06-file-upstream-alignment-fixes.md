@@ -22,7 +22,9 @@
 - `read_image` 沿用集成基线的 `ImageStore.SaveImage`：存储成功后返回附件引用，观察摘要和显示路径使用同一物理源文件；允许/拒绝矩阵同时断言存储输入、引用及观察身份。
 - read.offset 支持 `1…9007199254740991`，超出时语义校验明确拒绝；范围内用请求原值诊断，不夹值。
 - `fs-tools` 仍由真实 cmd composition 注入，Scope 撤销全部注册工具后清空观察状态；workspace 仍是无运行时 effect 的纯值包。没有新增运行时资源或插件。staging 由调用拥有并同步关闭/清理；测试 goroutine 由 cleanup 释放屏障并 join。
-- 新增定向 mutation 由 file 的 [testdata 清单](../../../internal/adapter/tool/file/testdata/mutation-cases.json)维护，按[测试策略](../../../docs/testing.md#并发取消与清理)的命令运行，不扩大代码修改范围。默认 mutation 的 workspace/spill 检查仍在真实共享边界发挥作用。
+- 文件定向 mutation 由[默认清单](../../../scripts/mutation-cases.json)维护，按[测试策略](../../../docs/testing.md#定向-mutation-与断言有效性)执行；workspace/spill 检查仍在真实共享边界发挥作用。
+
+本 Note 记录的包内 mutation 清单已按原 ID 与顺序并入默认 `scripts/mutation-cases.json`，当前入口为 `make mutation`；接入证据由[清单门禁 Note](2026-10-06-mutation-manifest-gate.md)拥有，下文手工命令保留为当时的执行记录。
 
 ## Consequences
 

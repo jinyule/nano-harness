@@ -48,22 +48,38 @@ def copy_source(root,destination):
         else: shutil.copyfile(source,destination/name)
 
 
+def unique_fields(pairs):
+    fields={}
+    for key,value in pairs:
+        if key in fields: raise ValueError('mutation: duplicate JSON field: '+key)
+        fields[key]=value
+    return fields
+
+
 def run(root,manifest,report,timeout):
     if os.name!='posix': raise ValueError('mutation: process-group cleanup requires a Unix host')
     report.parent.mkdir(parents=True,exist_ok=True)
     report.unlink(missing_ok=True)
-    cases=json.loads(manifest.read_text())
+    cases=json.loads(manifest.read_text(),object_pairs_hook=unique_fields)
+    if not isinstance(cases,list): raise ValueError('mutation: manifest must be an array')
     if not cases: raise ValueError('mutation: no-sites')
     ids=set();results=[]
     for case in cases:
-        if set(case)!={'id','file','before','after','test'} or case['id'] in ids:
-            raise ValueError('mutation: invalid or duplicate case')
+        if not isinstance(case,dict) or set(case)!={'id','file','before','after','test'}:
+            raise ValueError('mutation: invalid case shape')
+        if not all(isinstance(value,str) for value in case.values()):
+            raise ValueError('mutation: case fields must be strings')
+        if not case['id'] or case['id']!=case['id'].strip():
+            raise ValueError('mutation: invalid case id')
+        if case['id'] in ids: raise ValueError('mutation: duplicate case id: '+case['id'])
         ids.add(case['id'])
         path=Path(case['file'])
         if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] not in ('cmd','internal') or path.suffix!='.go' or path.name.endswith('_test.go'):
             raise ValueError('mutation: invalid source path')
-        if not case['before'] or case['before']==case['after'] or not case['test'].startswith('^Test') or not case['test'].endswith('$'):
-            raise ValueError('mutation: an exact test selection and real replacement are required')
+        if not case['before'] or case['before']==case['after']:
+            raise ValueError('mutation: real replacement is required')
+        if not case['test'].startswith('^Test') or not case['test'].endswith('$'):
+            raise ValueError('mutation: exact test selection is required')
     with tempfile.TemporaryDirectory(prefix='nano-mutation-') as directory:
         private=Path(directory);copy_source(root,private)
         digest=hashlib.sha256()
