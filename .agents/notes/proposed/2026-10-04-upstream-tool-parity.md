@@ -126,6 +126,8 @@
 
 对已合入修复的复审又发现 5 个 Blocker，均已分派：B1 旧轮次的结算撤销新 goal 授权（Codex goal 会话）；B2 多层解压绕过字节预算且不响应取消（Codex fetch 会话）；B3 截断的 compaction 摘要被成功落盘（并入 opus WP13）；B4 同一附件 ID 的后续引用跳过元数据校验（opus）；B5 前台超时到交接之间取消仍交出存活进程（Codex shell 会话）。另有建议：plan cleanup 应等待会话锁内的调用；ADR-0017 中关于 `/attach` 孤儿对象的文案过时。
 
+进度：B2 `37da286` 已合入。B3、B4 因 opus 每周限额转交 Codex，与 B1、B5 一起在进行。ADR-0017 的 `/attach` 文案并入 B4。plan cleanup 建议项与 subagent 设计项 K2 已写成任务说明，交给 opus 子 agent。
+
 ### 后续项（不在本次范围）
 
 - 会话文本超过约 16 MiB 时 provider 请求体会超限；正常运行由主动 compaction 约束，尚无真实触发证据。
@@ -141,6 +143,7 @@ ADR 编号预先分配，避免并行分支冲突（审查修复期间追加：0
 - 全部合并后执行一次整体 code review、`make check` 和 `make tui-e2e`。
 - 每次合入后更新本 Note 的状态与决策记录，不等到最后统一整理。
 - 2026-10-06 起，维护者要求新启动的子任务改由 Codex（`gpt-6.1-sol`，`xhigh`）在独立 worktree 中执行，评审由 Codex 与既有 Opus 审查者共同进行；已在进行的 Opus 子任务继续由原 agent 完成。
+- 2026-10-06 晚：opus 子 agent 恢复可用，最多同时 7 个；当前在跑的 Codex 任务完成后，Codex 并发降为 3。新任务优先交给 opus。
 
 ## Consequences
 
