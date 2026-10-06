@@ -85,7 +85,7 @@
 
 | 问题 | 级别 | 负责 | 状态 |
 |---|---|---|---|
-| 工具执行期间打断时，已取出的通知与 steer 丢失，turn 记成 `error` | Blocker | WP3 | 修复中 |
+| 工具执行期间打断时，已取出的通知与 steer 丢失，turn 记成 `error` | Blocker | WP3 | 已合入 `da492ca`（含 step 上限与截断时通知留队列、测试替身对齐 ctx） |
 | 前台 `bash` 的 job 先于 Wait 结束时发出多余完成通知并写入会话 | Blocker | Codex-C（自 WP3 改派） | 修复中 |
 | fork 子代理继承父会话 `plan/mode`，在规划模式下运行且无法退出 | Blocker | WP8 | 修复中 |
 | `web_fetch` 对 IPv6 字面量跳过 NAT64 校验（SSRF） | Blocker | WP5 | 已合入 `6d3322c` |
