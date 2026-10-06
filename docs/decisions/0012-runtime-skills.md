@@ -35,22 +35,22 @@
 
 5. **step 上下文扩展点。** `internal/app/agent` 新增消费方接口 `ContextProvider` 与 `Engine.RegisterContext`。注册随调用方 Scope 存在。每个 step 在主动 compaction 和规划模式边界之后、`step/start` 之前，engine 按注册顺序调用 provider，传入该 step 可见的工具名和已提交日志，把返回的消息逐条作为本 turn 的 `user/message`（step 为 0）提交。provider 错误结束 turn，取消映射为 `canceled`。消息先提交再进入请求，所以 replay、compaction、fork 和 resume 都从日志得到相同的模型输入。
 
-6. **会话目录。** `skill-tools` 插件实现上述接口。每个 step 重新扫描，`skill` 可见时把 model-invocable skill 按名称排序，描述合并空白后截到 500 个字符（超出时保留 497 个并加 `...`）。目录文本逐字采用上游初始模板与替换模板，来源为 `{kind: "skill-catalog", plugin: "skill-tools"}`：
+6. **会话目录。** `skill-tools` 插件实现上述接口。每个 step 重新扫描，`skill` 可见时把 model-invocable skill 按名称排序，描述按 ECMAScript 空白集合并空白后，以 UTF-16 code unit 计数，上限为 500；超出时按上游 `.slice(0, 497)` 保留前 497 个单元并加 `...`。截断落在代理对中间时，上游 JS 字符串留下孤立高代理，本仓将该单元转为 U+FFFD，保持会话与 provider 文本为合法 UTF-8；这处字符差异是明确的取舍，完整代理对与 BMP 文本的截断位置相同。目录文本逐字采用上游初始模板与替换模板，来源为 `{kind: "skill-catalog", plugin: "skill-tools"}`：
    - 从未发布过且没有可列项时不注入；
    - 第一次使用初始模板，之后每次变化都追加完整替换目录，空目录追加“No skills are currently available …”以废止旧名称；
    - 是否变化的基准是日志中最新的、仍在 replay surface 中可见的目录消息。当前条目的初始和替换两种渲染都与它的文本不同，才追加新目录；compaction 隐藏所有目录后，下一个 step 重新发布；
    - `skill` 对该 agent 不可见时按空列表处理，因此已发布的目录会被废止；
-   - 发现不完整时不追加任何消息，保留模型已看到的目录。
+   - 发现不完整时不追加目录消息，保留模型已看到的目录；显式调用的失败规则独立，见下节。
 
    上游在消息 source 中另存条目列表并比较其摘要；本仓 `MessageSource` 只有 `kind` 与 `plugin`，所以直接比较确定性渲染的文本。模板变化会改变比较结果，因此必须同时提升 composition 版本。
 
    > 后续格式：[ADR-0016](0016-long-running-goals.md#领域与记录) 为 `MessageSource` 增加目标轮次归属字段，取代“只有 kind 与 plugin”的描述；skill 消息仍只使用本节的来源字段，目录比较规则不变。
 
-7. **工具结果。** `skill` 先在 `Check` 中拒绝非法名称（`invalid skill name "<name>"`），执行时重新发现并查找摘要：找不到报告 `skill "<name>" is unknown or no longer available`，摘要禁止模型调用报告 `skill "<name>" is not available for model invocation`。随后重读文件，对实际读到的定义再检查名称与策略。结果采用上游 `<skill_content>` 格式，包含 `Base directory for this skill: <目录>`、相对资源解析提示和原样正文；不列举资源文件。发现失败以 `Error: <原因>` 返回。目录在 workspace 外时，workspace 文件工具不能读取其中的资源；模型只能通过受 approval 约束的 `bash` 访问。
+7. **工具结果。** `skill` 先在 `Check` 中拒绝非法名称（`invalid skill name "<name>"`），执行时重新发现并查找摘要：找不到报告 `skill "<name>" is unknown or no longer available`，摘要禁止模型调用报告 `skill "<name>" is not available for model invocation`。随后重读文件，对实际读到的定义再检查名称与策略。结果采用上游 `<skill_content>` 格式，包含 `Base directory for this skill: <目录>`、相对资源解析提示和原样正文；不列举资源文件。发现失败以 `Error: <原因>` 返回。目录在 workspace 外时，workspace 文件工具不能读取其中的资源；root 只能通过获 approval 的 `bash` 访问。delegated agent 的策略固定为 `never`，不能运行 `bash`，所以只能加载 skill 正文，不能访问 workspace 外的 skill 资源。
 
-8. **显式调用。** 本 turn 最近一次 `turn/start` 或 `step/start` 之后提交的、来源为 `user` 的消息中，被空白包围的 `/name` 文本块令牌按首次出现顺序去重。名称对应 user-invocable skill 时，重读其文件，把同样的 `<skill_content>` 作为来源 `{kind: "skill-invocation", plugin: "skill-tools"}` 的消息追加在目录之后。未知名称和 `user-invocable: false` 保持普通文本；这是 `disable-model-invocation` skill 唯一的入口，`skill` 工具可见与否不影响它。加载这个 skill 的 I/O 失败会结束 turn，与上游 pre-step 的行为一致。TUI 把以 kebab-case `/name` 开头、但不是 TUI 命令的输入作为普通消息发送。
+8. **显式调用。** 本 turn 最近一次 `turn/start` 或 `step/start` 之后提交的、来源为 `user` 的消息中，被空白包围的 `/name` 文本块令牌按首次出现顺序去重。名称对应 user-invocable skill 时，重读其文件，把同样的 `<skill_content>` 作为来源 `{kind: "skill-invocation", plugin: "skill-tools"}` 的消息追加在目录之后。未知名称和 `user-invocable: false` 保持普通文本；这是 `disable-model-invocation` skill 唯一的入口，`skill` 工具可见与否不影响它。加载这个 skill 的 I/O 失败会结束 turn，与上游 pre-step 的行为一致。发现不完整且用户输入包含 `/name` 时，本仓以 `resolve explicit skill invocation: <原因>` 明确失败并保留原始错误原因；不会把显式调用当作已处理并继续模型 step。上游有独立按名称查询接缝，本仓没有，因而采用明确失败；没有显式调用时继续保留旧目录。TUI 把以 kebab-case `/name` 开头、但不是 TUI 命令的输入作为普通消息发送。
 
-9. **持久化、版本与拒绝策略。** 不新增记录类型，session format 保持 v2。目录和显式调用都是普通 `user/message`，现有严格 decoder 与顺序校验照常约束它们：必须位于活动 turn 内、step 为 0 或等于活动 step、内容非空、来源字段无多余成员。`internal/adapter/session/jsonl/testdata/session-v2-skill.jsonl` 固定一份包含目录、显式调用和 `skill` call/result 的会话，测试证明它可被读取、投影、在恢复后不重复发布目录，并拒绝错位、空内容和多余来源字段。旧二进制在格式上可以读取这些消息，但 composition ID 加入 `skill-tools-v1`，不同组合之间的会话按 composition mismatch 拒绝恢复，不迁移。当前没有发布 tag，没有需要迁移的已发布会话。
+9. **持久化、版本与拒绝策略。** 不新增记录类型，session format 保持 v2。目录和显式调用都是普通 `user/message`，现有严格 decoder 与顺序校验照常约束它们：必须位于活动 turn 内、step 为 0 或等于活动 step、内容非空、来源字段无多余成员。`internal/adapter/session/jsonl/testdata/session-v2-skill.jsonl` 固定一份包含目录、显式调用和 `skill` call/result 的会话，测试证明它可被读取、投影、在恢复后不重复发布目录，并拒绝错位、空内容和多余来源字段。旧二进制在格式上可以读取这些消息，但 composition ID 加入 `skill-tools-v1`，不同组合之间的会话按 composition mismatch 拒绝恢复，不迁移。当前没有发布 tag，没有需要迁移的已发布会话。UTF-16 描述上限修补不改变消息形状、模板或 composition ID；已提交目录不改写，下一个 step 通过既有目录比较规则追加必要的替换目录。
 
 10. **保留与恢复。** 目录与注入正文和其他事实保存在同一个只追加、`0600`、写后 `fsync` 的 JSONL 中，保留期与会话文件相同，compaction 不删除原始记录。恢复不修复或改写它们；目录状态在下一个 step 从磁盘日志重新推导。被截断或非法的行使整个会话被拒绝，文件不被改写，可以离线检查原始数据。
 

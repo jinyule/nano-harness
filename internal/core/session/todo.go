@@ -4,7 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
+
+	"github.com/jinyule/nano-harness/internal/core/text"
 )
 
 // TodoStatus is the lifecycle state of one todo item.
@@ -54,7 +55,7 @@ func ValidateTodoItems(items []TodoItem) error {
 		switch {
 		case item.Content == "":
 			return errors.New("invalid todo: `content` must be a non-empty string")
-		case item.Content != strings.TrimSpace(item.Content):
+		case item.Content != text.TrimSpace(item.Content):
 			return errors.New("invalid todo: `content` must be trimmed")
 		case len(item.Content) > MaxTodoContentBytes:
 			return fmt.Errorf("invalid todo: `content` exceeds %d bytes", MaxTodoContentBytes)
@@ -62,7 +63,7 @@ func ValidateTodoItems(items []TodoItem) error {
 			return fmt.Errorf("invalid todo: unknown status %q", item.Status)
 		}
 		if _, duplicate := seen[item.Content]; duplicate {
-			return fmt.Errorf("invalid todos: duplicate content %q", item.Content)
+			return fmt.Errorf("invalid todos: duplicate content %s", text.Quote(item.Content))
 		}
 		seen[item.Content] = struct{}{}
 	}

@@ -27,6 +27,8 @@
 - **组合**：`cmd/nano-harness` 在 subagent 工具之后组装 `todo-tools`，composition ID 增加 `todo-tools-v1`。`todo_write` 加入 `testdata/upstream-base-tools.json`（上游同名工具由 6 个变为 7 个）和组合工具目录 `testdata/tool-catalog.json`。
 - **TUI**：`plan.go` 用 `StandingTodos` 折叠初始 replay 与实时事件，计划面板固定在输入区上方。面板最多占 transcript 剩余行数的一半，并保留至少一行 transcript；溢出时从第一个未完成项开始显示，最后一行给出隐藏数量，标题保留各状态计数。窗口变化和计划变化都通过同一 `layout` 重新分配行数。
 
+空白、Unicode 边界与交互补充的实施证据见[交互与会话状态对齐](2026-10-06-interaction-state-upstream-alignment.md)；本 Note 保留各能力的初始组装、生命周期和持久化决定。
+
 ## Consequences
 
 模型获得与上游一致的计划工具，计划随会话持久化，恢复后可见，且 root 与每个 subagent 相互隔离。界面只从已提交事件渲染，不另设状态源。

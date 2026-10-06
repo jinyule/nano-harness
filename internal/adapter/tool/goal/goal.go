@@ -21,6 +21,7 @@ import (
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
+	textValue "github.com/jinyule/nano-harness/internal/core/text"
 )
 
 // BlockedAfterRounds is the fewest admitted rounds before a goal round may
@@ -179,7 +180,7 @@ func (provider *Provider) update(ctx context.Context, invocation appTool.Invocat
 	if err := requireSession(invocation); err != nil {
 		return appTool.Result{}, err
 	}
-	if arguments.GoalID == "" || arguments.GoalID != strings.TrimSpace(arguments.GoalID) || arguments.Revision < 1 || arguments.Revision > session.MaxGoalRounds || arguments.Revision != math.Trunc(arguments.Revision) {
+	if arguments.GoalID == "" || arguments.GoalID != textValue.TrimSpace(arguments.GoalID) || arguments.Revision < 1 || arguments.Revision > session.MaxGoalRounds || arguments.Revision != math.Trunc(arguments.Revision) {
 		return appTool.Result{}, invalidUpdate("goal_id must be non-empty and revision must be a positive safe integer")
 	}
 	ref := session.GoalRef{ID: arguments.GoalID, Revision: uint64(arguments.Revision)}
@@ -244,7 +245,7 @@ func (provider *Provider) finish(ctx context.Context, invocation appTool.Invocat
 		}
 		view, err = provider.goals.Complete(ctx, invocation.SessionID, ref, appGoal.ActorModel)
 	} else {
-		if reason == nil || strings.TrimSpace(*reason) == "" {
+		if reason == nil || appTool.IsBlank(*reason) {
 			return appTool.Result{}, invalidUpdate("blocked_reason is required with action blocked")
 		}
 		if autonomous && authority.Round.RoundsStarted < BlockedAfterRounds {

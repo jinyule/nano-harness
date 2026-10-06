@@ -93,7 +93,7 @@ func readTranscript(t *testing.T, path string) []session.Event {
 
 func TestComposition_TodoWritePersistsAndReplaysAfterResume(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
-	arguments := `{"todos":[{"content":"write tests","status":"completed"},{"content":" implement ","status":"in_progress"},{"content":"document","status":"pending"}]}`
+	arguments := `{"todos":[{"content":"\ufeffwrite tests\ufeff","status":"completed"},{"content":"\u0085implement\u0085","status":"in_progress"},{"content":"document","status":"pending"}]}`
 	server, calls := todoServer(t, arguments)
 	root, data := t.TempDir(), t.TempDir()
 	config := todoConfig(t, server.URL, root, data)
@@ -123,7 +123,7 @@ func TestComposition_TodoWritePersistsAndReplaysAfterResume(t *testing.T) {
 
 	want := []session.TodoItem{
 		{Content: "write tests", Status: session.TodoCompleted},
-		{Content: "implement", Status: session.TodoInProgress},
+		{Content: "\u0085implement\u0085", Status: session.TodoInProgress},
 		{Content: "document", Status: session.TodoPending},
 	}
 	transcript := filepath.Join(data, "sessions", "session-todo.jsonl")

@@ -183,6 +183,46 @@ func update(revision float64, action string, extra map[string]any) map[string]an
 	return arguments
 }
 
+func TestUpdateGoal_ECMAScriptGoalIDAndBlockedReason(t *testing.T) {
+	for _, id := range []string{"\ufeffg", "g\ufeff", "\u0085g\u0085"} {
+		t.Run("id "+id, func(t *testing.T) {
+			current := start(t)
+			current.human(t)
+			result := current.call(t, "update_goal", map[string]any{"goal_id": id, "revision": 1, "action": "edit", "objective": "new"})
+			invalidID := "Error: goal_id must be non-empty and revision must be a positive safe integer"
+			wantInvalid := id != "\u0085g\u0085"
+			if !result.IsError || (result.Output == invalidID) != wantInvalid {
+				t.Fatalf("id=%q result=%+v", id, result)
+			}
+		})
+	}
+	for _, reason := range []string{"\ufeff", "\ufeffblocked\ufeff", "\u0085"} {
+		t.Run("reason "+reason, func(t *testing.T) {
+			current := start(t)
+			current.human(t)
+			if result := current.call(t, "create_goal", map[string]any{"objective": "ship"}); result.IsError {
+				t.Fatal(result)
+			}
+			result := current.call(t, "update_goal", update(1, "blocked", map[string]any{"blocked_reason": reason}))
+			if reason == "\ufeff" {
+				expect(t, result, "Error: blocked_reason is required with action blocked")
+				return
+			}
+			if result.IsError {
+				t.Fatal(result)
+			}
+			view, err := current.goals.Get(t.Context(), "root")
+			want := reason
+			if reason == "\ufeffblocked\ufeff" {
+				want = "blocked"
+			}
+			if err != nil || view.Goal.BlockedReason.Message != want {
+				t.Fatalf("view=%+v error=%v want=%q", view, err, want)
+			}
+		})
+	}
+}
+
 func TestProvider_PublishesTheUpstreamDefinitions(t *testing.T) {
 	current := start(t)
 	catalog, err := current.runtime.Catalog(nil)

@@ -118,7 +118,7 @@ TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event f
 
 `TestComposition_WebSearchAuditsConcurrentQueriesOnDisk` 经同一真实入口覆盖三个 provider 各 1–4 个查询；loopback server 用 barrier 等待全部查询到达，并在每个 HTTP 请求到达时读取磁盘 JSONL，证明对应审计已提交。从最终 transcript 验证查询序号、归属与 call/audit/result 因果关系；下一模型请求不包含审计元数据。`TestComposition_WebSearchAuditsNELQuery` 从磁盘确认单独 U+0085 查询保留原文并发送；领域与 LLM 断言审计和请求边界均按 ECMAScript 空白集接受 NEL、拒绝 BOM。service 的 barrier 测试另外验证去重后的审计顺序与网络并发，失败 journal 证明没有检索 dispatch 且错误链保留原因、模型文本不泄漏 I/O 详情。
 
-`TestComposition_SkillCatalogToolAndGesture` 经真实 composition 和 loopback provider 证明：第一次请求带有目录且不含禁止模型调用的 skill 和任何正文，模型调用 `skill` 后下一次请求带有完整 `<skill_content>`，运行中新增的 skill 在下一 turn 产生替换目录，`/name` 注入 user-only skill，重启进程后从磁盘日志推导目录而不重复发布。
+`TestComposition_SkillCatalogToolAndGesture` 经真实 composition 和 loopback provider 比较 UTF-16 截断后的目录（含代理对截断时的 U+FFFD），并证明：第一次请求带有目录且不含禁止模型调用的 skill 和任何正文，模型调用 `skill` 后下一次请求带有完整 `<skill_content>`，运行中新增的 skill 在下一 turn 产生替换目录，`/name` 注入 user-only skill，重启进程后从磁盘日志推导目录而不重复发布。 `TestComposition_SkillExplicitInvocationFailsOnIncompleteDiscovery` 在首个 turn 完成后把测试 skill 根换成普通文件，从模型请求数、磁盘目录消息与 error 的 `turn/end` 验证显式 `/name` 明确失败，目录保持不变且模型没有收到第二个请求。
 
 `TestComposition_ReadImageEndToEnd` 经真实 CLI config、settings 文件和 composition 让 loopback 模型对 workspace 中 3000×1000 的 PNG 调用 `read_image`：从磁盘 transcript 断言结果信封（路径、规范化字节数、缩放倍数）和 `image` 引用，从附件根读取对象并核对 SHA-256、长度与 `0400` 权限，确认 transcript 中只有引用而没有图片字节，并比较下一次 provider 请求中 `function_call_output` 的 `input_text`/`input_image` 数组；随后以新 composition 恢复同一会话并调用 `subagent_fork`，证明 replay 请求与 child 请求都从同一个共享对象携带图片；最后删除对象，下一次请求改为占位文本且 turn 完成。`TestComposition_DamagedAttachmentsBecomePlaceholders` 分别构造缺失、截断、同长度改写和引用类型不符的对象，证明请求都只含占位文本而不含图片字节。`TestComposition_ReadImageRefusesTextOnlyModels` 证明模型未声明 vision 时结果是门禁错误、日志与请求都没有图片。
 
@@ -131,7 +131,7 @@ TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event f
 - `todo_write`：终端显示计划，磁盘日志包含完整快照，重启 replay 时后续 turn 已清除计划。
 - 后台 `bash`：job 在首个 turn 结束后才完成，`job>` 通知开启新 turn，模型用 `job_output` 读到输出。
 - 前台 one-shot spawn 与 fork：独立子会话包含目录、descriptor 和 `never` 策略，spawn child 调用 `read`；子代理回收后 `list_agents` 返回空列表，`send_message` 写给目录外 id 返回错误，`interrupt_agent` 对不存在的目标是空操作。
-- `ask_user_question` 与规划审查：接受预填推荐项和自由回答；`/plan` 后通过真实 TUI 批准 `exit_plan_mode`，日志包含 `plan/mode` 与切换提示，规划段落只出现在批准前的请求中。
+- `ask_user_question` 与规划审查：接受预填推荐项、多选标签与补充自由回答；`/plan` 后通过真实 TUI 批准 `exit_plan_mode`，日志包含 `plan/mode` 与切换提示，规划段落只出现在批准前的请求中。
 - `/goal`：创建目标后 driver 自动开启轮次，模型通过 `get_goal` 与 `update_goal` 完成目标；检查 create/complete 的 `goal/change`、轮次与收尾指令、状态查询和状态栏。
 - 终端输入与生命周期：bracketed paste、窗口缩放、长行末尾可见、打断、重启 replay、私有权限（含 `--spill-root` 与 `--attachment-root` 的 `0700`）与退出后的 lock 清理。
 
@@ -142,6 +142,8 @@ TUI 回归测试还覆盖 v2 粘贴、按键释放、secret 遮罩、小窗口�
 `TestComposition_ReadsHistoricalSpillsAfterRootChange` 从真实配置与 composition 生成完整 grep 列表和约 60,000 字节的长正则错误，检查错误状态、预览及完整文件；显式 compaction 遮蔽定位符后关闭，以新 spill root 恢复，再经 `read`/`grep` 读回两类历史文件，并在真正的 `subagent_fork` 子会话重复读回。断言来自磁盘日志、文件字节与 fork 自有事件。workspace 安全矩阵覆盖精确授权、身份/布局/链接/权限拒绝和写入边界；Unicode、framing 与 search stderr 预算的永久回归测试在产品修复前稳定失败。
 
 `TestComposition_ECMAScriptBlankQueriesAndSearchArguments` 从真实设置与 composition 调用检索工具，以 loopback provider 的请求数和原文断言 BOM 空白不会触发计费请求、NEL 非空查询保留原文且精确去重；同时从磁盘工具结果验证 glob/grep 的空白拒绝及空格正则接受。
+
+`TestDecoder_ECMAScriptDurableWhitespace` 从真实 JSONL Inspect/Open 验证 todo 文本、目标文本、目标 ID 与阻塞说明：NEL 保留原文并可恢复，首尾 BOM 被拒绝，接受与拒绝都不改写文件。工具与 TUI 的同名边界测试覆盖 BOM/NEL、JSON.stringify 重复项错误、多字节 `/goal edit`、多选补充为空/数字/超限/取消，以及发现不完整的显式 skill 调用；这些永久反例在产品修复前失败。
 
 ## 并发、取消与清理
 

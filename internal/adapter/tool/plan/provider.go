@@ -7,12 +7,12 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	appQuestion "github.com/jinyule/nano-harness/internal/app/question"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
+	"github.com/jinyule/nano-harness/internal/core/text"
 )
 
 const (
@@ -125,12 +125,12 @@ func (provider *Provider) exit(ctx context.Context, invocation appTool.Invocatio
 }
 
 // startsWithTitle mirrors the upstream /^#\s+\S/ check on the trimmed plan:
-// a single # followed by whitespace and then visible text.
+// a single # followed by ECMAScript whitespace and then non-whitespace text.
 func startsWithTitle(plan string) bool {
-	rest, ok := strings.CutPrefix(strings.TrimSpace(plan), "#")
+	rest, ok := strings.CutPrefix(text.TrimSpace(plan), "#")
 	if !ok {
 		return false
 	}
 	first, _ := utf8.DecodeRuneInString(rest)
-	return unicode.IsSpace(first) && strings.TrimSpace(rest) != ""
+	return text.IsSpace(first) && !appTool.IsBlank(rest)
 }

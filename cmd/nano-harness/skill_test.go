@@ -104,6 +104,46 @@ func userKinds(t *testing.T, transcript []byte, turn uint64) []string {
 	return kinds
 }
 
+func TestComposition_SkillExplicitInvocationFailsOnIncompleteDiscovery(t *testing.T) {
+	assembled, seen := startAssembled(t, []modelStep{{text: "catalog seen"}, {text: "unexpected request"}})
+	skillsRoot := filepath.Join(filepath.Dir(filepath.Dir(assembled.transcript)), "skills")
+	if err := os.MkdirAll(filepath.Join(skillsRoot, "demo"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsRoot, "demo", "SKILL.md"), []byte("---\nname: demo\ndescription: Demo.\n---\nDemo body.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if result := assembled.turn(t, "inspect catalog"); result.Err != nil || result.Outcome != session.OutcomeCompleted {
+		t.Fatal(result)
+	}
+	if err := os.Rename(skillsRoot, skillsRoot+".saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(skillsRoot, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := assembled.turn(t, "/demo")
+	if result.Err == nil || result.Outcome != session.OutcomeError || !strings.Contains(result.Err.Error(), "resolve explicit skill invocation:") || len(seen()) != 1 {
+		t.Fatalf("turn=%+v provider requests=%d", result, len(seen()))
+	}
+	records := assembled.records(t)
+	var catalog, ended bool
+	for _, record := range records {
+		if record.Type == session.RecordUserMessage && record.Message.Source.Kind == coreskill.SourceCatalog {
+			catalog = true
+			if record.Turn != 1 {
+				t.Fatal("incomplete discovery changed the durable catalog")
+			}
+		}
+		if record.Type == session.RecordTurnEnd && record.Turn == 2 {
+			ended = record.Outcome == session.OutcomeError
+		}
+	}
+	if !catalog || !ended {
+		t.Fatalf("catalog=%t error turn/end=%t", catalog, ended)
+	}
+}
+
 // TestComposition_SkillCatalogToolAndGesture drives the real composition:
 // the first request carries the durable catalog, the model loads a skill
 // with the skill tool, a hot-added skill produces a replacement catalog, a
@@ -139,6 +179,7 @@ func TestComposition_SkillCatalogToolAndGesture(t *testing.T) {
 		}
 	}
 	writeSkill(filepath.Join(projectSkills, "proof-skill", "SKILL.md"), "---\nname: proof-skill\ndescription: Prove   the <catalog> path.\n---\n\nAnswer with the proof marker PINEAPPLE.\n")
+	writeSkill(filepath.Join(projectSkills, "unicode", "SKILL.md"), "---\nname: unicode\ndescription: "+strings.Repeat("😀", 251)+"\n---\nUnicode body.\n")
 	writeSkill(filepath.Join(userSkills, "user-only.md"), "---\nname: user-only\ndescription: Only for users.\ndisable-model-invocation: true\n---\nSay the user marker MANGO.\n")
 	settingsPath := filepath.Join(data, "settings.yaml")
 	settingsYAML := fmt.Sprintf("route:\n  provider: openai\n  model: test-model\nproviders:\n  openai:\n    base_url: %s\n    models:\n      - id: test-model\n        name: Test\n        context_window: 65536\n        tools: true\n", loopback.URL)
@@ -194,7 +235,7 @@ func TestComposition_SkillCatalogToolAndGesture(t *testing.T) {
 	submit("use the proof skill", "/user-only now")
 
 	first := server.request(t, 0)
-	for _, fact := range []string{"<available_skills>", "- `proof-skill`: Prove the &lt;catalog&gt; path.", "call the `skill` tool with the exact skill name"} {
+	for _, fact := range []string{"<available_skills>", "- `proof-skill`: Prove the &lt;catalog&gt; path.", "- `unicode`: " + strings.Repeat("😀", 248) + "\ufffd...\n", "call the `skill` tool with the exact skill name"} {
 		if !strings.Contains(first, fact) {
 			t.Fatalf("first request lacks %q:\n%s", fact, first)
 		}

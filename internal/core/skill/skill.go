@@ -1,25 +1,26 @@
 // Package skill defines the model-facing vocabulary of runtime skills: the
 // name grammar, the durable session catalog and its replacements, the
 // rendering of a loaded skill, and the user-explicit `/name` gesture. The
-// texts follow the upstream tool-skill templates byte for byte. Everything
-// here is a pure function of committed session events and discovered
+// templates follow upstream tool-skill; description normalization keeps valid
+// UTF-8. Everything here is a pure function of committed session events and discovered
 // summaries, so a resumed session derives the same catalog state.
 package skill
 
 import (
 	"slices"
 	"strings"
-	"unicode/utf8"
+	"unicode/utf16"
 
 	"github.com/jinyule/nano-harness/internal/core/session"
+	coreText "github.com/jinyule/nano-harness/internal/core/text"
 )
 
 const (
 	// MaxNameBytes bounds one skill name.
 	MaxNameBytes = 64
-	// MaxDescriptionRunes is the normalized description length rendered in
+	// MaxDescriptionUnits is the UTF-16 code unit limit rendered in
 	// a catalog entry, including the "..." marker of a capped description.
-	MaxDescriptionRunes = 500
+	MaxDescriptionUnits = 500
 	// MaxCatalogEntries bounds one catalog so that even the largest escaped
 	// entries fit one session text block.
 	MaxCatalogEntries = 100
@@ -69,29 +70,20 @@ type Entry struct {
 
 // NewEntry normalizes description for the catalog: whitespace runs collapse
 // to one space, the ends are trimmed, and text longer than
-// MaxDescriptionRunes keeps its first runes followed by "...".
+// MaxDescriptionUnits keeps its first 497 UTF-16 units followed by "...".
+// A split surrogate becomes U+FFFD so the catalog remains valid UTF-8.
 func NewEntry(name, description string) Entry {
-	normalized := strings.Join(strings.FieldsFunc(description, isSpace), " ")
-	if utf8.RuneCountInString(normalized) > MaxDescriptionRunes {
-		runes := []rune(normalized)
-		normalized = string(runes[:MaxDescriptionRunes-3]) + "..."
+	normalized := strings.Join(strings.FieldsFunc(description, coreText.IsSpace), " ")
+	units := utf16.Encode([]rune(normalized))
+	if len(units) > MaxDescriptionUnits {
+		normalized = string(utf16.Decode(units[:MaxDescriptionUnits-3])) + "..."
 	}
 	return Entry{Name: name, Description: normalized}
 }
 
 // TrimSpace removes leading and trailing whitespace as ECMAScript trim does,
 // the normalization upstream applies to a skill body after its frontmatter.
-func TrimSpace(text string) string { return strings.TrimFunc(text, isSpace) }
-
-// isSpace is the ECMAScript WhiteSpace and LineTerminator set that the
-// upstream templates use for `\s` and trim.
-func isSpace(char rune) bool {
-	switch char {
-	case '\t', '\n', '\v', '\f', '\r', ' ', '\u00a0', '\u1680', '\u2028', '\u2029', '\u202f', '\u205f', '\u3000', '\ufeff':
-		return true
-	}
-	return char >= '\u2000' && char <= '\u200a'
-}
+func TrimSpace(value string) string { return coreText.TrimSpace(value) }
 
 // CatalogUpdate returns the catalog text to commit before the next model
 // step of a session whose committed log is events, given the entries the
@@ -236,7 +228,7 @@ func InvokedNames(events []session.Event) []string {
 			if block.Type != session.ContentText {
 				continue
 			}
-			for _, token := range strings.FieldsFunc(block.Text, isSpace) {
+			for _, token := range strings.FieldsFunc(block.Text, coreText.IsSpace) {
 				name, ok := strings.CutPrefix(token, "/")
 				if ok && ValidName(name) && !slices.Contains(names, name) {
 					names = append(names, name)

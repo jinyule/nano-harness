@@ -112,6 +112,29 @@ func review(selected []string, custom string) func(appQuestion.Request) ([]appQu
 	}
 }
 
+func TestExitPlanMode_ECMAScriptHeadingWhitespace(t *testing.T) {
+	for _, test := range []struct {
+		plan  string
+		valid bool
+	}{
+		{"\ufeff#\ufeffPlan\ufeff", true}, {"#\u2003Plan", true}, {"#\u0085Plan", false},
+		{"\u0085# Plan", false}, {"# \u0085", true}, {"#\ufeff", false},
+	} {
+		t.Run(test.plan, func(t *testing.T) {
+			current := start(t)
+			current.enter(t)
+			current.answer = review([]string{"Approve"}, "")
+			result := current.call(t, test.plan)
+			if result.IsError == test.valid || (len(current.seen) == 1) != test.valid {
+				t.Fatalf("plan=%q result=%+v reviews=%d", test.plan, result, len(current.seen))
+			}
+			if test.valid && current.seen[0].Questions[0].Detail != test.plan {
+				t.Fatal("review changed plan text")
+			}
+		})
+	}
+}
+
 func TestNew_RequiresDependencies(t *testing.T) {
 	runtime, _ := appTool.New(denyApprover{})
 	for _, test := range []struct {

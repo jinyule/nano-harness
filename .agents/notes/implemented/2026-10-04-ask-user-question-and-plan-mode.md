@@ -35,6 +35,8 @@
 - fork 子代理曾继承 parent 的规划模式。WP7 的 fork 种子复制 parent 最后一个 `turn/end` 之前的全部记录，`ProjectPlan` 又折叠整份日志，所以种子里的 `plan/mode {active:true}` 让 child 每一步都带规划段落；child 不能选择模式，审查也以 delegated 被拒绝，于是无法离开。最常见的触发是本 turn 刚批准计划就 fork 去实施：退出要到下一个边界才记录，不在种子中。现在 `ProjectPlan` 只折叠 `session.OwnEvents`，与 `session.Children` 和 WP10 的目标投影一致；种子中的记录仍按顺序规则原位校验，消息与工具结果照常进入 child 的 surface，parent 不受影响。上游 fork 继承规划状态，这一差异写入 ADR-0014，ADR-0013 的“自有事件”一节补充了会话自有状态的规则。
 - 服务原先在全局锁内执行每个会话的日志读取和 `fsync` 追加，并发子代理的每个边界都要排队。现在按会话加锁，服务锁只保护生命周期与会话表；锁顺序为 agent worker 状态锁 → 会话锁，没有反向获取。`Exit(ctx, sessionID)` 的取消检查随之移到该会话的锁内，`TestService_CancelledExitKeepsPlanMode` 改为持有会话锁来构造等待点。
 
+空白、Unicode 边界与交互补充的实施证据见[交互与会话状态对齐](2026-10-06-interaction-state-upstream-alignment.md)；本 Note 保留各能力的初始组装、生命周期和持久化决定。
+
 ## Consequences
 
 模型看到的两个工具、规划段落、审查问题和结果文本与上游一致；提问接缝与规划状态都是通用的 app 服务，WP10 可以直接复用。问题、答案、模式与切换提示都能从日志重建。

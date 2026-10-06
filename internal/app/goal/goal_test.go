@@ -196,6 +196,46 @@ func startService(t *testing.T) *fixture {
 	return &fixture{service: service, journal: journal, admissions: admissions, clock: now, scope: scope}
 }
 
+func TestService_ECMAScriptObjectiveAndBlockReason(t *testing.T) {
+	for _, test := range []struct {
+		input, want string
+		valid       bool
+	}{
+		{"\ufeff", "", false}, {"\ufeffship\ufeff", "ship", true}, {"\u0085", "\u0085", true}, {"\u0085ship\u0085", "\u0085ship\u0085", true},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			fixture := startService(t)
+			view, err := fixture.service.Create(t.Context(), "root", test.input, nil, ActorHost)
+			if (err == nil) != test.valid {
+				t.Errorf("create error=%v want valid=%t", err, test.valid)
+			}
+			if err == nil && view.Goal.Objective != test.want {
+				t.Errorf("created objective=%q want=%q", view.Goal.Objective, test.want)
+			}
+			if view == nil {
+				view = fixture.create(t, "base", nil)
+			}
+			edited, editErr := fixture.service.Edit(t.Context(), "root", view.Goal.Ref(), &test.input, nil, ActorHost)
+			if (editErr == nil) != test.valid {
+				t.Errorf("edit error=%v want valid=%t", editErr, test.valid)
+			}
+			if editErr == nil {
+				view = edited
+				if view.Goal.Objective != test.want {
+					t.Errorf("edited objective=%q want=%q", view.Goal.Objective, test.want)
+				}
+			}
+			blocked, blockErr := fixture.service.Block(t.Context(), "root", view.Goal.Ref(), session.GoalBlockReason{Code: "model-reported", Message: test.input}, ActorHost)
+			if (blockErr == nil) != test.valid {
+				t.Errorf("block error=%v want valid=%t", blockErr, test.valid)
+			}
+			if blockErr == nil && blocked.Goal.BlockedReason.Message != test.want {
+				t.Errorf("reason=%q want=%q", blocked.Goal.BlockedReason.Message, test.want)
+			}
+		})
+	}
+}
+
 func sequence(size int) []byte {
 	data := make([]byte, size)
 	for index := range data {

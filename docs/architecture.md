@@ -190,7 +190,7 @@ Submit user message
 
 `internal/adapter/spill` 是 `spill-local` 插件：在 `--spill-root` 下按 workspace 分区、按会话分组保存 owner-only 文件，启动时清理 30 天前的文件，关闭时等待已打开的文件。`fs-tools` 持有按会话记录的读取观察（`read` 与 `read_image` 都会记录），`write` 只覆盖读过且内容未变的文件，`edit` 必须先读；观察状态只在内存中。存储布局、读回边界、观察语义和降级见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md)。
 
-`search-tools` 与 `shell-tools` 共用 `cmd` 构造的同一个 platform process runner。search provider 在构造时从 PATH 解析 `rg`，找不到时组装失败；`Start` 运行 `rg --version`，低于 15.0.0 时启动失败，不注册降级工具。`glob` 与 `grep` 按上游参数调用 ripgrep，并解析它的路径列表或 `--json` 输出；进程边界见[安全工程规则](security.md#approvalshell-与进程)，版本前提见[开发规范](development.md#ripgrep)。search 请求显式选择 65,536 字节 stderr 尾部，runner 默认及 bash 仍为 64,000 字节。`glob` 的 pattern/path、`grep` 的 path/include 与 web 查询共享 `app/tool.IsBlank` 的 ECMAScript 空白判定；grep pattern 只拒绝空字符串。
+`search-tools` 与 `shell-tools` 共用 `cmd` 构造的同一个 platform process runner。search provider 在构造时从 PATH 解析 `rg`，找不到时组装失败；`Start` 运行 `rg --version`，低于 15.0.0 时启动失败，不注册降级工具。`glob` 与 `grep` 按上游参数调用 ripgrep，并解析它的路径列表或 `--json` 输出；进程边界见[安全工程规则](security.md#approvalshell-与进程)，版本前提见[开发规范](development.md#ripgrep)。search 请求显式选择 65,536 字节 stderr 尾部，runner 默认及 bash 仍为 64,000 字节。`glob` 的 pattern/path、`grep` 的 path/include 与 web 查询共享 `app/tool.IsBlank` 的 ECMAScript 空白判定；该入口委托 `core/text.IsSpace`，todo、goal、skill 与 durable todo/goal 文本与 goal 标识校验使用同一集合（含 U+FEFF、不含 U+0085），core 不反向依赖 app；grep pattern 只拒绝空字符串。
 
 `read`、`read_image`、`glob`、`grep`、`web_search`、`web_fetch`、`skill`、`subagent`、`subagent_fork` 可并行；`write`、`edit`、`bash` 和 `job_*` 是 exclusive；`write`、`edit`、`bash` 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。`bash` 的 `sandbox_permissions: danger-full-access` 是唯一离开 workspace sandbox 的方式，规则见[安全工程规则](security.md#approvalshell-与进程)。
 
@@ -280,7 +280,7 @@ list_agents                → parent 自己的 subagent/catalog；descendants �
 `skill-tools` 插件在启动时注册 `skill` 工具，随后向 engine 注册 step 上下文 provider，cleanup 逆序撤销两者。它不持有 goroutine、缓存或监听器：每个 step 和每次工具调用都重新扫描 skill 根，因此增删、改名和策略变化在下一个 step 生效，正文修改在下一次加载生效。`internal/core/skill` 是纯函数包，拥有名称文法、上游目录与 `<skill_content>` 模板、从日志推导目录状态的规则和 `/name` 令牌提取；adapter 负责发现、frontmatter 解析和插件生命周期。
 
 - 根按顺序为 `<project>/.nano-harness/skills`、`<project>/.agents/skills`、`--skills-dir`（默认 `<用户配置目录>/nano-harness/skills`）和 `--agents-skills-dir`（默认 `<home>/.agents/skills`）；`<project>` 是包含 `.git` 的最近祖先或 workspace root。同名取先出现者。
-- `skill` 对 agent 可见时，provider 比较当前 model-invocable skill 与日志中最新可见的目录消息，变化时追加上游初始或完整替换目录（来源 `skill-catalog`）。不可见时按空列表处理；发现不完整时不追加，保留模型已看到的目录。
+- `skill` 对 agent 可见时，provider 比较当前 model-invocable skill 与日志中最新可见的目录消息，变化时追加上游初始或完整替换目录（来源 `skill-catalog`）。不可见时按空列表处理；发现不完整时不追加目录，保留模型已看到的目录；若直接用户输入含 `/name`，以保留原始原因的明确错误结束 turn，不能静默消费显式调用。
 - 最近一次 `turn/start` 或 `step/start` 之后的直接用户输入中，`/name` 指向 user-invocable skill 时，其 `<skill_content>` 作为来源 `skill-invocation` 的消息追加在目录之后。TUI 把以 kebab-case `/name` 开头、但不是 TUI 命令的输入作为普通消息发送。
 - 目录和注入都是普通 `user/message`，来源 kind `skill-catalog` 与 `skill-invocation` 不同于直接输入 `user`、后台任务通知 `tool-jobs` 和规划切换提示 `plan-mode`；只有 `user` 来源的文本参与 `/name` 识别，目录基准只看 `skill-catalog`。subagent 使用自己的 session 和 allowlist 独立获得目录；fork 的文本快照会包含 parent 当时的目录文本。
 
@@ -297,7 +297,7 @@ goal driver ──Followup(<goal_round>)──► agent worker ──► engine.
 ```
 
 - `internal/app/goal.Service`（插件 `goals`）是唯一写 `goal/change` 的组件。目标只从 session 自己提交的事件折叠，fork 子代理继承的父目标事实不属于它。每次变更在服务锁内从日志折叠当前状态（`session.ProjectGoal`）、校验 compare-and-set 的 `{id, revision}` 与阶段迁移、追加完整快照，再通知 watcher。轮次 admission 持有同一把锁，所以变更不会与轮次的开场记录交错。
-- 是否允许自动继续（armed）只在进程内：create 与 resume 置 armed，pause、complete、block、clear 解除，edit 保持；driver 接管 session 时与退出时都解除。resume 或 fork 后恢复的 active 目标因此是 disarmed，需人类或模型（在人类的 turn 中）resume。
+- 是否允许自动继续（armed）只在进程内：create 与 resume 置 armed，pause、complete、block、clear 解除，edit 保持；driver 接管 session 时与退出时都解除。resume 后恢复的本会话 active 目标因此是 disarmed，需人类或模型（在人类的 turn 中）resume；fork child 没有继承目标，`get_goal` 返回 null，分工理由与原样 guidance 的含义见 ADR-0016。
 - `goal-driver` 插件只驱动 root agent。它在 root 自身空闲（`WhenIdle`，不等待驻留子代理，与上游一致）时先 `Settle` 自上次以来结束的 turn：被取消的目标轮次暂停其自身 revision（仍为当前、active、armed 时），其他被取消的 turn、error 或 `max_tokens` turn 解除 armed，之后的 create/resume 会抵消。解除只针对读取时的确切 ID/revision；旧结算和失败的旧轮次不能撤销后来的人类授权。随后若目标 active、armed 且未达上限，就以 `Followup` 排入一条 `source.kind = "goal"` 的轮次提示；达到上限时以 `round-limit` 阻塞，排队失败以 `queue-failed` 阻塞，admission 拒绝且无法由新 revision 或撤销解释时以 `prompt-rejected` 阻塞。轮次结果中的非准入错误即使没有 `turn/end` 也解除该轮次 revision 的 armed，避免开场持久化失败后重排；step limit 不影响继续。
 - admission 只接纳当前 active、armed revision 的下一轮，且最近一次撤销性停止之后已有 create/resume；否则丢弃该 turn。人类的 `/goal pause` 会中断正在运行的 turn，模型自己的 pause 让本 turn 正常结束。
 - 轮次与普通 turn 一样服从当前规划模式、approval policy 与等待；审批等待中 driver 只等待该轮次结束。
@@ -361,7 +361,7 @@ credential store 按 provider 保存一个 API key 或 OAuth grant，使用 stri
 
 ## TUI 与投影
 
-`internal/adapter/tui` 是使用 Bubble Tea v2、Lip Gloss v2 与 Bubbles v2 的 alternate-screen 插件。`tea.View` 声明终端模式，输入、viewport、命令与事件投影保留在 adapter；app/core 不依赖 Charm。它从 durable event replay 初始化，再订阅已提交事件，展示 route、streamed text/reasoning、tool call/result、approval、retry、compaction 和 turn outcome。当前计划固定显示在输入区上方，最多占 transcript 剩余行数的一半并保留至少一行 transcript；条目溢出时从第一个未完成项开始显示，标题保留各状态计数。TUI 同时实现本地 approval broker、用户提问 broker 与 auth interaction；secret prompt 使用 password echo。提问逐题显示标题、详情和编号选项，数字列表选择、其他文本作为自由回答、空输入跳过，推荐选项预填，Ctrl+C 取消整批。`/plan`、`/plan off` 和 `/plan TEXT` 调用 `Registry.SetPlanMode`，状态栏在规划模式下显示 `mode=plan`，模式变化与切换提示显示为 `mode>` 行。`/goal` 按上游语法显示、创建、编辑、暂停、恢复或清除根 session 的目标，输出只留在终端；待发送图片不能伴随 `/goal`。状态栏从日志折叠显示 `goal=<阶段> <轮次>/<上限>`，`goal/change`、目标轮次和收尾指令显示为 `goal>` 行。
+`internal/adapter/tui` 是使用 Bubble Tea v2、Lip Gloss v2 与 Bubbles v2 的 alternate-screen 插件。`tea.View` 声明终端模式，输入、viewport、命令与事件投影保留在 adapter；app/core 不依赖 Charm。它从 durable event replay 初始化，再订阅已提交事件，展示 route、streamed text/reasoning、tool call/result、approval、retry、compaction 和 turn outcome。当前计划固定显示在输入区上方，最多占 transcript 剩余行数的一半并保留至少一行 transcript；条目溢出时从第一个未完成项开始显示，标题保留各状态计数。TUI 同时实现本地 approval broker、用户提问 broker 与 auth interaction；secret prompt 使用 password echo。提问逐题显示标题、详情和编号选项，数字列表选择、其他文本作为自由回答、空输入跳过；多选编号后保留标签并进入可留空的补充输入步骤，推荐选项预填，Ctrl+C 取消整批。`/plan`、`/plan off` 和 `/plan TEXT` 调用 `Registry.SetPlanMode`，状态栏在规划模式下显示 `mode=plan`，模式变化与切换提示显示为 `mode>` 行。`/goal` 按上游语法显示、创建、编辑、暂停、恢复或清除根 session 的目标，输出只留在终端；待发送图片不能伴随 `/goal`。状态栏从日志折叠显示 `goal=<阶段> <轮次>/<上限>`，`goal/change`、目标轮次和收尾指令显示为 `goal>` 行。
 
 UI 命令调用 app 用例，不直接修改文件或 provider 内部状态。退出会 interrupt root 活动 turn；Scope cleanup 撤销 broker、停止 event forwarding，取消并等待终端程序与异步命令静止。Run 退出先取消命令 context，关闭命令执行入口，再等待已开始的操作；迟到命令不再调用 app。前端独立选择，当前只有所选 UI 注册 approval 与提问 broker；GUI 的扩展边界见 [ADR-0005](decisions/0005-selectable-frontend-plugins.md)。
 

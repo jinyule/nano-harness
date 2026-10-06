@@ -26,13 +26,28 @@ func TestNewEntry_NormalizesAndCapsDescriptions(t *testing.T) {
 		{"  Use\t\tthis\n\nskill  ", "Use this skill"},
 		{"wide\u3000space\u00a0and\ufeffbom\u2028line\u2009thin", "wide space and bom line thin"},
 		{"next\u0085line", "next\u0085line"},
-		{strings.Repeat("x", MaxDescriptionRunes), strings.Repeat("x", MaxDescriptionRunes)},
-		{strings.Repeat("x", MaxDescriptionRunes+1), strings.Repeat("x", MaxDescriptionRunes-3) + "..."},
-		{strings.Repeat("界", MaxDescriptionRunes+1), strings.Repeat("界", MaxDescriptionRunes-3) + "..."},
+		{strings.Repeat("x", MaxDescriptionUnits), strings.Repeat("x", MaxDescriptionUnits)},
+		{strings.Repeat("x", MaxDescriptionUnits+1), strings.Repeat("x", MaxDescriptionUnits-3) + "..."},
+		{strings.Repeat("界", MaxDescriptionUnits+1), strings.Repeat("界", MaxDescriptionUnits-3) + "..."},
 	} {
 		if got := NewEntry("name", test.raw); got != (Entry{Name: "name", Description: test.want}) {
 			t.Errorf("NewEntry(%q) = %q, want %q", test.raw, got.Description, test.want)
 		}
+	}
+}
+
+func TestNewEntry_UTF16DescriptionLimit(t *testing.T) {
+	for _, test := range []struct{ name, raw, want string }{
+		{"exact", strings.Repeat("😀", 250), strings.Repeat("😀", 250)},
+		{"mixed", strings.Repeat("😀", 200) + strings.Repeat("x", 101), strings.Repeat("😀", 200) + strings.Repeat("x", 97) + "..."},
+		{"whole pair", strings.Repeat("x", 495) + "😀yyyy", strings.Repeat("x", 495) + "😀..."},
+		{"split pair", strings.Repeat("😀", 251), strings.Repeat("😀", 248) + "\ufffd..."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := NewEntry("name", test.raw).Description; got != test.want {
+				t.Fatalf("description=%q want=%q", got, test.want)
+			}
+		})
 	}
 }
 
@@ -142,7 +157,7 @@ func TestCatalogUpdate_LargestCatalogFitsOneRecord(t *testing.T) {
 	entries := make([]Entry, MaxCatalogEntries)
 	for index := range entries {
 		name := strings.Repeat(string(rune('a'+index%26)), MaxNameBytes-3) + "-" + string(rune('a'+index/26)) + "x"
-		entries[index] = NewEntry(name, strings.Repeat("&", MaxDescriptionRunes+10))
+		entries[index] = NewEntry(name, strings.Repeat("&", MaxDescriptionUnits+10))
 	}
 	for _, rendered := range []string{renderCatalog(entries), renderReplacement(entries)} {
 		record := catalogMessage(rendered)

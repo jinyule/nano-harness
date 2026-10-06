@@ -296,6 +296,21 @@ func TestStepContext_KeepsLastCatalogOnIncompleteDiscovery(t *testing.T) {
 	}
 }
 
+func TestStepContext_ExplicitInvocationFailsOnIncompleteDiscovery(t *testing.T) {
+	restoreHooks(t)
+	f := newFixture(t)
+	writeFile(t, filepath.Join(f.projectRoot(), "demo", "SKILL.md"), skillText("demo", "Demo."))
+	failure := errors.New("read failure")
+	readEntries = func(*os.File, int) ([]fs.DirEntry, error) { return nil, failure }
+	for _, tools := range [][]string{{"skill"}, nil} {
+		request := agent.ContextRequest{Tools: tools, Events: gestureEvents("/demo")}
+		messages, err := f.provider.StepContext(t.Context(), request)
+		if !errors.Is(err, failure) || messages != nil {
+			t.Fatalf("explicit invocation silently consumed: messages=%+v error=%v", messages, err)
+		}
+	}
+}
+
 func TestStepContext_InjectsUserInvokedSkills(t *testing.T) {
 	restoreHooks(t)
 	f := newFixture(t)

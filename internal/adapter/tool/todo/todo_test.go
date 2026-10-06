@@ -204,6 +204,30 @@ func tooManyTodos() string {
 	return `{"todos":[` + strings.Join(items, ",") + `]}`
 }
 
+func TestWriteTool_ECMAScriptWhitespaceAndDuplicateQuotes(t *testing.T) {
+	runtime := startTools(t)
+	for _, test := range []struct{ name, arguments, content, failure string }{
+		{"BOM trim", `{"todos":[{"content":"\ufefffix\ufeff","status":"pending"}]}`, "fix", ""},
+		{"NEL preserved", `{"todos":[{"content":"\u0085fix\u0085","status":"pending"}]}`, "\u0085fix\u0085", ""},
+		{"NEL nonblank", `{"todos":[{"content":"\u0085","status":"pending"}]}`, "\u0085", ""},
+		{"BOM blank", `{"todos":[{"content":"\ufeff","status":"pending"}]}`, "", "Error: invalid todo: `content` must be a non-empty string"},
+		{"BOM duplicate", `{"todos":[{"content":"fix","status":"pending"},{"content":"\ufefffix\ufeff","status":"pending"}]}`, "", `Error: invalid todos: duplicate content "fix"`},
+		{"JSON control quote", `{"todos":[{"content":"\u0001","status":"pending"},{"content":"\u0001","status":"pending"}]}`, "", `Error: invalid todos: duplicate content "\u0001"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			journal := &recordingJournal{}
+			result := execute(t, runtime, journal, test.arguments)[0]
+			if test.failure != "" {
+				if !result.IsError || result.Output != test.failure || len(journal.written()) != 0 {
+					t.Fatalf("result=%+v records=%+v", result, journal.written())
+				}
+			} else if result.IsError || len(journal.written()) != 1 || journal.written()[0].Todo.Items[0].Content != test.content {
+				t.Fatalf("result=%+v records=%+v want content=%q", result, journal.written(), test.content)
+			}
+		})
+	}
+}
+
 func TestWriteTool_RequiresOwningSessionAndReportsCommitFailures(t *testing.T) {
 	runtime := startTools(t)
 	valid := `{"todos":[{"content":"a","status":"pending"}]}`

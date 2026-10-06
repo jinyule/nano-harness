@@ -5,11 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	appGoal "github.com/jinyule/nano-harness/internal/app/goal"
 	"github.com/jinyule/nano-harness/internal/core/session"
+	"github.com/jinyule/nano-harness/internal/core/text"
 )
 
 const goalUsage = "Usage: /goal [<objective>|clear|edit <objective>|pause|resume]"
@@ -60,7 +61,7 @@ func runGoalCommand(ctx context.Context, goals GoalService, sessionID, argument 
 }
 
 func applyGoalCommand(ctx context.Context, goals GoalService, sessionID string, current *appGoal.View, argument string) ([]string, bool, error) {
-	input := strings.TrimSpace(argument)
+	input := text.TrimSpace(argument)
 	control := strings.ToLower(input)
 	missing := func(action string) ([]string, bool, error) {
 		return []string{"No goal is currently set; /goal " + action + " requires one. " + goalUsage}, true, nil
@@ -95,8 +96,8 @@ func applyGoalCommand(ctx context.Context, goals GoalService, sessionID string, 
 		}
 	case control == "edit":
 		return []string{"Goal editing requires a replacement objective.", goalUsage}, true, nil
-	case len(input) > 4 && strings.EqualFold(input[:4], "edit") && unicode.IsSpace(rune(input[4])):
-		objective := strings.TrimSpace(input[4:])
+	case len(input) > 4 && strings.EqualFold(input[:4], "edit") && editSeparator(input[4:]):
+		objective := text.TrimSpace(input[4:])
 		switch {
 		case current == nil:
 			return missing("edit")
@@ -118,6 +119,12 @@ func applyGoalCommand(ctx context.Context, goals GoalService, sessionID string, 
 		return nil, false, err
 	}
 	return renderGoal(title, *view), false, nil
+}
+
+// editSeparator decodes the complete UTF-8 rune following edit.
+func editSeparator(value string) bool {
+	char, _ := utf8.DecodeRuneInString(value)
+	return text.IsSpace(char)
 }
 
 // renderGoal shows a goal without its compare-and-set identity.

@@ -31,11 +31,11 @@
 ```
 
 - `turn` 与 `step` 必须缺省；记录可出现在任何位置，因为人类命令可在 turn 进行中提交。字段使用本仓 snake_case，不带上游的 `kind`/`version`，版本由会话格式与 composition 识别（见下文）。
-- 形状规则：操作为 create/edit/pause/resume/complete/block/clear；快照 ID 为 1–128 字节无换行标识；revision ≥ 1；objective 去除首尾空白后非空且不超过 16 KiB；上限为 1 到 2^53−1；`blocked_reason` 恰在 blocked 时出现，code 为 lower-kebab-case（≤ 64 字节），message 去空白非空且不超过 16 KiB；创建时间为正且更新时间不早于它；clear 只有 tombstone 与清除时间。
+- 形状规则：操作为 create/edit/pause/resume/complete/block/clear；快照 ID 为 1–128 字节无换行标识；revision ≥ 1；objective 按 ECMAScript `trim()` 去除首尾空白后非空且不超过 16 KiB；上限为 1 到 2^53−1；`blocked_reason` 恰在 blocked 时出现，code 为 lower-kebab-case（≤ 64 字节），message 按同一空白集去除首尾空白后非空且不超过 16 KiB；创建时间为正且更新时间不早于它；clear 只有 tombstone 与清除时间。工具入口与 durable decoder 的文本、goal ID、clear ID 和轮次来源 ID 统一采用 ECMAScript 空白集（含 U+FEFF，不含 U+0085），不能写入 decoder 会拒绝的归一化文本。
 - 折叠规则与上游一致：create 要求 revision 1、active、零轮次、没有未完成的当前目标且 ID 未用过；其余操作要求同一 ID、revision 加一、保持创建时间与轮次计数、更新时间不倒退；只有 edit 可改 objective 与上限且不得改阶段与阻塞原因；pause 只从 active，resume 从 active/paused/blocked 且轮次未满，complete 从任何未完成阶段，block 只从 active；clear 必须 tombstone 下一 revision 且时间不早于最近更新。
 - 准入轮次是 `source.kind = "goal"` 的 `user/message`，`source` 增加 `goal_id`、`goal_revision`、`goal_round`。三者只在 goal 来源出现且必须齐全，助手消息不得使用；折叠要求它正是当前 active 目标当前 revision 的下一轮且不超过上限。
 - JSONL 的 order validator 对每个事件执行同一折叠；追加时非法事实被拒绝且文件不变，读取时整份日志被拒绝。fork 子代理的种子前缀里的父目标事实同样在原位校验并接受。
-- 一个 session 的目标只从它自己提交的事件折叠（`session.OwnEvents`，与 `subagent/catalog`、规划模式的投影一致）：fork 继承的父目标、轮次和 turn 结局属于父会话，不成为子会话的目标，也不参与子会话的准入、权限与结算。
+- 一个 session 的目标只从它自己提交的事件折叠（`session.OwnEvents`，与 `subagent/catalog`、规划模式的投影一致）：fork 继承的父目标、轮次和 turn 结局属于父会话，不成为子会话的目标，也不参与子会话的准入、权限与结算。父目标描述总体任务，fork 子代理执行委派的局部任务；复制目标会让 child 的目标状态与分工不符，并让 child 的 complete/blocked 看似能结算父任务，实际上又无法更新父日志。本仓因此保留上下文快照而隔离目标所有权。
 
 ### 服务、权限与工具
 
@@ -43,7 +43,7 @@
 
 “直接来自人类的根权限”在执行点判定：`Service.Authority(sessionID, turn, delegated)` 读取调用方 turn 的已提交 `user/message`。若有 `source.kind = "user"` 且调用方不是 delegated，即人类权限；若有当前目标当前 revision 当前轮次的 goal 来源消息，即轮次权限。本仓的 `user` 来源只由前端在人类输入时使用（TUI 提交、steer、`/plan TEXT`、附图），后台通知（`tool-jobs`）、规划提示（`plan-mode`）、skill 目录与注入（`skill-catalog`、`skill-invocation`）、委派任务与 agent 消息（`delegation`、`agent-message`、`subagent-settled`）、目标轮次（`goal`）和收尾指令（`tool-goal`）各有来源，所以它们开启的 turn 不具人类权限；人类在这样的 turn 中 steer 后即具备。这一不变量由守卫测试 `TestHumanSource_OnlyFrontendsAttributeHumanInput`（`internal/app/goal`）执行：它用 `go/parser` 解析 `cmd/` 与 `internal/` 下全部非测试产品源码（不含仓库工具 `internal/tools` 与 `testdata`），找出把 `Kind` 设为 `"user"` 或 `HumanSource` 的复合字面量键与赋值，要求它们只出现在 `internal/adapter/tui` 与 `internal/adapter/media/image`（`/attach`）。新的生产者若借用 `user` 来源，测试失败；新增人类输入前端必须同时修改允许列表并经评审。delegated 判断使用持久化的 delegation（`Invocation.Delegated`）：child 永远以 child 身份恢复，与上游“运行时拥有关系”在本仓等价，这与 [ADR-0014](0014-user-questions-and-plan-mode.md) 的判断相同。
 
-`internal/adapter/tool/goal`（插件 `goal-tools`）注册三个工具，名称、描述与参数 schema 与上游 Base 逐字节一致。全部 exclusive，不需要 approval。`update_goal` 携带上游 `tool:goal` 段落（order 2400，阈值 3）。执行顺序与文本沿用上游：先校验 `goal_id` 非空且去空白、revision 为正安全整数；edit/pause/resume 先要求人类权限；空字符串与 0 视为严格 schema 的占位；paused 目标的 resume 返回 `the model cannot resume a paused goal; the user must resume it`；complete/blocked 先判定权限，再拒绝不属于该动作的参数，自主 blocked 在不足 3 轮时返回 `blocked requires at least 3 consecutive goal rounds; current round is N`；blocked 原因以 code `model-reported` 保存。结果是上游紧凑 JSON，字符串按 `JSON.stringify` 规则引用。get_goal 对 delegated agent 可用，返回其自身 session 的目标；fork 子代理在自己创建目标之前读到 `{"goal":null}`，而子代理不具人类权限，所以实际上总是如此。
+`internal/adapter/tool/goal`（插件 `goal-tools`）注册三个工具，名称、描述与参数 schema 与上游 Base 逐字节一致。全部 exclusive，不需要 approval。`update_goal` 携带上游 `tool:goal` 段落（order 2400，阈值 3）。执行顺序与文本沿用上游：先校验 `goal_id` 非空且去空白、revision 为正安全整数；edit/pause/resume 先要求人类权限；空字符串与 0 视为严格 schema 的占位；paused 目标的 resume 返回 `the model cannot resume a paused goal; the user must resume it`；complete/blocked 先判定权限，再拒绝不属于该动作的参数，自主 blocked 在不足 3 轮时返回 `blocked requires at least 3 consecutive goal rounds; current round is N`；blocked 原因以 code `model-reported` 保存。结果是上游紧凑 JSON，字符串按 `JSON.stringify` 规则引用。错误 code 只在进程内错误对象上保留，tool result 与持久化日志当前只保存错误正文。get_goal 对 delegated agent 可用，返回其自身 session 的目标；fork 子代理在自己创建目标之前读到 `{"goal":null}`，而子代理不具人类权限，所以实际上总是如此。
 
 自主轮次中成功的 complete/blocked 经 `Registry.Notify` 投递收尾指令（上游原文，`source.kind = "tool-goal"`）。上游把它作为本次工具结果之后的延迟上下文；本仓在该工具 step 的 `step/end` 之后作为 `user/message` 追加，turn 因此再走一步回复用户，模型可见内容相同。已在最后一步时，通知按 ADR-0009 留待下一个 turn。投递失败不撤销已提交的变更。
 
@@ -67,18 +67,18 @@ engine 增加按 source kind 注册的 `Admission`（`Engine.RegisterAdmission`�
 
 ### 模型输入变化
 
-- 工具目录新增 `create_goal`、`get_goal`、`update_goal`，system prompt 在工具段落中加入 `tool:goal` 原文，二者随 `request/header` 冻结。
+- 工具目录新增 `create_goal`、`get_goal`、`update_goal`，system prompt 在工具段落中加入 `tool:goal` 原文，二者随 `request/header` 冻结。原样 guidance 中“fork 后 active goal 为 disarmed”描述上游复制目标的行为；在本仓它只表达 fork 不会自动续跑父目标，child 实际没有当前目标，`get_goal` 返回 `{"goal":null}`。恢复本会话时则保留它自己的 active 目标并解除 armed，二者不同。
 - 自动轮次以 `<goal_round>` 用户消息进入 surface，包含 JSON 引用的 objective 与 `Round: N/M`；自主终结后的 `<goal_complete>`/`<goal_blocked>` 收尾指令同样是用户消息。`goal/change` 本身不进入 surface。
 
 ### `/goal`
 
-TUI 的 `/goal` 实现上游语法：空参数显示状态（阶段、阻塞原因、objective、轮次、activation 与可用命令），`clear`/`pause`/`resume`/`edit` 仅在占满输入（edit 后跟空白与文本）时是控制词，其余非空文本创建目标；未完成的目标不能被直接替换，complete 后 `edit` 创建新目标。领域拒绝显示为上游固定文本 `The goal command is not valid for the current state. Run /goal to view available commands.`，意外错误原样显示。命令以 `ActorHost` 经 `app/goal` 用例操作，输出不进入模型请求。状态栏从日志折叠显示 `goal=<阶段> <轮次>/<上限>`。附件暂不支持：附件 turn 与 driver 的第一轮之间没有可证明的顺序，待发送图片时 `/goal` 拒绝并保留图片。
+TUI 的 `/goal` 实现上游语法：空参数显示状态（阶段、阻塞原因、objective、轮次、activation 与可用命令），`clear`/`pause`/`resume`/`edit` 仅在占满输入（edit 后跟 ECMAScript 空白与文本，按完整 UTF-8 rune 解码分隔符）时是控制词，其余非空文本创建目标；未完成的目标不能被直接替换，complete 后 `edit` 创建新目标。领域拒绝显示为上游固定文本 `The goal command is not valid for the current state. Run /goal to view available commands.`，意外错误原样显示。命令以 `ActorHost` 经 `app/goal` 用例操作，输出不进入模型请求。状态栏从日志折叠显示 `goal=<阶段> <轮次>/<上限>`。附件暂不支持：附件 turn 与 driver 的第一轮之间没有可证明的顺序，待发送图片时 `/goal` 拒绝并保留图片。
 
 ### 版本识别、拒绝旧格式与恢复
 
 - session format 保持 v2。`goal/change` 与消息来源的三个字段是加法格式，与 [ADR-0004](0004-provider-neutral-effort.md)、ADR-0014 一致：不含它们的 v2 日志仍可解码；较旧的二进制遇到 `goal/change` 或未知来源字段按未知记录/字段拒绝整份日志。
 - composition ID 使用 `goal-tools-v2` 绑定目标停止语义（见 [ADR-0018](0018-goal-stop-outcomes.md)）。由不含目标工具的组合创建的会话恢复时因 composition mismatch 被拒绝，不迁移，也不静默接受。本仓尚无发布 tag，没有需要迁移的已发布会话。
-- 严格 decoder 拒绝未知字段、未知操作与阶段、缺失负载、带 turn/step 的记录和任何违反折叠的事实；非法行使整份日志被拒绝，文件不被截断或改写，维护者仍可离线检查原始数据。
+- 严格 decoder 拒绝未知字段、未知操作与阶段、缺失负载、带 turn/step 的记录和任何违反折叠的事实；非法行使整份日志被拒绝，文件不被截断或改写，维护者仍可离线检查原始数据。ECMAScript 空白修补保持 format v2 和 composition ID；原先误接受的首尾 BOM 文本与 ID 现在拒绝，含 NEL 的合法文本保持原文，不自动迁移旧记录。
 - `goal/change` 与其他事实保存在同一个只追加、`0600`、写后 `fsync` 的 JSONL 中，受单 record 6 MiB 与单 session 64 MiB 限制，compaction 不删除它，保留期与会话文件相同。resume 修复中断尾部不追加、不改动目标记录；恢复后目标、阶段、revision 与轮次计数不变，自动继续一律 disarmed，需人类 `/goal resume` 或在人类 turn 中由模型 resume。
 
 ## 后果

@@ -19,6 +19,7 @@ type questionState struct {
 	envelope questionEnvelope
 	index    int
 	answers  []question.Answer
+	selected *question.Answer
 }
 
 func (state *questionState) current() question.Question {
@@ -78,11 +79,26 @@ func questionHint(current question.Question) string {
 // presents the next one or returns the completed batch to the broker.
 func (model model) answerQuestion(value string) (tea.Model, tea.Cmd) {
 	state := model.question
-	answer, err := parseAnswer(state.current(), value)
+	var answer question.Answer
+	var err error
+	if state.selected != nil {
+		answer = *state.selected
+		answer.Custom, err = customAnswer(value)
+	} else {
+		answer, err = parseAnswer(state.current(), value)
+	}
 	if err != nil {
 		model.addLine("error> " + err.Error())
 		return model, nil
 	}
+	if state.selected == nil && state.current().MultiSelect && len(answer.Selected) > 0 {
+		state.selected = &answer
+		model.addLine("question> Selected: " + strings.Join(answer.Selected, ", ") + ". Add an answer, or press Enter to keep these selections.")
+		model.input.SetValue("")
+		model.input.Placeholder = "additional answer; empty keeps selections"
+		return model, nil
+	}
+	state.selected = nil
 	state.answers = append(state.answers, answer)
 	model.addLine("answer> " + describeAnswer(answer))
 	if state.index+1 < len(state.envelope.request.Questions) {
@@ -128,11 +144,18 @@ func parseAnswer(current question.Question, value string) (question.Answer, erro
 		}
 		return answer, nil
 	}
+	var err error
+	answer.Custom, err = customAnswer(value)
+	return answer, err
+}
+
+// customAnswer treats numeric supplemental input as text as well.
+func customAnswer(value string) (string, error) {
+	value = strings.TrimSpace(value)
 	if len(value) > question.MaxCustomBytes {
-		return question.Answer{}, fmt.Errorf("answers are limited to %d bytes", question.MaxCustomBytes)
+		return "", fmt.Errorf("answers are limited to %d bytes", question.MaxCustomBytes)
 	}
-	answer.Custom = value
-	return answer, nil
+	return value, nil
 }
 
 // choiceNumbers splits on commas and spaces and reports whether every field

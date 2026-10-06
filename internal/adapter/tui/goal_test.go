@@ -85,6 +85,51 @@ func goalCommandOutput(t *testing.T, current model, input string) (model, string
 	return current, strings.Join(current.lines[before:], "\n")
 }
 
+func TestModelGoalCommand_ECMAScriptEditSeparator(t *testing.T) {
+	for _, test := range []struct {
+		separator string
+		edit      bool
+	}{
+		{"\u2003", true}, {"\ufeff", true}, {"\u00a0", true}, {"\u0085", false},
+	} {
+		t.Run(test.separator, func(t *testing.T) {
+			fixture, current := modelFixture(t)
+			if _, err := fixture.goals.Create(t.Context(), "root", "old", nil, appGoal.ActorHost); err != nil {
+				t.Fatal(err)
+			}
+			_, got := goalCommandOutput(t, current, "/goal edit"+test.separator+"new")
+			view, err := fixture.goals.Get(t.Context(), "root")
+			want := "old"
+			if test.edit {
+				want = "new"
+			}
+			if err != nil || view.Goal.Objective != want || strings.Contains(got, "Goal updated") != test.edit {
+				t.Fatalf("output=%s view=%+v error=%v", got, view, err)
+			}
+		})
+	}
+}
+
+func TestRunGoalCommand_ECMAScriptObjectiveBoundary(t *testing.T) {
+	for _, test := range []struct{ argument, want string }{
+		{"\u0085", "\u0085"},
+		{"\u0085ship\u0085", "\u0085ship\u0085"},
+		{"\ufeffship\ufeff", "ship"},
+	} {
+		t.Run(test.argument, func(t *testing.T) {
+			fixture, _ := modelFixture(t)
+			output, failed, err := runGoalCommand(t.Context(), fixture.goals, "root", test.argument)
+			if err != nil || failed {
+				t.Fatalf("output=%v failed=%t error=%v", output, failed, err)
+			}
+			view, err := fixture.goals.Get(t.Context(), "root")
+			if err != nil || view == nil || view.Goal.Objective != test.want {
+				t.Fatalf("argument=%q output=%v view=%+v error=%v want=%q", test.argument, output, view, err, test.want)
+			}
+		})
+	}
+}
+
 func TestModelGoalCommand_FollowsTheUpstreamGrammar(t *testing.T) {
 	fixture, current := modelFixture(t)
 	steps := []struct{ input, want string }{

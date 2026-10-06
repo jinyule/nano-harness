@@ -107,6 +107,7 @@ func TestModelQuestion_WalksTheBatchAndReturnsAnswers(t *testing.T) {
 	}
 	current.input.SetValue("2, 1")
 	current, _ = update(t, current, tea.KeyPressMsg{Code: tea.KeyEnter})
+	current, _ = update(t, current, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if current.input.Placeholder != "type an answer; empty skips" {
 		t.Fatalf("third placeholder = %q", current.input.Placeholder)
 	}
@@ -131,6 +132,57 @@ func TestModelQuestion_CtrlCCancels(t *testing.T) {
 	current, command := update(t, current, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if command != nil || current.quitting || current.mode != modeNormal || !errors.Is((<-result).err, question.ErrCancelled) {
 		t.Fatalf("cancel = %+v", current)
+	}
+}
+
+func TestModelQuestion_MultiSelectKeepsChoicesForCustomStep(t *testing.T) {
+	for _, custom := range []string{" extra context ", "", "42"} {
+		t.Run(custom, func(t *testing.T) {
+			_, current := modelFixture(t)
+			result := make(chan questionResult, 1)
+			request := question.Request{Questions: []question.Question{{ID: "q", Text: "Which?", MultiSelect: true, Options: []question.Option{{Label: "A"}, {Label: "B"}}}}}
+			current, _ = update(t, current, questionEnvelope{request: request, result: result})
+			current.input.SetValue("2,1")
+			current, _ = update(t, current, tea.KeyPressMsg{Code: tea.KeyEnter})
+			select {
+			case got := <-result:
+				t.Fatalf("selection submitted before custom input: %+v", got)
+			default:
+			}
+			if current.mode != modeQuestion || current.input.Value() != "" || current.input.Placeholder != "additional answer; empty keeps selections" {
+				t.Fatalf("custom step missing: mode=%v input=%q hint=%q", current.mode, current.input.Value(), current.input.Placeholder)
+			}
+			current.input.SetValue(strings.Repeat("x", question.MaxCustomBytes+1))
+			current, _ = update(t, current, tea.KeyPressMsg{Code: tea.KeyEnter})
+			if !strings.Contains(current.lines[len(current.lines)-1], "limited to 16384 bytes") {
+				t.Fatal("oversized custom accepted")
+			}
+			select {
+			case got := <-result:
+				t.Fatalf("invalid custom submitted: %+v", got)
+			default:
+			}
+			current.input.SetValue(custom)
+			current, _ = update(t, current, tea.KeyPressMsg{Code: tea.KeyEnter})
+			got := <-result
+			if current.mode != modeNormal || current.question != nil || got.err != nil || len(got.answers) != 1 || strings.Join(got.answers[0].Selected, ",") != "B,A" || got.answers[0].Custom != strings.TrimSpace(custom) {
+				t.Fatalf("completed=%+v mode=%v", got, current.mode)
+			}
+		})
+	}
+}
+
+func TestModelQuestion_CancelsDuringCustomStep(t *testing.T) {
+	_, current := modelFixture(t)
+	result := make(chan questionResult, 1)
+	request := question.Request{Questions: []question.Question{{ID: "q", Text: "Which?", MultiSelect: true, Options: []question.Option{{Label: "A"}}}}}
+	current, _ = update(t, current, questionEnvelope{request: request, result: result})
+	current.input.SetValue("1")
+	current, _ = update(t, current, tea.KeyPressMsg{Code: tea.KeyEnter})
+	current, _ = update(t, current, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	got := <-result
+	if current.mode != modeNormal || current.question != nil || !errors.Is(got.err, question.ErrCancelled) || got.answers != nil {
+		t.Fatalf("cancellation=%+v mode=%v", got, current.mode)
 	}
 }
 

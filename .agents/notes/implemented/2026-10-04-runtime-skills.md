@@ -16,12 +16,14 @@
 长期决定记录在 [ADR-0012](../../../docs/decisions/0012-runtime-skills.md)；当前事实分别归[架构](../../../docs/architecture.md#运行时-skill)、[安全](../../../docs/security.md#运行时-skill-文件)和[测试](../../../docs/testing.md)文档。本次实施：
 
 - `internal/app/agent/context.go` 新增 `ContextProvider`、`ContextRequest` 和 `Engine.RegisterContext`。`engine.go` 只增加 `contexts` 字段和一次调用，位于主动 compaction 与 WP8 的 `plan.Step` 之后、`step/start` 之前；没有注册者时不读取日志，既有 engine 行为和测试不变。provider 复用 WP3 的 `appendUserMessages` 提交消息。
-- `internal/core/skill` 是纯函数包：名称文法（kebab-case，最多 64 字节）、描述归一化（ECMAScript 空白集，500 字符）、上游初始/替换/空目录模板、`<skill_content>` 模板、从已提交日志推导目录变化（比较最新可见目录的文本与当前条目的两种渲染）以及 `/name` 令牌提取。
+- `internal/core/skill` 是纯函数包：名称文法（kebab-case，最多 64 字节）、描述归一化（ECMAScript 空白集，500 个 UTF-16 单元）、上游初始/替换/空目录模板、`<skill_content>` 模板、从已提交日志推导目录变化（比较最新可见目录的文本与当前条目的两种渲染）以及 `/name` 令牌提取。
 - `internal/adapter/tool/skill`（插件 `skill-tools`）负责发现、frontmatter 解析、`skill` 工具和 step 上下文。根依次为 `<project>/.nano-harness/skills`、`<project>/.agents/skills`、`--skills-dir`、`--agents-skills-dir`；`<project>` 是包含 `.git` 的最近祖先或 workspace root。每个 step 和每次工具调用都重新扫描，不持有 goroutine 或缓存。根内 symlink 与特殊文件不跟随，打开后用 `os.SameFile` 复核；文件 128 KiB、每根 1024 条目、去重后 100 个 skill。`Start` 拒绝已存在但不是目录的用户根，先注册工具再注册上下文。
 - `cmd`：新增 `--skills-dir`（默认 `<用户配置目录>/nano-harness/skills`）和 `--agents-skills-dir`（默认 `<home>/.agents/skills`），二者在 `normalizeConfig` 中转为绝对路径；`skill-tools` 插件在 subagent 工具之后组装；composition ID 加入 `skill-tools-v1`；两份工具目录固定样本加入 `skill`，parity 断言的工具数加一；其他 WP 的 assembled 测试配置也显式指定临时 skill 目录。
 - TUI：来源为 `skill-catalog` 和 `skill-invocation` 的消息分别显示为 `skill> catalog updated` 与 `skill> instructions injected`；以 kebab-case `/name` 开头、但不是 TUI 命令的输入按普通消息发送，`/help` 增加 `/SKILL TEXT`。
 - `scripts/tui-e2e.py` 把两个 skill 目录指向临时目录，避免宿主的 `~/.agents/skills` 进入 PTY 验证。
 - 会话格式不变：目录和注入是普通 `user/message`。新增固定样本 `session-v2-skill.jsonl` 与反例。
+
+空白、Unicode 边界与交互补充的实施证据见[交互与会话状态对齐](2026-10-06-interaction-state-upstream-alignment.md)；本 Note 保留各能力的初始组装、生命周期和持久化决定。
 
 ## Consequences
 
@@ -30,7 +32,7 @@
 代价与风险：
 
 - 每个 step 扫描最多四个目录并读取 instruction 文件；目录变化追加完整列表。
-- 根内 symlink 拒绝、上限和无诊断的跳过比上游严格；工具结果给出的 workspace 外基址只能通过需要 approval 的 `bash` 访问。
+- 根内 symlink 拒绝、上限和无诊断的跳过比上游严格；工具结果给出的 workspace 外基址只能由 root 经 approval 的 `bash` 访问；delegated agent 只能加载正文。
 - 以 kebab-case `/word` 开头的 TUI 命令拼写错误现在会作为消息发给模型，而不是显示 unknown command。
 - 目录比较依赖模板文本，修改模板必须同时提升 `skill-tools` 版本。
 - `engine.go`、`main.go`、`main_test.go`、两份 fixture、三份 docs、`tui-e2e.py` 和 TUI 文件是与其他 WP 共享的冲突热点，改动均为追加。

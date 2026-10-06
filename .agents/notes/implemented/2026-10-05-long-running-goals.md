@@ -38,6 +38,8 @@
 
 停止原因与结算交错的实施证据由[目标停止修复](2026-10-06-goal-stop-outcomes.md)补充；本 Note 仍记录工具、权限、轮次与持久化目标的初始实现。
 
+空白、Unicode 边界与交互补充的实施证据见[交互与会话状态对齐](2026-10-06-interaction-state-upstream-alignment.md)；本 Note 保留各能力的初始组装、生命周期和持久化决定。
+
 ## Consequences
 
 模型看到的工具定义、`tool:goal` 段落、轮次提示、收尾指令、结果 JSON 和错误文本与上游一致；目标事实可从日志重建，恢复后目标保留且 disarmed。轮次是普通 turn，规划模式、approval 与打断不需要专门分支。

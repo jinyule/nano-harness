@@ -3,6 +3,8 @@ package session
 import (
 	"fmt"
 	"strings"
+
+	"github.com/jinyule/nano-harness/internal/core/text"
 )
 
 // GoalSource is the message source kind of an admitted automatic goal round.
@@ -250,7 +252,12 @@ func ValidGoalCode(code string) bool {
 
 // validGoalText reports whether value is trimmed, non-empty, and within the goal text bound.
 func validGoalText(value string) bool {
-	return value != "" && value == strings.TrimSpace(value) && len(value) <= MaxGoalTextBytes
+	return value != "" && value == text.TrimSpace(value) && len(value) <= MaxGoalTextBytes
+}
+
+// validGoalID applies the goal tool's ECMAScript trimming rule to durable references.
+func validGoalID(value string) bool {
+	return value != "" && len(value) <= 128 && value == text.TrimSpace(value) && !strings.ContainsAny(value, "\r\n")
 }
 
 func (record Record) requireGoal() error {
@@ -263,7 +270,7 @@ func (record Record) requireGoal() error {
 		if change.Snapshot != nil || change.RoundsStarted != 0 || change.CreatedAtUnixMS != 0 || change.UpdatedAtUnixMS != 0 || change.Cleared == nil || change.ClearedAtUnixMS <= 0 {
 			return invalid("goal clear fields are invalid")
 		}
-		if validateIdentifier("goal ID", change.Cleared.ID, 128) != nil || change.Cleared.Revision == 0 {
+		if !validGoalID(change.Cleared.ID) || change.Cleared.Revision == 0 {
 			return invalid("goal clear tombstone is invalid")
 		}
 		return nil
@@ -279,7 +286,7 @@ func requireGoalSnapshot(change GoalChange) error {
 		return invalid("goal snapshot change fields are invalid")
 	}
 	snapshot := change.Snapshot
-	if validateIdentifier("goal ID", snapshot.ID, 128) != nil || snapshot.Revision == 0 || !validGoalText(snapshot.Objective) || snapshot.MaxRounds == 0 || snapshot.MaxRounds > MaxGoalRounds {
+	if !validGoalID(snapshot.ID) || snapshot.Revision == 0 || !validGoalText(snapshot.Objective) || snapshot.MaxRounds == 0 || snapshot.MaxRounds > MaxGoalRounds {
 		return invalid("goal snapshot fields are invalid")
 	}
 	switch snapshot.Phase {
@@ -305,7 +312,7 @@ func validateGoalSource(source MessageSource, user bool) error {
 		}
 		return nil
 	}
-	if !user || validateIdentifier("goal ID", source.GoalID, 128) != nil || source.GoalRevision == 0 || source.GoalRound == 0 || source.GoalRound > MaxGoalRounds {
+	if !user || !validGoalID(source.GoalID) || source.GoalRevision == 0 || source.GoalRound == 0 || source.GoalRound > MaxGoalRounds {
 		return invalid("goal round source is invalid")
 	}
 	return nil

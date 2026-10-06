@@ -6,6 +6,35 @@ import (
 	"testing"
 )
 
+func TestGoalChange_ECMAScriptDurableTextAndIDs(t *testing.T) {
+	for _, value := range []string{"\u0085", "\u0085x\u0085", "\ufeff", "\ufeffx", "x\ufeff"} {
+		for _, field := range []string{"objective", "reason", "id", "cleared id", "source id"} {
+			t.Run(field+value, func(t *testing.T) {
+				record := goalChange(GoalOpCreate, &GoalSnapshot{ID: "g", Revision: 1, Objective: "ship", Phase: GoalActive, MaxRounds: 3}, 0, 1, 1)
+				switch field {
+				case "objective":
+					record.Goal.Snapshot.Objective = value
+				case "reason":
+					record.Goal.Operation = GoalOpBlock
+					record.Goal.Snapshot.Phase = GoalBlocked
+					record.Goal.Snapshot.BlockedReason = &GoalBlockReason{Code: "model-reported", Message: value}
+				case "id":
+					record.Goal.Snapshot.ID = value
+				case "cleared id":
+					record = Record{Type: RecordGoalChange, Goal: &GoalChange{Operation: GoalOpClear, Cleared: &GoalRef{ID: value, Revision: 2}, ClearedAtUnixMS: 1}}
+				case "source id":
+					record = goalRound(value, 1, 1)
+				}
+				err := record.Validate()
+				valid := strings.Contains(value, "\u0085")
+				if (err == nil) != valid {
+					t.Errorf("value=%q error=%v want valid=%t", value, err, valid)
+				}
+			})
+		}
+	}
+}
+
 func goalSnapshot(revision uint64, phase GoalPhase) *GoalSnapshot {
 	snapshot := &GoalSnapshot{ID: "goal-1", Revision: revision, Objective: "ship it", Phase: phase, MaxRounds: 3}
 	if phase == GoalBlocked {

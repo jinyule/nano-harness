@@ -2,9 +2,9 @@ package goal
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/jinyule/nano-harness/internal/core/session"
+	"github.com/jinyule/nano-harness/internal/core/text"
 )
 
 const roundInstructions = "Continue working toward the objective in this same session. Treat the current workspace, tool results, and durable session state as authoritative; inspect them instead of assuming earlier narration is still current. Make concrete progress and verify the result. Before claiming completion, gather evidence that the whole objective is achieved, read the current goal, and mark it complete. If work remains, leave the goal active for the next round. Follow the configured goal-tool policy before reporting a blocker.\n"
@@ -55,36 +55,6 @@ func WrapUpMessage(objective, blockedReason string) session.Message {
 	return session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: WrapUpSource}, Content: []session.ContentBlock{{Type: session.ContentText, Text: text}}}
 }
 
-// Quote renders value as JavaScript's JSON.stringify does: only quotes,
-// backslashes, and control characters are escaped, so model-visible text
-// matches the reference byte for byte. Invalid UTF-8 becomes U+FFFD.
-func Quote(value string) string {
-	var output strings.Builder
-	output.WriteByte('"')
-	for _, char := range value {
-		switch char {
-		case '"':
-			output.WriteString(`\"`)
-		case '\\':
-			output.WriteString(`\\`)
-		case '\b':
-			output.WriteString(`\b`)
-		case '\f':
-			output.WriteString(`\f`)
-		case '\n':
-			output.WriteString(`\n`)
-		case '\r':
-			output.WriteString(`\r`)
-		case '\t':
-			output.WriteString(`\t`)
-		default:
-			if char < 0x20 {
-				fmt.Fprintf(&output, `\u%04x`, char)
-			} else {
-				output.WriteRune(char)
-			}
-		}
-	}
-	output.WriteByte('"')
-	return output.String()
-}
+// Quote renders value as JavaScript's JSON.stringify does; invalid UTF-8
+// becomes U+FFFD.
+func Quote(value string) string { return text.Quote(value) }

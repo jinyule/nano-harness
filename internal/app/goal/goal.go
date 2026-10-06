@@ -26,6 +26,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
+	"github.com/jinyule/nano-harness/internal/core/text"
 )
 
 const (
@@ -385,7 +386,7 @@ func (service *Service) Resume(ctx context.Context, sessionID string, ref sessio
 
 // Block stops an active goal with a policy code and explanation and disarms it.
 func (service *Service) Block(ctx context.Context, sessionID string, ref session.GoalRef, reason session.GoalBlockReason, actor Actor) (*View, error) {
-	reason.Message = strings.TrimSpace(reason.Message)
+	reason.Message = text.TrimSpace(reason.Message)
 	return service.mutate(ctx, sessionID, actor, func(state session.GoalState, _ bool) (session.GoalChange, bool, error) {
 		current, err := expectCurrent(state, ref)
 		if err != nil {
@@ -606,7 +607,7 @@ func RoundCap(value float64) (uint64, error) {
 }
 
 func checkObjective(objective string) (string, error) {
-	objective = strings.TrimSpace(objective)
+	objective = text.TrimSpace(objective)
 	if objective == "" {
 		return "", reject(CodeInvalidObjective, "goal objective must be a non-empty string")
 	}

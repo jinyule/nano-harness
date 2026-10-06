@@ -76,6 +76,35 @@ func TestValidateTodoItems_ReturnsModelVisibleMessages(t *testing.T) {
 	}
 }
 
+func TestTodoWrite_ECMAScriptTrimmedDurableContent(t *testing.T) {
+	for _, test := range []struct {
+		content string
+		valid   bool
+	}{
+		{"\u0085", true}, {"\u0085fix\u0085", true}, {"\ufeff", false}, {"\ufefffix", false}, {"fix\ufeff", false},
+	} {
+		err := todoRecord([]TodoItem{{Content: test.content, Status: TodoPending}}).Validate()
+		if (err == nil) != test.valid {
+			t.Errorf("content=%q error=%v want valid=%t", test.content, err, test.valid)
+		}
+	}
+}
+
+func TestValidateTodoItems_JSONStringifyDuplicateContent(t *testing.T) {
+	for _, test := range []struct{ content, quoted string }{
+		{"\x01", `"\u0001"`}, {"\b\f\n\r\t", `"\b\f\n\r\t"`},
+		{"a\"\\<>&\u2028\u2029😀", "\"a\\\"\\\\<>&\u2028\u2029😀\""},
+	} {
+		// Surround whitespace controls with text so the duplicate is a trimmed item.
+		content := "x" + test.content + "x"
+		quoted := `"x` + test.quoted[1:len(test.quoted)-1] + `x"`
+		err := ValidateTodoItems([]TodoItem{{Content: content, Status: TodoPending}, {Content: content, Status: TodoPending}})
+		if err == nil || err.Error() != "invalid todos: duplicate content "+quoted {
+			t.Errorf("content=%q error=%v want=%s", content, err, quoted)
+		}
+	}
+}
+
 func TestStandingTodos_FoldsLatestWriteUntilNextTurn(t *testing.T) {
 	first := []TodoItem{{Content: "plan", Status: TodoInProgress}}
 	second := []TodoItem{{Content: "plan", Status: TodoCompleted}, {Content: "build", Status: TodoInProgress}}

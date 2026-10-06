@@ -117,7 +117,7 @@ skill 正文是交给模型的指令。项目根 `<project>/.nano-harness/skills
 - 单个文件最多 128 KiB，必须是不含 NUL 的有效 UTF-8；每个根最多 1024 个条目；去重后最多 100 个 skill。
 - 根不存在视为空。配置的用户根已存在但不是目录时启动失败。运行中根不可读、条目或 skill 数超限、文件 I/O 失败都使本次发现不完整：不更新模型已看到的目录，`skill` 工具返回错误。frontmatter 或文本无效的单个 skill 被跳过。
 
-`skill` 不需要 approval，subagent（包括 `never` 策略）也能加载 skill，但只能得到满足上述规则的 instruction 文件。工具结果给出 skill 的基址目录，不扩大 workspace 文件工具的路径约束：目录在 workspace 外时，模型只能通过受 approval 约束的 `bash` 访问其中的资源。加载或注入的正文进入会话日志，transcript 因此可能包含 skill 内容。
+`skill` 不需要 approval，subagent（包括 `never` 策略）也能加载 skill，但只能得到满足上述规则的 instruction 文件。工具结果给出 skill 的基址目录，不扩大 workspace 文件工具的路径约束：目录在 workspace 外时，root 只能通过受 approval 约束的 `bash` 访问其中的资源；delegated agent 固定为 `never`，没有 bash 访问路径，只能加载正文，不能读取 workspace 外的 skill 资源。加载或注入的正文进入会话日志，transcript 因此可能包含 skill 内容。
 
 ## Spill 文件
 
@@ -161,8 +161,8 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 
 - 目标操作的权限在工具执行点从调用方 turn 的已提交消息判定，不信任模型参数：create、edit、pause、resume 需要该 turn 中 `source.kind = "user"` 的消息，且调用方不是 delegated agent；complete 与 blocked 另接受当前目标 revision 的当前轮次，blocked 还需至少 3 个准入轮次。`user` 来源只由前端在人类输入时使用，通知、规划提示、skill 注入、委派任务与 agent 消息、目标轮次和收尾指令各有自己的来源，因此不能继承人类权限。守卫测试 `TestHumanSource_OnlyFrontendsAttributeHumanInput` 解析全部产品源码，只允许 `internal/adapter/tui` 构造 `user` 来源，其他位置出现即失败。模型不能 resume 一个 paused 目标。
 - 目标与自动轮次不是授权：它们不改变 approval policy、sandbox、工具 allowlist 或规划模式，轮次中的写类工具同样在执行点请求一次性 approval，`never` 仍然拒绝。轮次上限只限制轮次数，不计量 token、费用或时间。
-- 是否自动继续只在进程内。resume、fork 或进程重启后目标一律 disarmed，driver 不会在无人授权时恢复工作；被取消、失败或输出截断的 turn 会解除继续；轮次开场持久化失败即使没有结束记录也解除该 revision。结算按确切 ID/revision 解除，旧结果不能撤销后来的人类授权。人类的 pause 立即中断正在运行的 turn。
-- objective 与阻塞说明是不可信文本，限制为去除首尾空白后非空且不超过 16 KiB；进入轮次提示时按 JSON 字符串引用，不能闭合 `<goal_round>` 标签。进程内持有 session 写权限的组件仍可伪造 `goal/change`；严格折叠只检测畸形或不一致的事实并拒绝写入或恢复，不是插件隔离。规则见 [ADR-0016](decisions/0016-long-running-goals.md)。
+- 是否自动继续只在进程内。resume 或进程重启后本会话目标一律 disarmed，fork child 没有继承父目标；driver 不会在无人授权时恢复工作；被取消、失败或输出截断的 turn 会解除继续；轮次开场持久化失败即使没有结束记录也解除该 revision。结算按确切 ID/revision 解除，旧结果不能撤销后来的人类授权。人类的 pause 立即中断正在运行的 turn。
+- objective 与阻塞说明是不可信文本，按 ECMAScript 空白集（含 U+FEFF、不含 U+0085）去除首尾空白后非空且不超过 16 KiB，工具与 durable decoder 同用该规则；进入轮次提示时按 JSON 字符串引用，不能闭合 `<goal_round>` 标签。进程内持有 session 写权限的组件仍可伪造 `goal/change`；严格折叠只检测畸形或不一致的事实并拒绝写入或恢复，不是插件隔离。规则见 [ADR-0016](decisions/0016-long-running-goals.md)。
 
 ## Session 与恢复
 

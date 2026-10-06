@@ -5,11 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
+	"github.com/jinyule/nano-harness/internal/core/text"
 )
 
 // ErrInvalidConfig identifies a todo tool provider without its tool runtime.
@@ -77,7 +77,7 @@ func write(ctx context.Context, invocation appTool.Invocation, arguments writeAr
 	items := make([]session.TodoItem, len(arguments.Todos))
 	counts := map[session.TodoStatus]int{}
 	for index, todo := range arguments.Todos {
-		items[index] = session.TodoItem{Content: strings.TrimSpace(todo.Content), Status: todo.Status}
+		items[index] = session.TodoItem{Content: text.TrimSpace(todo.Content), Status: todo.Status}
 		counts[todo.Status]++
 	}
 	if err := session.ValidateTodoItems(items); err != nil {

@@ -112,7 +112,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
                     ("bash", {"description": "Start the background proof job", "run_in_background": True,
                               "command": "while [ ! -e notify ]; do sleep 0.05; done; printf JOB_PROOF"}),
                     ("ask_user_question", {"questions": [
-                        {"id": "mode", "question": "Which mode?", "options": [{"label": "Fast (Recommended)"}, {"label": "Thorough"}]},
+                        {"id": "mode", "question": "Which mode?", "multi_select": True, "options": [{"label": "Fast (Recommended)"}, {"label": "Thorough"}]},
                         {"id": "note", "question": "Any note?"},
                     ]}),
                 ]
@@ -277,7 +277,9 @@ def verify(binary):
                     terminal.expect("Approval required:")
                     terminal.send("y\r")
                 terminal.expect("question> Which mode? (1/2)")
-                terminal.send("\r")
+                terminal.send(",2\r")
+                terminal.expect("question> Selected: Fast (Recommended), Thorough.")
+                terminal.send("PTY_CUSTOM\r")
                 terminal.expect("question> Any note? (2/2)")
                 terminal.send("PTY_ANSWER\r")
                 terminal.expect("WRAP_END")
@@ -349,7 +351,7 @@ def verify(binary):
             catalog = [entry["catalog"] for entry in root_records if entry["type"] == "subagent/catalog"]
             assert [(entry["label"], entry["mode"]) for entry in catalog] == [("reader", "one-shot"), ("reviewer", "one-shot")], catalog
             assert results[13]["output"] == "started background job bash-2", results[13]
-            assert results[14]["output"] == ('{"answers":[{"id":"mode","selected":["Fast (Recommended)"]},'
+            assert results[14]["output"] == ('{"answers":[{"id":"mode","selected":["Fast (Recommended)","Thorough"],"custom":"PTY_CUSTOM"},'
                                              '{"id":"note","selected":[],"custom":"PTY_ANSWER"}]}'), results[14]
             assert results[15]["output"] == "JOB_PROOF\n[status: completed, exit code: 0]", results[15]
             assert results[16]["output"].startswith("Plan approved"), results[16]

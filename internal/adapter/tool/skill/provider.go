@@ -98,8 +98,9 @@ func (provider *Provider) Start(_ context.Context, scope *plugin.Scope) error {
 // visible to this step differ from the newest visible catalog, followed by
 // the body of every user-invocable skill that new direct user input names
 // with `/name`. The catalog lists nothing when the skill tool is not visible.
-// An incomplete discovery contributes nothing and keeps the last catalog;
-// cancellation and failures to load a named skill end the turn.
+// An incomplete discovery keeps the last catalog; when direct user input
+// names a skill it fails explicitly so the invocation is not consumed.
+// Cancellation and failures to load a named skill end the turn.
 func (provider *Provider) StepContext(ctx context.Context, request agent.ContextRequest) ([]session.Message, error) {
 	visible := slices.Contains(request.Tools, toolName)
 	names := coreskill.InvokedNames(request.Events)
@@ -110,6 +111,9 @@ func (provider *Provider) StepContext(ctx context.Context, request agent.Context
 			return nil, ctxErr
 		}
 		if err != nil {
+			if len(names) > 0 {
+				return nil, fmt.Errorf("resolve explicit skill invocation: %w", err)
+			}
 			return nil, nil
 		}
 		skills = found

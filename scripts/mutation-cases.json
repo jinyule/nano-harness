@@ -274,10 +274,10 @@
   },
   {
     "id": "ecmascript-bom-blank",
-    "file": "internal/app/tool/blank.go",
+    "file": "internal/core/text/space.go",
     "before": "'\\u00a0', '\\ufeff', '\\n'",
     "after": "'\\u00a0', '\\n'",
-    "test": "^TestIsBlank_ECMAScriptWhiteSpaceAndLineTerminators$"
+    "test": "^TestTrimSpace_ECMAScriptWhiteSpaceAndLineTerminators$"
   },
   {
     "id": "search-stderr-budget",
@@ -474,5 +474,33 @@
     "before": "const MaxSubagentLabelBytes = 128 << 10",
     "after": "const MaxSubagentLabelBytes = MaxArgumentsBytes",
     "test": "^TestRecordValidateRejectsEveryInvalidShape$"
+  },
+  {
+    "id": "todo-ecmascript-durable-trim",
+    "file": "internal/core/session/todo.go",
+    "before": "item.Content != text.TrimSpace(item.Content)",
+    "after": "false && item.Content != text.TrimSpace(item.Content)",
+    "test": "^TestTodoWrite_ECMAScriptTrimmedDurableContent$"
+  },
+  {
+    "id": "goal-ecmascript-durable-text",
+    "file": "internal/core/session/goal.go",
+    "before": "value == text.TrimSpace(value) && len(value) <= MaxGoalTextBytes",
+    "after": "value == text.TrimSpace(strings.TrimSpace(value)) && len(value) <= MaxGoalTextBytes",
+    "test": "^TestGoalChange_ECMAScriptDurableTextAndIDs$"
+  },
+  {
+    "id": "skill-explicit-incomplete-discovery",
+    "file": "internal/adapter/tool/skill/provider.go",
+    "before": "if len(names) > 0 {",
+    "after": "if false && len(names) > 0 {",
+    "test": "^TestStepContext_ExplicitInvocationFailsOnIncompleteDiscovery$"
+  },
+  {
+    "id": "question-multiselect-custom-step",
+    "file": "internal/adapter/tui/question.go",
+    "before": "state.selected == nil && state.current().MultiSelect && len(answer.Selected) > 0",
+    "after": "false && state.selected == nil && state.current().MultiSelect && len(answer.Selected) > 0",
+    "test": "^TestModelQuestion_MultiSelectKeepsChoicesForCustomStep$"
   }
 ]

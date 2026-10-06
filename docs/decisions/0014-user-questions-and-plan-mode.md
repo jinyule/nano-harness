@@ -39,7 +39,7 @@ delegated 判断使用持久化的 delegation（`Invocation.Delegated`）。本�
 
 问题与答案不新增会话记录：问题是已提交的 `tool/call` 参数，答案、取消或不可用是唯一的 `tool/result`。等待期间进程退出时，resume 按既有规则补写 `Error: interrupted before a result was committed`；不提供迟到回答。
 
-TUI 是唯一 broker，与 approval 共用同一交互锁逐题提问：输入全为数字列表时按选项编号选择（单选只能一个），其他非空文本作为自由回答，空输入跳过；带 `(Recommended)` 的第一个选项预先填入输入框，用户可见并可清除；`Detail` 逐行显示在问题下方；Ctrl+C 取消整批；终端停止或界面消失时不可用。
+TUI 是唯一 broker，与 approval 共用同一交互锁逐题提问：输入全为数字列表时按选项编号选择（单选只能一个），其他非空文本作为自由回答，空输入跳过；多选题选定编号后保留全部标签，进入补充输入步骤，下一次 Enter 提交；补充为空时仅保留标签，数字补充也按自由文本处理，超限输入可重新填写，Ctrl+C 在补充阶段同样取消整批；带 `(Recommended)` 的第一个选项预先填入输入框，用户可见并可清除；`Detail` 逐行显示在问题下方；Ctrl+C 取消整批；终端停止或界面消失时不可用。
 
 ### 规划模式状态与记录
 
@@ -56,7 +56,7 @@ TUI 是唯一 broker，与 approval 共用同一交互锁逐题提问：输入�
 读写方式：
 
 - `Registry.SetPlanMode(ctx, sessionID, active) (plan.Change, error)` 是用户选择入口，只接受 live root agent。它在 agent worker 的状态锁内调用 `Service.Select`；worker 在追加 `turn/start` 前于同一把锁内标记忙碌，因此立即提交永远不会与 turn 开始交错。没有打开的 turn 时立即追加 `turn:0` 记录（`Committed`）；turn 进行中保留到下一个 step 边界（`Queued`）；撤回尚未生效的相反选择返回 `Cancelled`，重复选择返回 `Unchanged`。追加失败返回错误，状态不变。
-- engine 在每个 step 的主动 compaction 之后、`step/start` 之前调用 `Service.Step(ctx, journal, turn)`：提交待生效选择，在需要时追加用户切换提示，并返回本 step 请求使用的规划段落。任一追加失败使 turn 以 error 结束，选择保留到后续边界重试。
+- engine 在每个 step 的主动 compaction 之后、`step/start` 之前调用 `Service.Step(ctx, journal, turn)`：提交待生效选择，在需要时追加用户切换提示，并返回本 step 请求使用的规划段落。任一追加失败使 turn 以 error 结束，选择保留到后续边界重试。上游仅警告并继续；本仓主动停止，保证模型状态只能来自已提交事实。
 - `Service.Active(sessionID)` 报告最近一次边界或提交后的模式，供本 step 内的工具使用；`Service.Exit(ctx, sessionID)` 在该会话的状态锁内检查 context；已取消时用 `%w` 保留取消原因且不改变待生效选择，否则记录一次获批退出。接受退出选择之后的取消不撤销已经接受的选择。
 - 服务按会话加锁：每个会话的选择、边界和退出（包括其中的日志读取与 `fsync` 追加）由该会话自己的锁串行化，服务锁只保护生命周期和会话表，因此并发子代理的边界互不等待。锁顺序为 agent worker 状态锁 → 会话锁。会话表项在第一次选择或边界时创建，保留到服务停止，每项只有一把锁和几个布尔值；不在运行中删除表项，避免持锁调用方与新表项各自持有不同的锁。
 
@@ -72,7 +72,7 @@ TUI 是唯一 broker，与 approval 共用同一交互锁逐题提问：输入�
 
 ### exit_plan_mode
 
-`internal/adapter/tool/plan`（插件 `plan-tools`）的定义与上游 Base 逐字节一致。执行依次检查：会话在本 step 处于规划模式，否则 `exit_plan_mode is only available in plan mode`；去除首尾空白后以单个 `#`、空白和可见文本开头，否则 `exit_plan_mode requires a non-empty markdown plan starting with a # heading`。随后通过提问接缝发出上游同款审查问题（id `plan-review`，标题 `Plan review`，`Detail` 为计划原文，选项 `Approve` 与 `Keep planning`）。
+`internal/adapter/tool/plan`（插件 `plan-tools`）的定义与上游 Base 逐字节一致。执行依次检查：会话在本 step 处于规划模式，否则 `exit_plan_mode is only available in plan mode`；按 ECMAScript `trim()` 去除首尾空白后满足 `/^#\s+\S/`，其中 U+FEFF 属于空白、U+0085 不属于空白，否则 `exit_plan_mode requires a non-empty markdown plan starting with a # heading`。随后通过提问接缝发出上游同款审查问题（id `plan-review`，标题 `Plan review`，`Detail` 为计划原文，选项 `Approve` 与 `Keep planning`）。
 
 - 恰好选择 `Approve` 且没有自由回答，并且退出选择检查时 context 仍有效：记录获批退出，返回 `Plan approved — plan mode exited; carry out the plan starting with your next step.`；本批次剩余调用仍在规划模式下执行，下一个边界追加 `plan/mode {active:false}`，不追加提示。
 - 其他答案（`Keep planning`、跳过或反馈）：返回错误结果 `The user chose to keep planning; revise the plan and present it again.`，有反馈时为 `The user chose to keep planning; their feedback: <text>`，模式不变。
