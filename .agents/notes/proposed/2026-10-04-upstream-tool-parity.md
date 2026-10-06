@@ -74,7 +74,7 @@
 
 ### 整体审查与修复
 
-在 `05e4012` 上由三位只读审查者分别审查工具/shell/jobs/spill、agent/session 层、provider/composition/文档。发现的问题由原工作包负责人在独立分支修复，修复先写能稳定失败的永久测试。
+在 `05e4012` 上由三位只读审查者分别审查工具/shell/jobs/spill、agent/session 层、provider/composition/文档。随后由 Codex（`gpt-6.1-sol`，`xhigh`）在 `25a304d` 上做独立整体审查，补充发现 3 个 Blocker 与 3 条 Suggestion（下表标注“Codex 审查”）。发现的问题由原工作包负责人在独立分支修复，修复先写能稳定失败的永久测试。
 
 | 问题 | 级别 | 负责 | 状态 |
 |---|---|---|---|
@@ -89,6 +89,12 @@
 | spill 清理顺序、`write` 大文件校验、spill root 位置、长工具名 | Suggestion | WP2 | 已合入 `ec3c142` |
 | 会话被内联图片写满 | Suggestion | WP9 | 已合入 `fe565ad`，后续 WP11 |
 | `TestComposition_SubagentsEndToEnd`、web 关闭测试偶发失败 | 测试缺陷 | WP7、WP5 | 已合入 `d9ad07b`、`87316d1` |
+| spill 会话目录可被预置 symlink 引出存储分区（Codex 审查） | Blocker | Codex-B | 修复中 |
+| 目标轮次开场持久化失败后 driver 无限重排同一轮（Codex 审查） | Blocker | Codex-A | 修复中 |
+| 输出 token 上限截断被记为正常完成，目标继续自动推进（Codex 审查；上游在 max-tokens 时 disarm） | Blocker | Codex-A | 修复中 |
+| 目标结算无 revision 条件，可能撤销后来的人类授权（Codex 审查） | Suggestion | Codex-A | 修复中 |
+| 提问 context 已取消时有效答案仍通过，可能安排退出规划模式（Codex 审查） | Suggestion | Codex-B | 修复中 |
+| `todo/write` 未校验所引用调用是否为 `todo_write`（Codex 审查） | Suggestion | Codex-B | 修复中 |
 | mutation 计数、README、ADR 互相引用等文档不一致 | 文档 | 协调者 | 待全部修复合入后统一处理 |
 
 ### 后续项（不在本次范围）
