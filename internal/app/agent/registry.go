@@ -190,6 +190,9 @@ func (registry *Registry) Create(ctx context.Context, request CreateRequest) (*A
 		label: request.Label, mode: request.Mode, persona: request.Persona,
 		tools: slices.Clone(request.Tools), depth: request.Depth, delegated: request.ParentID != "",
 		turns: make(chan turnRequest, 32), steers: make(chan session.Message, 32), done: make(chan struct{}), wake: make(chan struct{}, 1),
+		// Notices this session still owes wait for its next turn, as
+		// upstream's durable inbox does; resuming opens no turn for them.
+		notices: session.PendingNotices(session.OwnEvents(events)),
 	}
 	agentScope := newAgentScope()
 	if err := agent.start(registry.ctx, agentScope); err != nil {
@@ -248,6 +251,16 @@ func (registry *Registry) Notify(sessionID string, message session.Message) erro
 		return err
 	}
 	return current.Notify(message)
+}
+
+// QueueNotice durably delivers a notice to the live agent of sessionID; see
+// Agent.QueueNotice.
+func (registry *Registry) QueueNotice(ctx context.Context, sessionID string, message session.Message) error {
+	current, err := registry.Find(sessionID)
+	if err != nil {
+		return err
+	}
+	return current.QueueNotice(ctx, message)
 }
 
 // Statuses returns lexical live snapshots.

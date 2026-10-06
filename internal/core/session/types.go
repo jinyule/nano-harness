@@ -75,6 +75,9 @@ const (
 	RecordPlanMode RecordType = "plan/mode"
 	// RecordGoalChange commits one goal mutation or clear tombstone.
 	RecordGoalChange RecordType = "goal/change"
+	// RecordNoticeQueued commits a notice owed to this session before it is
+	// delivered; a user/message carrying the same notice ID delivers it.
+	RecordNoticeQueued RecordType = "notice/queued"
 	// RecordStepEnd closes an active step after all calls and approvals settle.
 	RecordStepEnd RecordType = "step/end"
 	// RecordTurnEnd closes an active turn with a stable outcome.
@@ -148,6 +151,8 @@ type MessageSource struct {
 	GoalID       string `json:"goal_id,omitempty"`
 	GoalRevision uint64 `json:"goal_revision,omitempty"`
 	GoalRound    uint64 `json:"goal_round,omitempty"`
+	// NoticeID links a queued notice and the user/message that delivers it.
+	NoticeID string `json:"notice_id,omitempty"`
 }
 
 // Message is one replayable user or assistant message.

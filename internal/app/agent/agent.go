@@ -48,6 +48,8 @@ type Agent struct {
 	// open a turn for them because no turn would otherwise deliver them.
 	notices []session.Message
 	woken   bool
+	// noticeMu orders durable notices so each commits a unique ID.
+	noticeMu sync.Mutex
 }
 
 func (agent *Agent) start(ctx context.Context, scope *plugin.Scope) error {
@@ -157,17 +159,18 @@ func (agent *Agent) claimWake() (session.Message, bool) {
 	return notice, true
 }
 
-// Notify delivers a model-facing notice, such as a background job
-// completion. A busy agent appends it as a user message at the next step
-// boundary of its active turn, which then cannot close before answering
-// it; the last allowed step takes none, so a new turn answers it. An idle
-// agent opens a new turn for it. A cancelled turn takes no notices; those
-// queued before cancellation wait for the next turn. A notice accepted
-// after cancellation wakes that turn as soon as the cancelled turn exits.
-// Pending notices are in memory and are lost when the agent stops. A
-// one-shot agent runs exactly one turn, so it accepts notices only while
-// that turn runs and never opens another for them; notices that arrive too
-// late for it are refused or discarded.
+// Notify delivers a model-facing notice, such as a subagent message. A busy
+// agent appends it as a user message at the next step boundary of its
+// active turn, which then cannot close before answering it; the last
+// allowed step takes none, so a new turn answers it. An idle agent opens a
+// new turn for it. A cancelled turn takes no notices; those queued before
+// cancellation wait for the next turn. A notice accepted after cancellation
+// wakes that turn as soon as the cancelled turn exits. Notices queued with
+// Notify are in memory and are lost when the agent stops; QueueNotice
+// persists background job completions before queueing them. A one-shot
+// agent runs exactly one turn, so it accepts notices only while that turn
+// runs and never opens another for them; notices that arrive too late for
+// it are refused or discarded.
 func (agent *Agent) Notify(message session.Message) error {
 	return agent.NotifyContext(context.Background(), message)
 }
@@ -186,10 +189,59 @@ func (agent *Agent) NotifyContext(ctx context.Context, message session.Message) 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	return agent.enqueueLocked(cloneMessage(message))
+}
+
+// QueueNotice delivers a notice durably, such as a background job
+// completion. It first commits the notice as a notice/queued fact carrying
+// a new notice ID, then queues it like Notify; its delivery is a
+// user/message with the same ID. A notice still owed when the agent stops
+// is queued again when the session resumes, without opening a turn.
+func (agent *Agent) QueueNotice(ctx context.Context, message session.Message) error {
+	if !validUserMessage(message) {
+		return ErrInvalidConfig
+	}
+	agent.noticeMu.Lock()
+	defer agent.noticeMu.Unlock()
+	agent.mu.Lock()
+	err := agent.refusalLocked()
+	agent.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	events, err := agent.journal.Events(ctx)
+	if err != nil {
+		return err
+	}
+	queued := cloneMessage(message)
+	queued.Source.NoticeID = session.NoticeID(events)
+	if _, err := agent.journal.Append(ctx, session.Record{Type: session.RecordNoticeQueued, Message: &queued}); err != nil {
+		return err
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	return agent.enqueueLocked(queued)
+}
+
+// refusalLocked reports why the agent cannot take a notice now.
+func (agent *Agent) refusalLocked() error {
+	if !agent.active {
+		return ErrNotRunning
+	}
 	if agent.mode == "one-shot" && !agent.busy {
 		return ErrInvalidConfig
 	}
-	agent.notices = append(agent.notices, cloneMessage(message))
+	return nil
+}
+
+// enqueueLocked queues a notice for the next boundary. A notice accepted
+// after the active turn was cancelled keeps a wake request so the next turn
+// opens once the cancelled one exits; an idle agent is woken to open a turn.
+func (agent *Agent) enqueueLocked(message session.Message) error {
+	if err := agent.refusalLocked(); err != nil {
+		return err
+	}
+	agent.notices = append(agent.notices, message)
 	if agent.busy && agent.turnAbortedLocked() {
 		agent.woken = true
 	}

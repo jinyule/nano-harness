@@ -2,6 +2,7 @@ package jsonl
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 
 	coresession "github.com/jinyule/nano-harness/internal/core/session"
@@ -27,6 +28,10 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 	todoCalls := map[string]struct{}{}
 	searchQueries := map[string][]string{}
 	children := map[string]struct{}{}
+	// notices holds queued notices until a user/message delivers them;
+	// noticeIDs remembers every ID so none is queued twice.
+	notices := map[string]coresession.Message{}
+	noticeIDs := map[string]struct{}{}
 	var goals coresession.GoalState
 	for _, event := range events {
 		record := event.Record
@@ -43,6 +48,24 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 			if record.Turn != state.turn || record.Step != 0 && record.Step != state.step {
 				return state, orderError("user/message outside active turn or step")
 			}
+			if id := record.Message.Source.NoticeID; id != "" {
+				queued, owed := notices[id]
+				if !owed {
+					return state, orderError("user/message delivers notice %q that is not owed", id)
+				}
+				if !reflect.DeepEqual(queued, *record.Message) {
+					return state, orderError("user/message differs from queued notice %q", id)
+				}
+				delete(notices, id)
+			}
+		case coresession.RecordNoticeQueued:
+			// A notice is owed from its own commit on, independent of turns.
+			id := record.Message.Source.NoticeID
+			if _, exists := noticeIDs[id]; exists {
+				return state, orderError("duplicate notice/queued %q", id)
+			}
+			noticeIDs[id] = struct{}{}
+			notices[id] = *record.Message
 		case coresession.RecordStepStart:
 			if record.Turn != state.turn || state.step != 0 || record.Step != state.lastStep+1 {
 				return state, orderError("invalid step/start %d", record.Step)

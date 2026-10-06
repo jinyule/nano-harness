@@ -29,7 +29,7 @@ func Surface(events []Event) ([]SurfaceNode, error) {
 		case RecordTurnStart, RecordStepStart, RecordRequestHeader, RecordAssistantChunk,
 			RecordApprovalAsked, RecordApprovalDecided, RecordApprovalPolicy, RecordRetry,
 			RecordRetryStarted, RecordCompactionStart, RecordCompactionEnd,
-			RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordWebSearchRequest, RecordPlanMode, RecordGoalChange, RecordStepEnd, RecordTurnEnd:
+			RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordWebSearchRequest, RecordPlanMode, RecordGoalChange, RecordNoticeQueued, RecordStepEnd, RecordTurnEnd:
 			// Metadata, UI state, and lifecycle facts do not directly contribute a model-visible node.
 		}
 	}

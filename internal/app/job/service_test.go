@@ -27,7 +27,7 @@ type recordingNotifier struct {
 
 func newNotifier() *recordingNotifier { return &recordingNotifier{sent: make(chan struct{}, 32)} }
 
-func (notifier *recordingNotifier) Notify(owner string, message session.Message) error {
+func (notifier *recordingNotifier) QueueNotice(_ context.Context, owner string, message session.Message) error {
 	notifier.mu.Lock()
 	notifier.notices = append(notifier.notices, notice{owner: owner, message: message})
 	err := notifier.err

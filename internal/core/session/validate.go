@@ -54,6 +54,8 @@ func (record Record) Validate() error {
 		return record.requirePlan()
 	case RecordGoalChange:
 		return record.requireGoal()
+	case RecordNoticeQueued:
+		return record.requireNotice()
 	case RecordStepEnd:
 		return record.requireBare(true, true)
 	case RecordTurnEnd:
@@ -64,7 +66,7 @@ func (record Record) Validate() error {
 }
 
 func allowsZeroTurn(recordType RecordType) bool {
-	return recordType == RecordApprovalPolicy || recordType == RecordCompactionStart || recordType == RecordCompactionSummary || recordType == RecordCompactionEnd || recordType == RecordSubagentDescriptor || recordType == RecordPlanMode || recordType == RecordGoalChange
+	return recordType == RecordApprovalPolicy || recordType == RecordCompactionStart || recordType == RecordCompactionSummary || recordType == RecordCompactionEnd || recordType == RecordSubagentDescriptor || recordType == RecordPlanMode || recordType == RecordGoalChange || recordType == RecordNoticeQueued
 }
 
 func invalid(format string, values ...any) error {
@@ -103,6 +105,9 @@ func validateMessage(message Message, user bool) error {
 	}
 	if err := validateGoalSource(message.Source, user); err != nil {
 		return err
+	}
+	if message.Source.NoticeID != "" && (!user || validateIdentifier("notice ID", message.Source.NoticeID, 128) != nil) {
+		return invalid("notice ID is invalid")
 	}
 	for index, block := range message.Content {
 		if err := validateContent(block); err != nil {
@@ -286,7 +291,7 @@ func (record Record) requireApproval() error {
 	case RecordTurnStart, RecordUserMessage, RecordStepStart, RecordRequestHeader,
 		RecordAssistantChunk, RecordAssistantMessage, RecordToolCall, RecordToolResult,
 		RecordRetry, RecordRetryStarted, RecordCompactionStart, RecordCompactionSummary,
-		RecordCompactionEnd, RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordWebSearchRequest, RecordPlanMode, RecordGoalChange, RecordStepEnd, RecordTurnEnd:
+		RecordCompactionEnd, RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordWebSearchRequest, RecordPlanMode, RecordGoalChange, RecordNoticeQueued, RecordStepEnd, RecordTurnEnd:
 		// Validate dispatches only approval record types to this shape-specific helper.
 	}
 	return nil
@@ -352,7 +357,7 @@ func (record Record) requireCompaction() error {
 	case RecordTurnStart, RecordUserMessage, RecordStepStart, RecordRequestHeader,
 		RecordAssistantChunk, RecordAssistantMessage, RecordToolCall, RecordApprovalAsked,
 		RecordApprovalDecided, RecordApprovalPolicy, RecordToolResult, RecordRetry,
-		RecordRetryStarted, RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordWebSearchRequest, RecordPlanMode, RecordGoalChange, RecordStepEnd, RecordTurnEnd:
+		RecordRetryStarted, RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordWebSearchRequest, RecordPlanMode, RecordGoalChange, RecordNoticeQueued, RecordStepEnd, RecordTurnEnd:
 		// Validate dispatches only compaction record types to this shape-specific helper.
 	}
 	return nil

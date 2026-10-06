@@ -148,7 +148,7 @@ Submit user message
 - 主动 compaction 在估算上下文超过阈值时运行；context-window 错误触发强制 compaction 后重试新 step。raw log 不删除，surface 用持久化 summary 替换旧 prefix。
 - `Followup` 排队新的 turn；`Steer` 只在活动 turn 的工具 step 边界注入；`Interrupt` 只取消活动 turn，保留已排队 followup；`WhenIdle` 等待队列、活动 turn 和已唤醒的通知 turn 都结算。
 - 注册了 `Admission` 的 source kind（目前只有目标轮次 `goal`）在 worker 取出 turn 时先经 admission：它在排除并发状态变化的同时提交 `turn/start` 与开场 `user/message`，或以 `ErrNotAdmitted` 丢弃这个 turn，不写任何记录，也不更新 `Status().Last`。规则见[长期目标](#长期目标)。
-- `Notify` 投递模型可见通知：后台任务完成通知、agent 之间的 `send_message` 消息、子代理结算通知和目标收尾指令。agent 忙时，通知在 turn 开始后、工具 step 结束后以及无工具调用的回答之后作为 `user/message` 追加；最后一种情况下 turn 继续一个 step 回应它。最后一个允许的 step 不取通知，留待下一 turn。每个边界先检查取消：被取消的 turn 不取出通知和 steer，outcome 记为 `canceled`；已经取出的输入以不继承取消的 context 提交，不会因取消竞态丢失。agent 空闲，或 turn 结束后仍有通知、没有排队的 turn 且该 turn 未被取消时，worker 以通知开启新 turn。中断前排队的通知不单独唤醒下一 turn；取消生效后接受的新通知保留唤醒请求，并在旧 turn 退出后开启下一 turn，一并处理此前排队的通知。旧 turn 不消费取消后的待投递通知；留下的 steer 在下一个 turn 的第一个工具 step 边界投递。one-shot agent 只在它唯一的 turn 运行期间接受通知，turn 结束后拒绝通知，也不为未投递的通知开启新 turn。待投递通知只在内存中，规则见 [ADR-0009](decisions/0009-background-jobs.md)与 [ADR-0013](decisions/0013-background-continuable-subagents.md)。
+- `Notify` 投递模型可见通知：后台任务完成通知、agent 之间的 `send_message` 消息、子代理结算通知和目标收尾指令。agent 忙时，通知在 turn 开始后、工具 step 结束后以及无工具调用的回答之后作为 `user/message` 追加；最后一种情况下 turn 继续一个 step 回应它。最后一个允许的 step 不取通知，留待下一 turn。每个边界先检查取消：被取消的 turn 不取出通知和 steer，outcome 记为 `canceled`；已经取出的输入以不继承取消的 context 提交，不会因取消竞态丢失。agent 空闲，或 turn 结束后仍有通知、没有排队的 turn 且该 turn 未被取消时，worker 以通知开启新 turn。中断前排队的通知不单独唤醒下一 turn；取消生效后接受的新通知保留唤醒请求，并在旧 turn 退出后开启下一 turn，一并处理此前排队的通知。旧 turn 不消费取消后的待投递通知；留下的 steer 在下一个 turn 的第一个工具 step 边界投递。one-shot agent 只在它唯一的 turn 运行期间接受通知，turn 结束后拒绝通知，也不为未投递的通知开启新 turn。后台任务完成通知经 `QueueNotice` 先提交 `notice/queued` 再入队，会话恢复时把仍欠着的通知按入队顺序放回队列（不开启 turn，只看 session 自己的事件，fork 不继承），由下一个 turn 投递一次，见 [ADR-0023](decisions/0023-durable-job-notices.md)；其余通知只在内存中，规则见 [ADR-0009](decisions/0009-background-jobs.md)与 [ADR-0013](decisions/0013-background-continuable-subagents.md)。
 - 调用取消、输出 token 上限、step limit、错误和恢复中断分别记录稳定 outcome。输出上限归一为 `max_tokens`：提交已生成的 assistant message 与 usage 后结束 turn，不执行截断响应的工具提案，也不消费待投递通知；停止事实与兼容规则见 [ADR-0018](decisions/0018-goal-stop-outcomes.md)。异常边界会尝试用不继承上游取消的 context 关闭 step/turn。
 - Registry 拥有每个动态 agent（包括 root）的 Scope、worker 和 journal。关闭时先拒绝新 agent，再同时关闭全部 agent：每个 worker 立即取消在途 turn、丢弃排队工作，registry 等待所有 worker 回收，不会出现一个 agent 在排空时另一个仍在开启新 turn。
 
@@ -238,7 +238,7 @@ producer Launch(kind, label, owner, Run)
 - 每个 owner 最多 10 个活动 job。输出环运行中保留 128 KiB，settle 后第一次读取裁到 16 KiB；模型游标消费式读取，settle 后第一次读取还交出 producer 的值结果。
 - cleanup 先拒绝新 job，再取消全部活动 job，等待 producer goroutine 返回后丢弃记录。`jobs` 在 `shell-tools` 之后启动，所以受管 runner 在 shell 临时目录删除之前返回；provider 自己拥有 job 上限回退执行，取消并等待它们及输出收尾后才删除目录。
 - `bash` 的每次调用优先作为 kind `bash` 的 job 运行：`run_in_background` 立即返回 ID；前台注册以 `Spec.Foreground` 原子预留完成收集权，等待 `timeoutMs`，及时结束时移除记录并按前台格式返回。超时后的首次 `Read` 在锁内释放预留：终态由前台收集；仍活动则交给后台并允许后续唯一完成通知。
-- job、计数器和待投递通知都不持久化，正常关闭取消并等待受管执行；脱离进程组的后代限制见[安全规则](security.md#approvalshell-与进程)。
+- job 与计数器不持久化，正常关闭取消并等待受管执行；完成通知在入队前提交为 `notice/queued`，重启后仍欠着的通知在下一个 turn 投递（[ADR-0023](decisions/0023-durable-job-notices.md)）；脱离进程组的后代限制见[安全规则](security.md#approvalshell-与进程)。
 
 工具与通知的完整契约见 [ADR-0009](decisions/0009-background-jobs.md)。
 
@@ -325,11 +325,12 @@ assistant/chunk, assistant/message, tool/call,
 approval/asked, approval/decided, approval/policy,
 tool/result, llm/retry, llm/retry-started,
 compaction/start, compaction/summary, compaction/end,
-subagent/descriptor, subagent/catalog, todo/write, web/search-request, plan/mode, goal/change, step/end, turn/end
+subagent/descriptor, subagent/catalog, todo/write, web/search-request, plan/mode, goal/change,
+notice/queued, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、工具运行时（`tool-runtime-v2`）、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、goal 停止语义（`goal-tools-v2`）、检索请求审计（`web-tools-v2`）、spill 策略与附件引用格式（`attachments-v1`）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、工具运行时（`tool-runtime-v2`）、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、持久化的完成通知（`job-tools-v2`）、goal 停止语义（`goal-tools-v2`）、检索请求审计（`web-tools-v2`）、spill 策略与附件引用格式（`attachments-v1`）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。`approval/asked` 的工具名必须等于 pending call 的名称；`approval/decided` 仅通过 approval ID 关联问题，不允许携带 `call_id`。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。
@@ -340,7 +341,7 @@ subagent/descriptor, subagent/catalog, todo/write, web/search-request, plan/mode
 - `todo/write` 必须位于活动 step，引用尚未得到 result 的 `todo_write` call，且每个 call 最多一条。它不进入 surface；模型只从自己的 tool call 参数和 tool result 看到列表。`session.StandingTodos` 把最新一条之后没有更晚 `turn/start` 的 `todo/write` 投影为当前计划。
 - `web/search-request` 必须引用当前 step 尚未结束的 `web_search` call；每个 call 的查询序号从 1 连续到最多 4，查询不能重复，call 结束后不能追加。它不进入 surface。resume 保留已提交的意图，只为未决 call 补 interrupted error 并关闭 step/turn，不补造检索审计或重新发送；format 仍为 v2，严格字段与保留策略见 ADR-0022。
 - `goal/change` 的 `turn` 与 `step` 都缺省，可出现在日志任意位置（人类命令可在 turn 进行中提交）。`session.GoalState.Apply` 校验 revision 连续、阶段迁移合法、时间戳不倒退、计数保持和目标 ID 不复用；`source.kind = "goal"` 的 `user/message` 必须携带 `goal_id`/`goal_revision`/`goal_round`，且恰为当前 active 目标当前 revision 的下一轮、不超过上限，其他来源不得携带这些字段。JSONL 在每次追加与读取时执行同一折叠，非法事实被拒绝且不写入。
-- 后台任务完成通知是 source kind 为 `tool-jobs` 的 `user/message`，agent 消息与子代理结算通知分别为 `agent-message` 和 `subagent-settled`，都没有专用记录类型；无工具调用的 step 之后可以出现 `user/message` 并继续 step。
+- 后台任务完成通知先提交为会话级的 `notice/queued`（turn 0，携带完整消息和 `notice_id`），投递是内容完全相同、带同一 `notice_id` 的 `user/message`，validator 要求每个 ID 只入队一次、投递一次且内容一致；agent 消息与子代理结算通知分别为 source kind `agent-message` 和 `subagent-settled` 的 `user/message`，没有专用记录类型。无工具调用的 step 之后可以出现 `user/message` 并继续 step。
 - `subagent/descriptor` 为 v2，是 child 自己写的第一条记录：位于 `inherited + 1` 号序列且不在 turn 内，`inherited` 是 fork 种子复制的事件数（spawn 为 0）。种子在创建时与 header 一次写入并整体校验，复制的事件保留原序号。`session.OwnEvents` 以最后一个 descriptor 区分继承前缀。
 - `subagent/catalog` 必须位于活动 step，同一日志内 `session_id` 唯一，不进入 surface；`session.Children` 只从自有事件投影目录，fork 继承的 parent 目录不属于 child。
 

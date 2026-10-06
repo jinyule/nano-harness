@@ -203,9 +203,10 @@ func (service *Service) settle(current *record, outcome Outcome) {
 	view, owner := current.view(), current.owner
 	service.mu.Unlock()
 	if notify {
-		// The only failure is an owner that is no longer live; its notice
-		// has no reader left, exactly like a teardown settlement.
-		_ = service.notifier.Notify(owner, Notice(view))
+		// The notice commits even if shutdown starts meanwhile. The only
+		// failure is an owner that is no longer live or cannot record it;
+		// such a notice has no reader left, like a teardown settlement.
+		_ = service.notifier.QueueNotice(context.WithoutCancel(service.base), owner, Notice(view))
 	}
 }
 

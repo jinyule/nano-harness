@@ -45,7 +45,7 @@ type recordingNotifier struct {
 	sent    chan struct{}
 }
 
-func (notifier *recordingNotifier) Notify(owner string, message session.Message) error {
+func (notifier *recordingNotifier) QueueNotice(_ context.Context, owner string, message session.Message) error {
 	notifier.mu.Lock()
 	notifier.notices = append(notifier.notices, owner+": "+session.Text(message))
 	notifier.mu.Unlock()

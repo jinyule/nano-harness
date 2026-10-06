@@ -395,7 +395,7 @@ func cloneMessage(message session.Message) session.Message {
 }
 
 func validUserMessage(message session.Message) bool {
-	if message.Role != session.RoleUser || message.Source.Kind == "" || strings.TrimSpace(session.Text(message)) == "" && !slices.ContainsFunc(message.Content, func(block session.ContentBlock) bool { return block.Type == session.ContentImage }) {
+	if message.Role != session.RoleUser || message.Source.Kind == "" || message.Source.NoticeID != "" || strings.TrimSpace(session.Text(message)) == "" && !slices.ContainsFunc(message.Content, func(block session.ContentBlock) bool { return block.Type == session.ContentImage }) {
 		return false
 	}
 	return (session.Record{Type: session.RecordUserMessage, Turn: 1, Message: &message}).Validate() == nil

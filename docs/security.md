@@ -172,6 +172,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 - resume 只对 schema 与因果均有效的完整记录做追加式 repair：取消未决 approval、补 tool error，并关闭 compaction/step/turn。它不截断 torn line、不删除未知内容、不迁移旧格式。
 - model-visible stream chunk、message、call/result、approval、retry、compaction summary、image、skill 目录与注入正文、规划模式切换与切换提示均进入日志；credential、OAuth notice 和内部 provider DTO 不进入。问题与答案只作为 `tool/call` 参数和 `tool/result` 存在。
 - 参数超限时只提交显式 `arguments_omitted:true` 与空 arguments，runtime 在任何工具回调或 approval 之前返回错误；模型可缩小参数后重试。持久化校验拒绝省略调用携带非空参数、approval、todo 副作用或成功结果，原始超限内容不成为可执行事实。预算不预留会话的剩余空间：整个 64 MiB session 写满仍需新会话。
+- `notice/queued` 只由 owner agent 在 job 完成通知入队前写入，内容是之后投递给模型的同一条通知（job ID、种类、标签即命令文本、状态），不含输出正文。decoder 拒绝重复 ID、投递未入队或已投递的 ID，以及与入队内容不同的投递；欠着的通知在恢复后投递一次。
 - `todo/write` 只由调用方 session 中尚未得到 result 的 `todo_write` call 写入，最多 256 项、每项 `content` 2048 字节。decoder 拒绝未知字段、未知状态、未去空白或重复的内容，以及不引用 pending `todo_write` call 的记录。
 - `subagent/descriptor` 只接受 v2、`spawn`/`fork` provider 与已知 mode，且必须紧跟继承前缀、位于 turn 之外；`subagent/catalog` 必须位于活动 step，同一日志内 child id 唯一。fork 种子必须是从 1 开始连续、schema 有效且 turn 闭合的前缀，与 header 一次写入，校验失败时不创建文件。
 

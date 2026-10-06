@@ -156,8 +156,10 @@ func withNewline(text string) string {
 	return text
 }
 
-// Notifier delivers a completion notice to the live agent of a session.
-// The agent registry implements it.
+// Notifier durably delivers a completion notice to the live agent of a
+// session: the notice is committed to that session's log before it is
+// queued, so a notice still owed at shutdown is delivered after resume. The
+// agent registry implements it.
 type Notifier interface {
-	Notify(sessionID string, message session.Message) error
+	QueueNotice(ctx context.Context, sessionID string, message session.Message) error
 }

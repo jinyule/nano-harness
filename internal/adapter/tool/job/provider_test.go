@@ -22,7 +22,7 @@ func (allowAll) Decide(context.Context, appTool.ApprovalRequest) (session.Approv
 
 type dropNotices struct{}
 
-func (dropNotices) Notify(string, session.Message) error { return nil }
+func (dropNotices) QueueNotice(context.Context, string, session.Message) error { return nil }
 
 type harness struct {
 	runtime *appTool.Runtime

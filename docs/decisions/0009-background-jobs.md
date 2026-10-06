@@ -1,6 +1,6 @@
 # ADR-0009：后台任务运行时、job 工具与完成通知
 
-- 状态：Accepted
+- 状态：Accepted（待投递完成通知的持久化与恢复部分被 ADR-0023 取代）
 - 日期：2026-10-04
 - 决策者：nano-harness maintainers
 
@@ -78,19 +78,19 @@ background job <id> (<kind>: <label>) finished <status line>. Read its output wi
 - agent 忙时进入内存队列，在下一个边界作为 `user/message` 追加到当前 turn：turn 开始后、工具 step 结束后（steer 之后），以及模型给出无工具调用的回答之后。最后一种情况下 turn 不结束，而是再开一个 step 回应通知。最后一个允许的 step（无论是否有工具调用）和因输出上限被截断、以 `max_tokens` 结束的 step 都不取通知，通知留在队列中，由 turn 结束后的唤醒回应。
 - agent 空闲时，或一个 turn 结束后队列中仍有通知且没有排队的 turn，worker 以最早的通知开启新 turn，其余通知在该 turn 开始时追加。这对应上游默认的 `wakeup` 投递；本仓不设 `maxConsecutiveWakes`，与 Base 默认相同。
 - 每个取出队列输入的边界先检查取消：被取消的 turn 不取出通知或 steer，以 `canceled` 结束；取出后的提交使用不继承取消的 context，取消与提交竞态时输入已提交而不是丢失，下一个边界再观察到取消。中断前排队的通知等待下一个 turn，不因 interrupt 单独自动开 turn；中断生效后接受的新通知保留唤醒请求，按 [ADR-0013 的消息规则](0013-background-continuable-subagents.md#3-消息与通知) 在旧 turn 退出后开启下一 turn，一并处理旧通知；留下的 steer 在下一个 turn 的第一个工具 step 边界投递。目标轮次的暂停和子代理的 “stopped” 结算都依赖这里记录的 `canceled`。`WhenIdle` 把已唤醒但尚未开始的通知 turn 视为忙。
-- 待投递的通知与 followup、steer 一样只在内存中，agent 停止时丢弃；此时 job 本身也已被终止。
+- 完成通知在入队前先提交为 `notice/queued` 事实，投递是带同一 `notice_id` 的 `user/message`；agent 停止时仍欠着的通知在会话恢复后的下一个 turn 投递一次。此条取代原先“待投递通知只在内存中、agent 停止时丢弃”的决定，记录格式、恢复与去重规则见 [ADR-0023](0023-durable-job-notices.md)。
 
 > 后续约束：[ADR-0013](0013-background-continuable-subagents.md#6-job-的-owner-释放) 规定 one-shot agent 只在唯一 turn 运行期间接受通知，turn 结束后不再由通知唤醒；本节的通用唤醒规则受此限制。
 
 > 后续停止契约：[ADR-0018](0018-goal-stop-outcomes.md) 规定输出截断的 turn 不消费待投递通知，通知留给下一个 turn；本节的提交点受此停止规则约束。
 
-模型可见的通知只通过已提交的 `user/message` 进入 surface。session v2 的记录类型、字段和校验都不变：source kind 本来就是开放字符串，order validator 已允许活动 turn 内任意位置的 `user/message`。新出现的因果形态（无工具调用的 step 之后出现 `user/message` 并继续 step）也由现有 validator 接受，resume 修复规则不变。TUI 把这类消息显示为 `job> `，而不是 `you> `。
+模型可见的通知只通过已提交的 `user/message` 进入 surface。投递记录沿用 `user/message`（[ADR-0023](0023-durable-job-notices.md) 另增入队记录 `notice/queued` 和来源字段 `notice_id`）：source kind 本来就是开放字符串，order validator 已允许活动 turn 内任意位置的 `user/message`。新出现的因果形态（无工具调用的 step 之后出现 `user/message` 并继续 step）也由现有 validator 接受，resume 修复规则不变。TUI 把这类消息显示为 `job> `，而不是 `you> `。
 
 > 后续格式：[ADR-0016](0016-long-running-goals.md#领域与记录) 为目标轮次增加 `MessageSource` 归属字段和严格折叠校验；`tool-jobs` 通知仍沿用本节形态。
 
 ### 恢复与身份
 
-job、计数器和待投递通知都不持久化。恢复后旧 transcript 中的 job ID 对 `job_*` 工具是 `unknown job`，新进程的编号从 1 重新开始。composition ID 改为绑定 `shell-tools-v2` 和新增的 `job-tools-v1`，旧会话按 composition mismatch 拒绝恢复；本仓尚无发布 tag，没有已发布的用户会话需要迁移。
+job 与计数器不持久化；尚未投递的完成通知自 [ADR-0023](0023-durable-job-notices.md) 起持久化并在恢复后投递。恢复后旧 transcript 中的 job ID 对 `job_*` 工具是 `unknown job`，新进程的编号从 1 重新开始，复用编号后旧 ID 可能指向新 job。composition ID 改为绑定 `shell-tools-v2` 和新增的 `job-tools-v1`（ADR-0023 升为 `job-tools-v2`），旧会话按 composition mismatch 拒绝恢复；本仓尚无发布 tag，没有已发布的用户会话需要迁移。
 
 > 已被取代：本节的 `shell-tools-v2` 由 [ADR-0008](0008-tool-output-spill-and-observation-policy.md#身份) 提升为 `shell-tools-v3`；此处保留后台任务落地时的身份。
 
@@ -105,7 +105,7 @@ delegated agent 可以调用对其可见的 `job_*` 工具，但只能访问自�
 代价与风险：
 
 - 通知可以在没有用户输入时开启 turn 并消耗模型调用；每个通知最多触发一个 turn，自激链需要模型反复启动新 job，而每次启动都需要用户审批。
-- job 与通知不随进程恢复；正常 shutdown 取消并等待受管执行，尚未投递的通知丢弃。异常退出和脱离进程组的后代能否回收取决于[平台与执行模式](../security.md#approvalshell-与进程)，不能假定所有 host 进程都已终止。
+- job 不随进程恢复；正常 shutdown 取消并等待受管执行，尚未投递的完成通知留在日志中，恢复后投递（ADR-0023）。异常退出和脱离进程组的后代能否回收取决于[平台与执行模式](../security.md#approvalshell-与进程)，不能假定所有 host 进程都已终止。
 - 前台命令现在多一次 job 注册和输出复制（输出环最多 128 KiB）；内存上限为每 owner 10 个活动 job。
 - 前台预留避免未交出的 job ID 引发通知或额外 turn，交接按读取时状态描述命令；consumer 必须完成读取或移除。
 - 每个回退执行增加一个取消句柄与等待贡献，cleanup 等待 runner 与输出收尾；不遵守取消契约的 runner 会阻塞关闭。
@@ -115,7 +115,7 @@ delegated agent 可以调用对其可见的 `job_*` 工具，但只能访问自�
 
 ## 被否决方案
 
-- 持久化 job 记录或通知队列：job 进程随 harness 结束，没有可恢复的执行；持久化的待投递通知会在恢复后描述一个已不存在的 job。若未来需要可恢复 job，应连同执行后端重新设计。
+- 持久化 job 记录：job 进程随 harness 结束，没有可恢复的执行。若未来需要可恢复 job，应连同执行后端重新设计。原先一并否决的“持久化通知队列”已由 [ADR-0023](0023-durable-job-notices.md) 改为采纳：已完成的结果即使 job 不在了仍是有效事实。
 - 新增 `job/notice` 记录类型：上游本身以 `user/message` 送达，现有 replay、compaction 和 provider 映射无需改动即可处理；新记录类型只增加格式面。
 - 只在前台超时时才注册 job：输出缓冲需要在提升时迁移，命令在超时前不可见，也改变了 job 编号与上游的一致性。
 - 输出环保留 256 KiB：读取加状态行可能超过 tool result 上限，被统一截断后丢掉状态行。
