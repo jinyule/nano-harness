@@ -50,9 +50,9 @@
 | WP10 | 长期目标 `create_goal`/`get_goal`/`update_goal` 与 round driver | WP3、WP8 | 0016 | 已合入 `d8ba519` |
 | WP11 | 图片移入会话日志之外的内容寻址附件存储（对齐上游 `attachment`/`attachment-local`），`/attach` 与 `read_image` 共用 | WP9 | 0017 | 进行中 |
 | WP12 | 结构化工具结果：所有工具产出上游的错误分类（name/code/info）与结果 `meta` 并持久化到 `tool/result`；模型可见文本不变，TUI 卡片暂缓 | 小修合入后 | 0019 | 待开始 |
-| WP13 | compaction 先做上游 tool-result-pruner 的无模型裁剪（首 4096、尾 1024 码点，持久化裁剪事实），再决定是否摘要 | — | 0020 | 待开始 |
+| WP13 | compaction 先做上游 tool-result-pruner 的无模型裁剪（首 4096、尾 1024 码点，持久化裁剪事实），再决定是否摘要 | — | 0020 | 进行中（Codex） |
 | WP14 | 会话级 sandbox 模式：read-only、workspace-write、danger-full-access 三档，持久化 `sandbox/mode` 与策略上下文；Linux sandbox 与上游一致放开网络 | WP11 后的路径与 runner 修复 | 0021 | 待开始 |
-| WP15 | web_search 发送前持久化检索请求（route、endpoint、预算），写入失败不发送 | — | 0022 | 待开始 |
+| WP15 | web_search 发送前持久化检索请求（route、endpoint、预算），写入失败不发送 | — | 0022 | 进行中（Codex） |
 | WP16 | job 完成通知持久化（对齐上游 durable inbox），重启后未送达的完成事实不丢失 | WP3 engine 修复 | 0023 | 待开始 |
 
 ### 跨工作包决策记录
@@ -114,6 +114,10 @@
 |---|---|---|
 | 搜索与 spill（`0073dfb`） | 常规搜索与文本 spill 基本对齐 | 小修：ECMAScript 空白集、grep JSON 解析顺序、stderr 65,536 字节、错误结果也 spill（ADR-0008 理由不成立）、更换 spill root 后历史定位符不可读。结构性：`tool/result` 缺上游的结构化错误码与结果 `meta`（影响会话格式与所有工具）。Base 默认的工具结果裁剪阶段（compaction tool-result-pruner）缺失。待全部审计完成后统一分类 |
 | web（`0073dfb`） | 检索与基本抓取对齐；检索 provider 与默认未配置的取舍记录充分 | 小修：deflate/Brotli 解压、WHATWG URL 规范化与 IDNA、100,000 上限按 UTF-16 计数、双栈快速回退、HTML 转换语义（删除线、任务框、代码语言、转义、hidden 容错 bug）、抓取输出先截 256 KiB 导致 spill 丢正文、查询空白集。结构性：错误码只拼进文本而无结构化字段；缺上游发送前的检索请求审计事件；compaction tool-result-pruner |
+| 文件工具（`0073dfb`） | read/write/edit/read_image 主路径对齐 | P1：write/edit 取消后仍发布、透明图片缩放后变黑（交 WP11）。小修：`..` 物理路径语义、超大 offset 静默改写、工具并行上限 10、图片转换并发上限 2（交 WP11）、128 KiB 参数超限终止 turn、Safety 段落与 spill 例外矛盾。结构性：错误分类与 diff meta（WP12）、会话 sandbox 模式（WP14）。已派 Codex-H1（文件）、Codex-H2（运行时） |
+| shell 与后台任务（`0073dfb`） | 参数、输出与调度主路径对齐 | Linux sandbox 隔离网络（WP14 放开）；sandbox runner 自身失败被当作普通命令失败；取消直接 SIGKILL 缺少 SIGTERM→3s 宽限；`workdir` 链接加 `..` 解析错误目录；非法 UTF-8 膨胀挤掉 job 状态行；空 kill reason 与错误优先级；ADR-0009 中 owner 释放、旧 ID 复用的记录不准确。部署预算配置保持固定并补 ADR。待 Codex-C、Codex-E 合入后派发 |
+| subagent 工具族（`0073dfb`） | 默认分支与常规文案对齐 | 正确性：并发创建重复计数、已取消 send_message 仍投递、中断后新消息不唤醒、清理失败仍宣告成功、后台 fork 准入顺序、closing output 选择、description 截断（已派 Codex-K1）。设计：child 未固定并持久化继承的 route、委派说明放在 system prompt 破坏 fork 前缀、发送者身份未持久化（待 H2 合入后派发）；生命周期事件与回执暂缓（无消费者） |
+| 交互与会话状态（`0073dfb`） | todo、提问、规划、goal、skill 主路径对齐 | todo/goal/plan 与 `/goal edit` 的 ECMAScript 空白、skill 描述按 UTF-16 计数、todo 重复项引用格式、TUI 多选不能补充自由回答、发现不完整时 `/name` 被静默吞掉；结构化错误（WP12）。待 Codex-E（共享空白判断）合入后派发 |
 
 ### 后续项（不在本次范围）
 
