@@ -23,10 +23,12 @@ import (
 )
 
 // modelStep is one scripted Responses turn: a tool call or final text.
+// Truncated text ends with response.incomplete at the output token cap.
 type modelStep struct {
 	tool      string
 	arguments string
 	text      string
+	truncated bool
 }
 
 // seenRequest is the part of one provider request the tests inspect.
@@ -63,6 +65,10 @@ func scriptedModel(t *testing.T, steps []modelStep) (*httptest.Server, func() []
 		} else {
 			delta, _ := json.Marshal(step.text)
 			_, _ = fmt.Fprintf(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":%s}\n\n", delta)
+		}
+		if step.truncated {
+			_, _ = io.WriteString(writer, "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}}\n\n")
+			return
 		}
 		_, _ = io.WriteString(writer, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}}\n\n")
 	}))

@@ -1,4 +1,7 @@
-// Package compaction replaces old model-visible nodes while preserving the raw log.
+// Package compaction reduces the model surface while preserving the raw log.
+// Under pressure it first prunes oversized tool results without a model
+// call, as upstream's tool-result pruner does, and summarizes the oldest
+// prefix only when the pruned surface is still above the threshold.
 package compaction
 
 import (
@@ -19,8 +22,9 @@ var (
 	// ErrInvalidRequest identifies an invalid compaction dependency or operation.
 	ErrInvalidRequest = errors.New("invalid compaction request")
 	// ErrNotRunning indicates the compaction service has not started or has stopped.
-	ErrNotRunning  = errors.New("compaction service is not running")
-	compactionWait = wait
+	ErrNotRunning       = errors.New("compaction service is not running")
+	errSummaryTruncated = errors.New("summary truncated at the output token cap (incomplete checkpoint)")
+	compactionWait      = wait
 )
 
 // Journal supplies a durable snapshot and append boundary.
@@ -29,11 +33,15 @@ type Journal interface {
 	Append(context.Context, session.Record) (session.Event, error)
 }
 
-// Request selects proactive or forced compaction.
+// Request selects proactive or forced compaction. Force skips the pressure
+// check and always summarizes, for context-window recovery and manual
+// requests; Manual also skips the model-free pruning pass, as upstream's
+// manual compaction does.
 type Request struct {
 	Journal Journal
 	Turn    uint64
 	Force   bool
+	Manual  bool
 }
 
 // Service owns compaction model calls and hot policy reads.
@@ -77,7 +85,12 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	return nil
 }
 
-// Maybe summarizes the oldest visible prefix when pressure crosses the hot threshold.
+// Maybe reduces the surface when pressure crosses the hot threshold or the
+// request is forced. It first records a compaction/prune for every visible
+// tool result over the pruning budget; a pressure request that the pruned
+// surface relieves stops there, and otherwise the oldest prefix is
+// summarized. It reports whether the surface changed. Prunes recorded before
+// a failure stay in the log.
 func (service *Service) Maybe(ctx context.Context, request Request) (bool, error) {
 	if request.Journal == nil {
 		return false, ErrInvalidRequest
@@ -108,14 +121,22 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 	if err != nil {
 		return false, err
 	}
-	total := estimateSurface(surface)
 	threshold := int(float64(model.ContextWindow) * document.Compaction.ThresholdRatio)
-	if !request.Force && total < threshold {
+	if !request.Force && estimateSurface(surface) < threshold {
 		return false, nil
+	}
+	pruned := false
+	if !request.Manual {
+		if pruned, err = prune(ctx, request, surface); err != nil {
+			return pruned, err
+		}
+		if pruned && !request.Force && estimateSurface(surface) < threshold {
+			return true, nil
+		}
 	}
 	shadowed, count := selectPrefix(surface, int(float64(model.ContextWindow)*document.Compaction.RetainRatio), request.Force)
 	if len(shadowed) == 0 {
-		return false, nil
+		return pruned, nil
 	}
 	id := fmt.Sprintf("compact-%d", service.nextID.Add(1))
 	if _, err := request.Journal.Append(ctx, session.Record{Type: session.RecordCompactionStart, Turn: request.Turn, Compaction: &session.CompactionData{ID: id}}); err != nil {
@@ -143,6 +164,9 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 	if err != nil {
 		return false, service.finishError(ctx, request, id, err)
 	}
+	if completion.Stop == llm.StopMaxTokens {
+		return pruned, service.finishError(ctx, request, id, fmt.Errorf("compaction %s: %w", id, errSummaryTruncated))
+	}
 	text := session.Text(completion.Message)
 	if text == "" || len(completion.Calls) != 0 {
 		return false, service.finishError(ctx, request, id, errors.New("summary response was empty or attempted a tool"))
@@ -165,6 +189,29 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 	return true, nil
 }
 
+// prune records the bounded replacement of every visible tool result over
+// the pruning budget and applies it to surface in place, so the caller can
+// remeasure the surface the log now folds to.
+func prune(ctx context.Context, request Request, surface []session.SurfaceNode) (bool, error) {
+	pruned := false
+	for _, node := range surface {
+		if node.Result == nil {
+			continue
+		}
+		output, ok := session.PruneToolOutput(node.Result.Output)
+		if !ok {
+			continue
+		}
+		record := session.Record{Type: session.RecordCompactionPrune, Turn: request.Turn, Prune: &session.ToolResultPrune{Seq: node.Sequence, Output: output}}
+		if _, err := request.Journal.Append(ctx, record); err != nil {
+			return pruned, fmt.Errorf("prune tool result %d: %w", node.Sequence, err)
+		}
+		node.Result.Output = output
+		pruned = true
+	}
+	return pruned, nil
+}
+
 func (service *Service) finishError(ctx context.Context, request Request, id string, cause error) error {
 	message := safeFailure(cause)
 	_, appendErr := request.Journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordCompactionEnd, Turn: request.Turn, Compaction: &session.CompactionData{ID: id, Error: message}})
@@ -172,6 +219,9 @@ func (service *Service) finishError(ctx context.Context, request Request, id str
 }
 
 func safeFailure(err error) string {
+	if errors.Is(err, errSummaryTruncated) {
+		return llm.StopMaxTokens
+	}
 	var failure *llm.Error
 	if errors.As(err, &failure) {
 		return string(failure.Code)

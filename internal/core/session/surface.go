@@ -26,6 +26,10 @@ func Surface(events []Event) ([]SurfaceNode, error) {
 			if err != nil {
 				return nil, err
 			}
+		case RecordCompactionPrune:
+			if err := applyPrune(nodes, event); err != nil {
+				return nil, err
+			}
 		case RecordTurnStart, RecordStepStart, RecordRequestHeader, RecordAssistantChunk,
 			RecordApprovalAsked, RecordApprovalDecided, RecordApprovalPolicy, RecordRetry,
 			RecordRetryStarted, RecordCompactionStart, RecordCompactionEnd,
@@ -180,6 +184,10 @@ func CloneEvent(event Event) Event {
 	if event.Record.Goal != nil {
 		change := cloneGoalChange(*event.Record.Goal)
 		cloned.Record.Goal = &change
+	}
+	if event.Record.Prune != nil {
+		prune := *event.Record.Prune
+		cloned.Record.Prune = &prune
 	}
 	return cloned
 }

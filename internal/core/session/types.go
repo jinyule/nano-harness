@@ -63,6 +63,9 @@ const (
 	RecordCompactionSummary RecordType = "compaction/summary"
 	// RecordCompactionEnd closes a successful or failed compaction transaction.
 	RecordCompactionEnd RecordType = "compaction/end"
+	// RecordCompactionPrune replaces one visible tool result's text with its
+	// bounded head and tail on the model surface.
+	RecordCompactionPrune RecordType = "compaction/prune"
 	// RecordSubagentDescriptor commits cold-resume metadata for a delegated agent.
 	RecordSubagentDescriptor RecordType = "subagent/descriptor"
 	// RecordSubagentCatalog commits one child a parent created, from inside the creating tool step.
@@ -364,6 +367,7 @@ type Record struct {
 	Search     *WebSearchRequest   `json:"search,omitempty"`
 	Plan       *PlanMode           `json:"plan,omitempty"`
 	Goal       *GoalChange         `json:"goal,omitempty"`
+	Prune      *ToolResultPrune    `json:"prune,omitempty"`
 	Outcome    TurnOutcome         `json:"outcome,omitempty"`
 }
 

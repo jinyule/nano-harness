@@ -173,6 +173,13 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 				return state, orderError("compaction/end has no matching start")
 			}
 			state.compaction = ""
+		case coresession.RecordCompactionPrune:
+			// Pruning lands before a summary is chosen: outside any step and
+			// compaction transaction, in the active turn or between turns.
+			// The surface fold below checks what it replaces.
+			if record.Turn != state.turn || state.step != 0 || state.compaction != "" {
+				return state, orderError("compaction/prune outside a compaction boundary")
+			}
 		case coresession.RecordStepEnd:
 			if record.Turn != state.turn || record.Step != state.step || len(state.calls) != 0 || len(state.approvals) != 0 || state.compaction != "" {
 				return state, orderError("step/end has unfinished work")

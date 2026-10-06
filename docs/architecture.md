@@ -145,7 +145,8 @@ Submit user message
 - streaming chunk 按 provider 顺序持久化。完成的 assistant message 和全部 tool call 先提交，工具才能执行；每个 call 最终得到唯一 tool result。
 - 超出参数预算的提案先转换为保留 ID/名称、`arguments:{}` 和 `arguments_omitted:true` 的调用，再提交日志；runtime 为其产生错误结果，turn 继续。provider 越界后停止累积与提交该调用的参数 delta，继续消费有界响应；普通参数仍按原顺序提交。限值与持久化策略见 [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败)。
 - 没有输出提交的 retryable provider 失败按热策略指数退避；一旦流内容已提交就不自动重试，避免重复事实。
-- 主动 compaction 在估算上下文超过阈值时运行；context-window 错误触发强制 compaction 后重试新 step。raw log 不删除，surface 用持久化 summary 替换旧 prefix。
+- 主动 compaction 在估算上下文超过阈值时运行；context-window 错误触发强制 compaction 后重试新 step。两种触发都先做无模型的工具结果裁剪：超过 8192 码点的工具结果在 surface 上只保留首 4096、尾 1024 码点和固定标记，每次替换持久化为一条 `compaction/prune`。压力触发若裁剪后重新估算已低于阈值，就不再摘要；否则、以及 context-window 恢复时，照旧在 `compaction/start`…`compaction/end` 事务中把最旧前缀交给模型摘要，摘要读到的是裁剪后的 surface。用户的 `/compact` 只摘要不裁剪。raw log 不删除，surface 从持久化的裁剪与 summary 重建。规则见 [ADR-0020](decisions/0020-tool-result-pruning.md)。
+- compaction 在发布摘要前检查停止原因；输出截断以 `max_tokens` 失败收尾，不发布摘要或重试，历史继续可见，已提交的裁剪保留。摘要失败与恢复契约见 [ADR-0020](decisions/0020-tool-result-pruning.md#摘要发布与失败)。
 - `Followup` 排队新的 turn；`Steer` 只在活动 turn 的工具 step 边界注入；`Interrupt` 只取消活动 turn，保留已排队 followup；`WhenIdle` 等待队列、活动 turn 和已唤醒的通知 turn 都结算。
 - 注册了 `Admission` 的 source kind（目前只有目标轮次 `goal`）在 worker 取出 turn 时先经 admission：它在排除并发状态变化的同时提交 `turn/start` 与开场 `user/message`，或以 `ErrNotAdmitted` 丢弃这个 turn，不写任何记录，也不更新 `Status().Last`。规则见[长期目标](#长期目标)。
 - `Notify` 投递模型可见通知：后台任务完成通知、agent 之间的 `send_message` 消息、子代理结算通知和目标收尾指令。agent 忙时，通知在 turn 开始后、工具 step 结束后以及无工具调用的回答之后作为 `user/message` 追加；最后一种情况下 turn 继续一个 step 回应它。最后一个允许的 step 不取通知，留待下一 turn。每个边界先检查取消：被取消的 turn 不取出通知和 steer，outcome 记为 `canceled`；已经取出的输入以不继承取消的 context 提交，不会因取消竞态丢失。agent 空闲，或 turn 结束后仍有通知、没有排队的 turn 且该 turn 未被取消时，worker 以通知开启新 turn。中断前排队的通知不单独唤醒下一 turn；取消生效后接受的新通知保留唤醒请求，并在旧 turn 退出后开启下一 turn，一并处理此前排队的通知。旧 turn 不消费取消后的待投递通知；留下的 steer 在下一个 turn 的第一个工具 step 边界投递。one-shot agent 只在它唯一的 turn 运行期间接受通知，turn 结束后拒绝通知，也不为未投递的通知开启新 turn。后台任务完成通知经 `QueueNotice` 先提交 `notice/queued` 再入队，会话恢复时把仍欠着的通知按入队顺序放回队列（不开启 turn，只看 session 自己的事件，fork 不继承），由下一个 turn 投递一次，见 [ADR-0023](decisions/0023-durable-job-notices.md)；其余通知只在内存中，规则见 [ADR-0009](decisions/0009-background-jobs.md)与 [ADR-0013](decisions/0013-background-continuable-subagents.md)。
@@ -324,18 +325,18 @@ turn/start, user/message, step/start, request/header,
 assistant/chunk, assistant/message, tool/call,
 approval/asked, approval/decided, approval/policy,
 tool/result, llm/retry, llm/retry-started,
-compaction/start, compaction/summary, compaction/end,
+compaction/start, compaction/summary, compaction/end, compaction/prune,
 subagent/descriptor, subagent/catalog, todo/write, web/search-request, plan/mode, goal/change,
 notice/queued, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、工具运行时（`tool-runtime-v2`）、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、持久化的完成通知（`job-tools-v2`）、goal 停止语义（`goal-tools-v2`）、检索请求审计（`web-tools-v2`）、spill 策略与附件引用格式（`attachments-v1`）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、工具运行时（`tool-runtime-v2`）、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、持久化的完成通知（`job-tools-v2`）、goal 停止语义（`goal-tools-v2`）、检索请求审计（`web-tools-v2`）、spill 策略、附件引用格式（`attachments-v1`）与工具结果裁剪（`tool-result-prune-v1`）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。`approval/asked` 的工具名必须等于 pending call 的名称；`approval/decided` 仅通过 approval ID 关联问题，不允许携带 `call_id`。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。
 - resume 会补写未决 approval 的 cancelled、未决 call 的 interrupted error、未结束 compaction/step/turn 的结束事实；不会截断 torn JSON、猜测未知格式或自动接受旧版本。
-- `session.Surface` 从 raw events 折叠消息、tool call/result 与 compaction replacements。TUI subscriber 只是可丢更新提示；磁盘 replay 仍是恢复来源。
+- `session.Surface` 从 raw events 折叠消息、tool call/result 与 compaction replacements：`compaction/prune` 替换仍可见的一个工具结果的文本，节点序号不变，且记录文本必须恰好等于对原输出的确定性裁剪；`compaction/summary` 再按序号遮蔽旧前缀。TUI subscriber 只是可丢更新提示；磁盘 replay 仍是恢复来源。
 - 图片块（user message content block 与 `tool/result` 的 `image` 字段）只保存附件引用；严格 decoder 拒绝旧的内联 `data`/`sha256` 字段、非 `sha256:<64 位小写十六进制>` 的 ID 和越界的字节数或尺寸。错误结果不能携带图片。引用随结果进入 surface。
 - `tool/call.arguments_omitted` 是可选布尔值；为 true 时 arguments 必须为 `{}`，不得请求 approval、提交 `todo/write` 或取得成功结果。原始超限参数不写入 call；越界前已提交的流片段保留为审计事实，surface 只重放省略调用和错误结果。session v2 保留，旧 composition 拒绝且原文件不改写，见 ADR-0002。
 - `todo/write` 必须位于活动 step，引用尚未得到 result 的 `todo_write` call，且每个 call 最多一条。它不进入 surface；模型只从自己的 tool call 参数和 tool result 看到列表。`session.StandingTodos` 把最新一条之后没有更晚 `turn/start` 的 `todo/write` 投影为当前计划。

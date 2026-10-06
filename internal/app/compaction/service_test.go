@@ -31,6 +31,7 @@ type compactionPrepared struct {
 	results []llm.Completion
 	errors  []error
 	calls   int
+	seen    []llm.Request
 }
 
 func (*compactionPrepared) Info() llm.ModelInfo {
@@ -50,6 +51,7 @@ func (prepared *compactionPrepared) Stream(_ context.Context, _ llm.Credential, 
 	}
 	index := prepared.calls
 	prepared.calls++
+	prepared.seen = append(prepared.seen, request)
 	_ = emit(session.AssistantChunk{Kind: session.ChunkText, Text: "summary"})
 	if index < len(prepared.errors) && prepared.errors[index] != nil {
 		return llm.Completion{}, prepared.errors[index]
@@ -116,6 +118,7 @@ func visibleEvents(count int) []session.Event {
 
 type compactionHarness struct {
 	service       *Service
+	settings      *settings.Service
 	prepared      *compactionPrepared
 	provider      *compactionProvider
 	serviceScope  *plugin.Scope
@@ -147,7 +150,7 @@ func newCompactionHarness(t *testing.T) *compactionHarness {
 	if err := service.Start(context.Background(), serviceScope); err != nil {
 		t.Fatal(err)
 	}
-	harness := &compactionHarness{service: service, prepared: prepared, provider: provider, serviceScope: serviceScope, providerScope: providerScope, llmScope: llmScope, settingsScope: settingsScope}
+	harness := &compactionHarness{service: service, settings: configuration, prepared: prepared, provider: provider, serviceScope: serviceScope, providerScope: providerScope, llmScope: llmScope, settingsScope: settingsScope}
 	t.Cleanup(func() {
 		_ = serviceScope.Close(context.Background())
 		_ = providerScope.Close(context.Background())

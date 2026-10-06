@@ -11,6 +11,8 @@
 
 ## Decision
 
+[compaction 摘要截断修补](2026-10-06-compaction-truncated-summary.md)拥有摘要消费方的停止检查；本 Note 继续拥有 provider 归一、engine 和 goal 停止结局的实施证据。
+
 长期契约见 [ADR-0018](../../../docs/decisions/0018-goal-stop-outcomes.md)，[ADR-0016](../../../docs/decisions/0016-long-running-goals.md) 同步其 driver 规则。三个 provider 将输出上限归一为 StopMaxTokens，engine 持久化 max_tokens 结局，不执行截断工具提案或消费待投递通知。JSONL 严格校验形状与闭合 assistant step，固定 goal 样本包含该结局与未知停止枚举反例。
 
 armed 表保存 GoalRef；成功提交后更新，Settle 和失败的旧轮次只按确切 ID/revision 解除，目标轮次使用开场归属（见[轮次停止归属修复](2026-10-06-goal-round-stop-ownership.md)），接管与关闭仍无条件解除。开场失败无需补写日志也能停止推进。composition 以 goal-tools-v2 绑定停止语义，旧组合恢复被拒且原始数据保持不变。插件及 Scope 回收顺序沿原 composition；未增加 goroutine、注册或持久化文件。

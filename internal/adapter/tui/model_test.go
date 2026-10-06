@@ -361,13 +361,14 @@ func TestApplyEvent_ProjectsAllDurablePresentationFacts(t *testing.T) {
 		{Record: session.Record{Type: session.RecordCompactionStart, Compaction: &session.CompactionData{ID: "one"}}},
 		{Record: session.Record{Type: session.RecordCompactionEnd, Compaction: &session.CompactionData{ID: "one"}}},
 		{Record: session.Record{Type: session.RecordCompactionEnd, Compaction: &session.CompactionData{ID: "two", Error: "failed"}}},
+		{Record: session.Record{Type: session.RecordCompactionPrune, Prune: &session.ToolResultPrune{Seq: 7, Output: "pruned"}}},
 		{Record: session.Record{Type: session.RecordTurnEnd, Outcome: session.OutcomeCompleted}},
 	}
 	for _, event := range events {
 		current.applyEvent(event, true)
 	}
 	joined := strings.Join(current.lines, "\n")
-	for _, expected := range []string{"you> hello [images=1]", "job> background job bash-1 finished", "agent> Agent child sent a message: done", "agent> Background subagent child finished", "route> openai/model effort=max", "assistant> one two", "reasoning> think", "tool> read", "approval> write", "result> ok", "tool-error> bad", "result> <type>image</type> [image shot.png 640x480 sha256:0123456789ab]", "retry> attempt=2", "compact> started", "compact> completed", "compact> failed", "turn> completed"} {
+	for _, expected := range []string{"you> hello [images=1]", "job> background job bash-1 finished", "agent> Agent child sent a message: done", "agent> Background subagent child finished", "route> openai/model effort=max", "assistant> one two", "reasoning> think", "tool> read", "approval> write", "result> ok", "tool-error> bad", "result> <type>image</type> [image shot.png 640x480 sha256:0123456789ab]", "retry> attempt=2", "compact> started", "compact> completed", "compact> failed", "compact> pruned tool result #7 to 6 bytes", "turn> completed"} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("projection missing %q in %s", expected, joined)
 		}

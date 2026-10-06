@@ -544,5 +544,26 @@
     "before": "outcome.disarm != nil && *outcome.disarm == ref",
     "after": "outcome.disarm != nil",
     "test": "^TestService_SettleUsesStoppedRoundRef$"
+  },
+  {
+    "id": "prune-relieves-pressure",
+    "file": "internal/app/compaction/service.go",
+    "before": "if pruned && !request.Force && estimateSurface(surface) < threshold {",
+    "after": "if false && pruned && !request.Force && estimateSurface(surface) < threshold {",
+    "test": "^TestMaybe_PruningAloneRelievesPressure$"
+  },
+  {
+    "id": "prune-replacement-checked",
+    "file": "internal/core/session/prune.go",
+    "before": "if !ok || pruned != data.Output {",
+    "after": "if !ok || pruned == \"\" {",
+    "test": "^TestSurface_AppliesRecordedPrunes$"
+  },
+  {
+    "id": "compaction-rejects-truncated-summary",
+    "file": "internal/app/compaction/service.go",
+    "before": "if completion.Stop == llm.StopMaxTokens {",
+    "after": "if false && completion.Stop == llm.StopMaxTokens {",
+    "test": "^TestMaybe_TruncatedSummary(FailsCompaction|PreservesFinishFailure)$"
   }
 ]

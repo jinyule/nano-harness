@@ -100,6 +100,8 @@ func (model *model) applyEvent(event session.Event, live bool) {
 		} else {
 			model.addLine("compact> " + record.Compaction.Error)
 		}
+	case session.RecordCompactionPrune:
+		model.addLine(fmt.Sprintf("compact> pruned tool result #%d to %d bytes", record.Prune.Seq, len(record.Prune.Output)))
 	case session.RecordPlanMode:
 		model.planActive = record.Plan.Active
 		if model.planActive {
