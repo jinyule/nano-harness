@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -171,6 +172,110 @@ func TestComposition_OutputLimitStopsGoalRoundsForEveryProvider(t *testing.T) {
 			}
 			if ends != 2 || len(model.requests()) != 2 {
 				t.Fatalf("turns=%d requests=%d", ends, len(model.requests()))
+			}
+		})
+	}
+}
+
+func TestComposition_OldRoundEndingPreservesNewGoal(t *testing.T) {
+	for _, outcome := range []session.TurnOutcome{session.OutcomeError, session.OutcomeMaxTokens} {
+		t.Run(string(outcome), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			t.Setenv("OPENAI_API_KEY", "test-key")
+			ending := make(chan struct{})
+			release := sync.OnceFunc(func() { close(ending) })
+			t.Cleanup(release)
+			model := &goalModel{started: make(chan int, 16)}
+			model.server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				body, _ := io.ReadAll(request.Body)
+				model.mu.Lock()
+				index := len(model.bodies)
+				model.bodies = append(model.bodies, string(body))
+				model.mu.Unlock()
+				model.started <- index
+				if index != 0 {
+					<-request.Context().Done()
+					return
+				}
+				select {
+				case <-ending:
+				case <-request.Context().Done():
+					return
+				}
+				writer.Header().Set("Content-Type", "text/event-stream")
+				if outcome == session.OutcomeError {
+					_, _ = io.WriteString(writer, "data: {\"type\":\"response.failed\"}\n\n")
+				} else {
+					_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\ndata: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n")
+				}
+			}))
+			t.Cleanup(model.server.Close)
+			config := goalConfig(t, model.server.URL, t.TempDir())
+			app, err := composeApplication(config, dependencies{httpClient: model.server.Client()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			observed := &observedSettlement{Service: app.goals, checked: make(chan *appGoal.View, 16)}
+			for i, component := range app.plugins {
+				if component.ID() == "goal-driver" {
+					app.plugins[i], err = appGoal.NewDriver(observed, app.root)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			runtime, err := plugin.New(app.plugins...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runtime.Start(ctx); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+			old, err := app.goals.Create(ctx, "session-goal", "old goal", nil, appGoal.ActorHost)
+			if err != nil {
+				t.Fatal(err)
+			}
+			model.awaitRequest(t, 0)
+			if err := app.goals.Clear(ctx, "session-goal", old.Goal.Ref(), appGoal.ActorHost); err != nil {
+				t.Fatal(err)
+			}
+			authorized, err := app.goals.Create(ctx, "session-goal", "new goal", nil, appGoal.ActorHost)
+			if err != nil {
+				t.Fatal(err)
+			}
+			release()
+			for {
+				select {
+				case view := <-observed.checked:
+					if view == nil || view.Goal.Ref() != authorized.Goal.Ref() {
+						continue
+					}
+					if view.Goal.Phase != session.GoalActive || !view.Armed {
+						t.Fatalf("old %s revoked new goal: %+v", outcome, view)
+					}
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+				break
+			}
+			model.awaitRequest(t, 1)
+			if err := runtime.Shutdown(ctx); err != nil {
+				t.Fatal(err)
+			}
+			events := readTranscript(t, filepath.Join(config.sessionRoot, "session-goal.jsonl"))
+			var created, stopped uint64
+			for _, event := range events {
+				if record := event.Record; record.Type == session.RecordGoalChange && record.Goal.Operation == session.GoalOpCreate && record.Goal.Snapshot.Ref() == authorized.Goal.Ref() {
+					created = event.Sequence
+				}
+				if record := event.Record; record.Type == session.RecordTurnEnd && record.Turn == 1 && record.Outcome == outcome {
+					stopped = event.Sequence
+				}
+			}
+			if created == 0 || stopped <= created || len(model.requests()) != 2 {
+				t.Fatalf("create=%d old stop=%d requests=%d", created, stopped, len(model.requests()))
 			}
 		})
 	}

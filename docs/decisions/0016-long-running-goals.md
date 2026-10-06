@@ -49,12 +49,12 @@
 
 ### 核心循环变化
 
-engine 增加按 source kind 注册的 `Admission`（`Engine.RegisterAdmission`，scope 所有）。worker 取出 turn 后，若开场消息的 kind 已注册，admission 在排除并发状态变化的同时调用 `open` 提交 `turn/start` 与开场 `user/message`，或以 `agent.ErrNotAdmitted` 丢弃。被丢弃的 turn 不写任何记录，`TurnResult` 没有 turn 与 outcome，也不覆盖 `Status().Last`。目标服务为 `goal` 注册 admission：持有与变更相同的锁，只接纳当前 active、armed revision 的下一轮，且日志中最近一次撤销性停止（被取消、失败或输出截断的 turn）之后已有 create/resume。这取代上游的 pre-step 栅栏：陈旧轮次从不进入日志。
+engine 增加按 source kind 注册的 `Admission`（`Engine.RegisterAdmission`，scope 所有）。worker 取出 turn 后，若开场消息的 kind 已注册，admission 在排除并发状态变化的同时调用 `open` 提交 `turn/start` 与开场 `user/message`，或以 `agent.ErrNotAdmitted` 丢弃。被丢弃的 turn 不写任何记录，`TurnResult` 没有 turn 与 outcome，也不覆盖 `Status().Last`。目标服务为 `goal` 注册 admission：持有与变更相同的锁，只接纳当前 active、armed revision 的下一轮，且该 revision 没有被日志中的归属停止（取消、失败或输出截断）撤销。停止归属由 ADR-0018 定义，旧轮次的结局即使晚于新 create/resume，也不撤销新授权。这取代上游的 pre-step 栅栏：陈旧轮次从不进入日志。
 
 `internal/app/goal.Driver`（插件 `goal-driver`）驱动 root agent，不另建 turn 启动路径：
 
 1. 启动时解除该 session 的 armed，并从当前日志末尾开始观察。
-2. 循环等待 root 的 `WhenIdle`（不等待其驻留的 continuable 子代理），然后 `Settle` 自上次以来的事件：被取消的目标轮次在其 revision 仍为当前、active、armed 时暂停（暂停失败则解除），其他被取消的 turn、error 与 `max_tokens` turn 解除读取时 revision 的 armed，之后的 create/resume 抵消前面的停止；旧结算的条件解除不能撤销后来授权的新 ID/revision。step limit 不影响继续。
+2. 循环等待 root 的 `WhenIdle`（不等待其驻留的 continuable 子代理），然后 `Settle` 自上次以来的事件：被取消的目标轮次在其 revision 仍为当前、active、armed 时暂停（暂停失败则解除），error 与 `max_tokens` 目标轮次只解除其开场消息所属 ID/revision 的 armed，非目标轮次的取消、error 或 `max_tokens` 解除结束时当前 revision；之后的 create/resume 抵消前面的停止。新授权即使先于旧轮次结束，也不受旧结局影响。step limit 不影响继续。
 3. 目标 active 且 armed 时：达到上限以 `round-limit` 阻塞；否则用 `Followup` 排入上游原文的 `<goal_round>` 提示并等待其结果。排队失败以 `queue-failed` 阻塞；admission 拒绝后若下一次计算出的轮次来源不变（既无新 revision 也未被撤销），以 `prompt-rejected` 阻塞。非准入拒绝的轮次错误（含没有 `turn/end` 的开场追加/fsync 失败）解除该轮次 revision 的 armed，不重排；否则等待目标变更通知。
 4. watcher 收到人类（`ActorHost`）的 pause 时中断当前 turn；模型与 driver 的 pause 不中断。
 5. cleanup 先解除 armed（排队中的轮次因此被 admission 拒绝），再取消循环；在途轮次被中断并等待结果，受 shutdown 期限约束。driver 最后启动，因此在目标服务撤回 admission 之前停止。

@@ -530,5 +530,19 @@
     "before": "return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, width: image.Width, height: image.Height}",
     "after": "return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, width: image.Width}",
     "test": "^TestResolveImages_VerifiesEveryReferenceToOneObject$"
+  },
+  {
+    "id": "goal-stop-round-owner",
+    "file": "internal/app/goal/goal.go",
+    "before": "if round != nil {\n\t\t\t\tref = round\n\t\t\t}",
+    "after": "if false {\n\t\t\t\tref = round\n\t\t\t}",
+    "test": "^TestService_SettleUsesStoppedRoundRef$"
+  },
+  {
+    "id": "goal-admission-stop-owner",
+    "file": "internal/app/goal/goal.go",
+    "before": "outcome.disarm != nil && *outcome.disarm == ref",
+    "after": "outcome.disarm != nil",
+    "test": "^TestService_SettleUsesStoppedRoundRef$"
   }
 ]

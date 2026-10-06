@@ -503,7 +503,7 @@ func (service *Service) Admit(ctx context.Context, journal agent.Journal, messag
 		return err
 	}
 	source, current := message.Source, state.Goal
-	if current == nil || current.Phase != session.GoalActive || service.armed[journal.Header().SessionID] != current.Ref() || source.GoalID != current.ID || source.GoalRevision != current.Revision || source.GoalRound != state.RoundsStarted+1 || source.GoalRound > current.MaxRounds || settle(events, 0).revoked() {
+	if current == nil || current.Phase != session.GoalActive || service.armed[journal.Header().SessionID] != current.Ref() || source.GoalID != current.ID || source.GoalRevision != current.Revision || source.GoalRound != state.RoundsStarted+1 || source.GoalRound > current.MaxRounds || settle(events, 0).revoked(current.Ref()) {
 		return agent.ErrNotAdmitted
 	}
 	return open(ctx)
@@ -511,9 +511,9 @@ func (service *Service) Admit(ctx context.Context, journal agent.Journal, messag
 
 // Settle applies the turns committed after sequence after: a cancelled
 // goal round pauses its own revision if it is still current, active, and
-// armed, and any other cancelled turn, failed turn, or output-token limit
-// disarms the observed revision unless a later create or resume armed it
-// again. It returns the last
+// armed. Errors and output limits disarm their round's opening revision;
+// stops outside goal rounds disarm the revision current at the ending.
+// A later create or resume keeps its own activation. It returns the last
 // sequence it examined.
 func (service *Service) Settle(ctx context.Context, sessionID string, after uint64) (uint64, error) {
 	journal, err := service.journal(sessionID)
@@ -546,8 +546,8 @@ func (service *Service) Settle(ctx context.Context, sessionID string, after uint
 			return last, err
 		}
 	}
-	if outcome.disarm && state.Goal != nil {
-		service.DisarmRevision(sessionID, state.Goal.Ref())
+	if outcome.disarm != nil {
+		service.DisarmRevision(sessionID, *outcome.disarm)
 	}
 	return last, nil
 }
@@ -562,24 +562,30 @@ func (service *Service) isArmed(sessionID string) bool {
 type settlement struct {
 	// pause names the revision of a cancelled goal round.
 	pause *session.GoalRef
-	// disarm reports a cancelled non-round turn, failure, or output-token limit.
-	disarm bool
+	// disarm names the revision stopped by cancellation, failure, or output limit.
+	disarm *session.GoalRef
 }
 
-func (outcome settlement) revoked() bool { return outcome.pause != nil || outcome.disarm }
+func (outcome settlement) revoked(ref session.GoalRef) bool {
+	return outcome.pause != nil && *outcome.pause == ref || outcome.disarm != nil && *outcome.disarm == ref
+}
 
 // settle scans events after sequence after. A create or resume clears
-// everything an earlier stop implied.
+// everything an earlier stop implied. Earlier events still supply the
+// current goal and the opening revision of a turn crossing the checkpoint.
 func settle(events []session.Event, after uint64) settlement {
 	var outcome settlement
-	var round *session.GoalRef
+	var current, round *session.GoalRef
 	opening := false
 	for _, event := range events {
-		if event.Sequence <= after {
-			continue
-		}
 		record := event.Record
 		switch {
+		case record.Type == session.RecordGoalChange:
+			current = nil
+			if record.Goal.Snapshot != nil {
+				ref := record.Goal.Snapshot.Ref()
+				current = &ref
+			}
 		case record.Type == session.RecordTurnStart:
 			round, opening = nil, true
 		case record.Type == session.RecordUserMessage && opening:
@@ -587,12 +593,21 @@ func settle(events []session.Event, after uint64) settlement {
 			if source := record.Message.Source; source.Kind == session.GoalSource {
 				round = &session.GoalRef{ID: source.GoalID, Revision: source.GoalRevision}
 			}
+		}
+		if event.Sequence <= after {
+			continue
+		}
+		switch {
 		case record.Type == session.RecordGoalChange && (record.Goal.Operation == session.GoalOpCreate || record.Goal.Operation == session.GoalOpResume):
 			outcome = settlement{}
 		case record.Type == session.RecordTurnEnd && record.Outcome == session.OutcomeCanceled && round != nil:
-			outcome.pause = round
+			outcome = settlement{pause: round}
 		case record.Type == session.RecordTurnEnd && (record.Outcome == session.OutcomeCanceled || record.Outcome == session.OutcomeError || record.Outcome == session.OutcomeMaxTokens):
-			outcome.disarm = true
+			ref := current
+			if round != nil {
+				ref = round
+			}
+			outcome = settlement{disarm: ref}
 		}
 	}
 	return outcome
