@@ -40,7 +40,7 @@
 
 ### 读取与请求
 
-- 解析只发生在 provider 请求构造时。`app/llm` 的 `Call.Stream` 先做请求图片预算投影（从 provider 移入，规则不变，base64 长度按 `bytes` 计算），再为保留下来的每个引用读取一次对象，结果以 ID 为键放进 `llm.Request.Images`；provider 只负责 base64 编码和 wire 形态。compaction 摘要请求走同一路径。
+- 解析只发生在 provider 请求构造时。`app/llm` 的 `Call.Stream` 先做请求图片预算投影（从 provider 移入，规则不变，base64 长度按 `bytes` 计算），再读取保留下来的引用，结果以 ID 为键放进 `llm.Request.Images`。读取按“ID、类型、字节数、尺寸”这一声明去重：同一对象的多个相同声明共用一次读取，任何声明不同的引用都单独读取校验，不能借用为另一声明验证过的字节，也就不能以较小的 `bytes` 绕过请求图片预算；provider 只负责 base64 编码和 wire 形态。compaction 摘要请求走同一路径。
 - 读取校验：对象必须是普通文件（不跟随链接），长度等于 `bytes`，SHA-256 等于 `id`，解码头部得到的类型与宽高等于引用。
 - 长度、SHA-256、类型或宽高任一不符都按损坏处理，不一致的字节绝不发给 provider。对象缺失或损坏时，该 occurrence 在本次请求中替换为占位文本 `[image unavailable: "<name>" (<id>) is missing or failed verification in the local attachment store]`，请求照常发送；只有取消、存储已停止和其他 I/O 错误使请求失败。
 - 用户同样能看到：存储在读取发现缺失或损坏时通知已注册的 observer，TUI 为每个图片 ID 显示一次 `attachment> image <name> (sha256:<前 12 位>) is missing from|failed verification in the attachment store; the model sees a placeholder instead`。提示不持久化，只含名称与 ID 前缀，不含路径；通知在构造请求的 goroutine 上非阻塞发送，事件队列满时丢弃，下一次请求会再次报告。
@@ -49,7 +49,7 @@
 
 ### 写入顺序
 
-- 与上游在接受消息时提交草稿一致，`/attach` 只规范化并在内存中保留待发送图片（引用与字节）；TUI 在 `Submit` 或 `Steer` 之前调用 `Commit` 写入对象，`Commit` 先校验字节与引用一致，写入失败则不提交消息。未发送的附件不会在永不清理的存储中留下孤儿对象。
+- 与上游在接受消息时提交草稿一致，`/attach` 只规范化并在内存中保留待发送图片（引用与字节）；TUI 在 `Submit` 或 `Steer` 之前调用 `Commit` 写入对象，`Commit` 先校验字节与引用一致，写入失败则不提交消息。仅准备而未尝试提交的附件不会写入存储；`Commit` 成功后消息提交失败，已写入的对象仍然保留。
 - `read_image` 规范化并保存后才返回结果，engine 随后追加带引用的 `tool/result`：先持久化事实，再更新投影。
 - fork child 的种子复制引用，parent 与 child 共享同一对象，不再复制字节。
 
@@ -74,8 +74,8 @@
 代价与风险：
 
 - 新增一个持久化位置及其权限、fsync 与校验逻辑；会话文件不再自包含，备份必须包含附件根。
-- 对象永不删除，长期使用会累积磁盘占用，未发送的 `/attach` 也会留下对象。
-- 每个请求为保留的图片各读一次文件并计算摘要；没有上游的请求版本缓存。
+- 对象永不删除，长期使用会累积磁盘占用；仅执行 `/attach` 不写入对象，但尝试提交时写入的对象不会因消息提交失败或会话删除而回收。
+- 每个请求为保留的不同内容声明各读一次文件并计算摘要；没有上游的请求版本缓存。
 - 附件缺失时模型只看到占位文本，图片内容不可恢复。
 
 ## 被否决方案

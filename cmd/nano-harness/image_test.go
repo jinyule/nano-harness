@@ -432,3 +432,46 @@ func TestComposition_DamagedAttachmentsBecomePlaceholders(t *testing.T) {
 		})
 	}
 }
+
+// TestComposition_ConflictingReferencesToOneObjectBecomePlaceholders proves
+// with the real store that a later reference to an already verified object
+// is verified on its own: after the transcript understates the second
+// reference's size, the next request keeps the first image and sends the
+// placeholder for the second instead of its bytes.
+func TestComposition_ConflictingReferencesToOneObjectBecomePlaceholders(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	scripted := newImageServer(t)
+	root, data := t.TempDir(), t.TempDir()
+	writeWidePNG(t, filepath.Join(root, "shots", "wide.png"))
+	config := imageConfig(t, scripted.server.URL, root, data, true)
+	runImageTurn(t, config, scripted.server.Client(), "describe shots/wide.png")
+	config.create = false
+	runImageTurn(t, config, scripted.server.Client(), "describe it again")
+	transcript := filepath.Join(data, "sessions", "session-image.jsonl")
+	results := imageResults(readTranscript(t, transcript))
+	if len(results) != 2 || results[0].Image == nil || results[1].Image == nil || results[0].Image.ID != results[1].Image.ID {
+		t.Fatalf("tool results = %+v", results)
+	}
+	ref := results[1].Image
+	log, err := os.ReadFile(transcript) //nolint:gosec // the path is rooted in this test's private temporary directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := fmt.Sprintf(`"bytes":%d,"width":%d`, ref.Bytes, ref.Width)
+	last := bytes.LastIndex(log, []byte(claim))
+	if last < 0 || bytes.Index(log, []byte(claim)) == last {
+		t.Fatal("the transcript lacks two references to change")
+	}
+	understated := fmt.Sprintf(`"bytes":%d,"width":%d`, ref.Bytes-1, ref.Width)
+	changed := append(append(append([]byte(nil), log[:last]...), understated...), log[last+len(claim):]...)
+	if err := os.WriteFile(transcript, changed, 0o600); err != nil { //nolint:gosec // the path is rooted in this test's private temporary directory
+		t.Fatal(err)
+	}
+	runImageTurn(t, config, scripted.server.Client(), "and again")
+	requests := scripted.requests()
+	request := requests[len(requests)-1]
+	placeholder := `[image unavailable: \"wide.png\" (` + ref.ID + `) is missing or failed verification in the local attachment store]`
+	if strings.Count(request, "input_image") != 1 || strings.Count(request, placeholder) != 1 {
+		t.Fatalf("request keeps %d images and %d placeholders", strings.Count(request, "input_image"), strings.Count(request, placeholder))
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -19,11 +20,11 @@ func (noImages) ReadImage(context.Context, session.Image) ([]byte, error) {
 	return nil, session.ErrAttachmentMissing
 }
 
-// mapImages serves stored bytes by ID and counts reads; failures maps an
-// ID to the error its read returns.
+// mapImages counts reads and rejects references that disagree with truth.
 type mapImages struct {
 	mu       sync.Mutex
 	data     map[string][]byte
+	truth    map[string]session.Image
 	failures map[string]error
 	reads    map[string]int
 }
@@ -37,6 +38,9 @@ func (images *mapImages) ReadImage(_ context.Context, image session.Image) ([]by
 	images.reads[image.ID]++
 	if err := images.failures[image.ID]; err != nil {
 		return nil, err
+	}
+	if stored, ok := images.truth[image.ID]; ok && (stored.Bytes != image.Bytes || stored.MediaType != image.MediaType || stored.Width != image.Width || stored.Height != image.Height) {
+		return nil, session.ErrAttachmentCorrupt
 	}
 	return images.data[image.ID], nil
 }
@@ -176,5 +180,89 @@ func TestCallStream_AttachesVerifiedBytesOnlyForVisionModels(t *testing.T) {
 func TestQuoteJSON_MatchesJSONStringify(t *testing.T) {
 	if got := quoteJSON("a\"<b>&\n"); got != `"a\"<b>&\n"` {
 		t.Fatalf("quoted = %s", got)
+	}
+}
+
+func TestResolveImages_VerifiesEveryReferenceToOneObject(t *testing.T) {
+	stored := refImage("shot.png", 3)
+	for _, test := range []struct {
+		name   string
+		change func(*session.Image)
+	}{
+		{"bytes", func(image *session.Image) { image.Bytes = 1 }},
+		{"media-type", func(image *session.Image) { image.MediaType = "image/png" }},
+		{"width", func(image *session.Image) { image.Width = 9 }},
+		{"height", func(image *session.Image) { image.Height = 9 }},
+	} {
+		for _, corruptFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/corrupt-first=%t", test.name, corruptFirst), func(t *testing.T) {
+				conflicting := *stored
+				test.change(&conflicting)
+				again := *stored
+				again.Name = "renamed.png"
+				images := &mapImages{data: map[string][]byte{stored.ID: []byte("abc")}, truth: map[string]session.Image{stored.ID: *stored}}
+				surface := []session.SurfaceNode{
+					{Message: userImages(stored, &conflicting)},
+					{Result: &session.ToolResult{CallID: "bad", Output: "second", Image: &conflicting}},
+					{Result: &session.ToolResult{CallID: "good", Output: "third", Image: &again}},
+				}
+				if corruptFirst {
+					surface[0].Message = userImages(&conflicting, stored)
+				}
+				resolved, data, err := resolveImages(context.Background(), images, surface)
+				if err != nil {
+					t.Fatal(err)
+				}
+				goodBlock, badBlock := 1, 2
+				if corruptFirst {
+					goodBlock, badBlock = 2, 1
+				}
+				content := resolved[0].Message.Content
+				if content[goodBlock].Image != stored || resolved[2].Result.Image != &again || len(data) != 1 || string(data[stored.ID]) != "abc" {
+					t.Fatalf("matching references were not kept: %#v %#v", content, resolved[2].Result)
+				}
+				placeholder := `[image unavailable: "shot.png" (` + stored.ID + `) is missing or failed verification in the local attachment store]`
+				if content[badBlock].Type != session.ContentText || content[badBlock].Text != placeholder || resolved[1].Result.Image != nil || resolved[1].Result.Output != "second\n"+placeholder {
+					t.Fatalf("conflicting references = %#v %#v", content[badBlock], resolved[1].Result)
+				}
+				if surface[0].Message.Content[badBlock].Image != &conflicting || surface[1].Result.Image != &conflicting {
+					t.Fatal("resolution changed the input surface")
+				}
+				if images.reads[stored.ID] != 2 {
+					t.Fatalf("reads = %v", images.reads)
+				}
+			})
+		}
+	}
+}
+
+func TestCallStream_KeepsTheImagePayloadWithinTheBudget(t *testing.T) {
+	stored := refImage("large.png", session.MaxImageBytes)
+	images := &mapImages{data: map[string][]byte{stored.ID: make([]byte, session.MaxImageBytes)}, truth: map[string]session.Image{stored.ID: *stored}}
+	surface := []session.SurfaceNode{{Result: &session.ToolResult{CallID: "real", Output: "real", Image: stored}}}
+	for index := range 5 {
+		understated := *stored
+		understated.Bytes = 1
+		surface = append(surface, session.SurfaceNode{Result: &session.ToolResult{CallID: fmt.Sprintf("small-%d", index), Output: "small", Image: &understated}})
+	}
+	prepared := &fakePrepared{info: ModelInfo{ID: "vision", Vision: true}}
+	call := &Call{provider: "fake", prepared: prepared, images: images}
+	if _, err := call.Stream(context.Background(), Request{Surface: surface}, func(session.AssistantChunk) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	payload, kept, omitted := 0, 0, 0
+	for _, node := range prepared.request.Surface {
+		if node.Result != nil && node.Result.Image != nil {
+			payload += base64Length(len(prepared.request.Images[node.Result.Image.ID]))
+			kept++
+		} else if node.Result != nil && strings.Contains(node.Result.Output, "[image unavailable:") {
+			omitted++
+		}
+	}
+	if payload == 0 || payload > maxRequestImageBytes {
+		t.Fatalf("request image payload = %d bytes, budget %d", payload, maxRequestImageBytes)
+	}
+	if kept != 1 || omitted != 5 || images.reads[stored.ID] != 2 {
+		t.Fatalf("kept=%d omitted=%d reads=%v", kept, omitted, images.reads)
 	}
 }

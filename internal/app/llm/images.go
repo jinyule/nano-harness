@@ -69,9 +69,26 @@ func fitImages(surface []session.SurfaceNode) []session.SurfaceNode {
 	return replaceImages(surface, occurrences[:keep], offloadedImageText)
 }
 
-// resolveImages reads every image the surface still references, once per
-// ID. An image whose object is missing or fails verification is replaced by
-// a placeholder for this request, so a damaged store never blocks a session;
+// imageContent is what a read verifies against the stored object: the
+// content address and the metadata the reference claims for it. The display
+// name is not part of the content.
+type imageContent struct {
+	id            string
+	mediaType     string
+	bytes         int
+	width, height int
+}
+
+func contentOf(image *session.Image) imageContent {
+	return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, width: image.Width, height: image.Height}
+}
+
+// resolveImages reads every image the surface still references. References
+// that make the same claim about one object share a read; a reference whose
+// metadata differs is read and verified on its own, so it can never borrow
+// bytes verified for another claim and understate the request payload. An
+// image whose object is missing or fails verification is replaced by a
+// placeholder for this request, so a damaged store never blocks a session;
 // any other read failure fails the request.
 func resolveImages(ctx context.Context, reader ImageReader, surface []session.SurfaceNode) ([]session.SurfaceNode, map[string][]byte, error) {
 	occurrences := imageOccurrences(surface)
@@ -79,22 +96,23 @@ func resolveImages(ctx context.Context, reader ImageReader, surface []session.Su
 		return surface, nil, nil
 	}
 	images := map[string][]byte{}
-	unavailable := map[string]bool{}
+	verified := map[imageContent]bool{}
 	var omitted []imageOccurrence
 	for _, occurrence := range occurrences {
-		id := occurrence.image.ID
-		if _, read := images[id]; !read && !unavailable[id] {
+		content := contentOf(occurrence.image)
+		available, read := verified[content]
+		if !read {
 			data, err := reader.ReadImage(ctx, *occurrence.image)
 			switch {
 			case errors.Is(err, session.ErrAttachmentMissing), errors.Is(err, session.ErrAttachmentCorrupt):
-				unavailable[id] = true
 			case err != nil:
-				return nil, nil, fmt.Errorf("read request image %s: %w", id, err)
+				return nil, nil, fmt.Errorf("read request image %s: %w", content.id, err)
 			default:
-				images[id] = data
+				images[content.id], available = data, true
 			}
+			verified[content] = available
 		}
-		if unavailable[id] {
+		if !available {
 			omitted = append(omitted, occurrence)
 		}
 	}

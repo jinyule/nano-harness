@@ -73,7 +73,11 @@ class Fixture(http.server.BaseHTTPRequestHandler):
                 self.emit("response.output_text.delta", delta="WAITING_FOR_INTERRUPT")
                 self.server.stopping.wait()
                 return
-            if "<goal_complete>" in task:
+            if task == "IMAGE_REPLAY":
+                self.server.replay_inputs = inputs
+                call = None
+                text = "IMAGE_REPLAY_DONE"
+            elif "<goal_complete>" in task:
                 call = None
                 text = "GOAL_CLOSED"
             elif "<goal_round>" in task:
@@ -397,16 +401,36 @@ def verify(binary):
                     assert own[0]["subagent"]["provider"] == "fork" and own[0]["subagent"].get("inherited", 0) == 0
                     assert not [entry for entry in own if entry["type"] == "tool/call"] and "CHILD_FORK_OK" in json.dumps(own)
             assert not list((directory / "sessions").glob("*.lock"))
+            # Keep the first reference intact and corrupt only the later claim.
+            assert image["id"] == attached[0]["id"], "the fixture must reference one shared object"
+            image["bytes"] -= 1
+            transcript = directory / "sessions" / "session-pty.jsonl"
+            transcript.write_text("".join(json.dumps(entry) + "\n" for entry in root))
             terminal = Terminal(binary, directory, workspace, settings)
             try:
                 terminal.expect("turn> canceled")
                 assert b"plan>" not in terminal.output, "a later turn/start must clear the replayed plan"
+                terminal.send("IMAGE_REPLAY\r")
+                terminal.expect("attachment> image pixel.png (" + image["id"][:19] + ")")
+                terminal.expect("failed verification in the attachment store")
+                terminal.expect("IMAGE_REPLAY_DONE")
+                terminal.expect("turn> completed")
+                inputs = server.replay_inputs
+                sent_images = [part["image_url"] for item in inputs for part in item.get("content", [])
+                               if part.get("type") == "input_image"]
+                assert sent_images == [stored_image(directory, attached[0])], "the valid reference must keep its image"
+                image_output = next(item["output"] for item in inputs
+                                    if item.get("type") == "function_call_output" and item["call_id"] == "call-4")
+                placeholder = '[image unavailable: "pixel.png" (' + image["id"] + ') is missing or failed verification in the local attachment store]'
+                assert isinstance(image_output, str) and placeholder in image_output, image_output
                 terminal.send("/quit\r")
                 terminal.expect("\x1b[?1049l")
                 assert terminal.process.wait(timeout=10) == 0
             finally:
                 terminal.close()
-            print("PASS: real binary/PTY, 19 root tool calls, /attach and read_image through the attachment store, todo plan, background job notice, question answers, plan review, /goal round completion, spawn/fork children, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
+            assert not list((directory / "sessions").glob("*.lock"))
+            assert "attachment>" not in transcript.read_text(), "attachment notices must not be persisted"
+            print("PASS: real binary/PTY, 19 root tool calls, /attach and read_image through the attachment store, conflicting reference placeholder and TUI notice, todo plan, background job notice, question answers, plan review, /goal round completion, spawn/fork children, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
 
 
 def main():

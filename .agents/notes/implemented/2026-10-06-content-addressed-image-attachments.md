@@ -17,7 +17,7 @@
 
 - `internal/core/session`：`Image` 改为引用 `{id: "sha256:<hex>", name, media_type, bytes, width, height}`，删除 `data` 与 `sha256`；`ImageID`/`ImageDigest` 构造与解析标识；新增 `ErrAttachmentMissing`、`ErrAttachmentCorrupt`。
 - `internal/adapter/attachment`（插件 `attachments`，取代 `media/image` 与 `images`）：规范化原样迁入，校验引用改用 `tool/result` 记录，不再构造 `user` 来源。本地存储在 `<root>/v1/objects/<sha256[:2]>/<sha256>`：`v1/tmp` 中 `O_EXCL`/`0600` 暂存、`fsync`、排他硬链接发布、已存在对象先校验再去重、`0400`、同步目录；`Start` 校验 owner-only 根（可为链接）与 `0700` 真实子目录，并同步存储目录到文件系统根。`SaveImage`（`read_image`）、`PrepareFile`/`Commit`（`/attach`）、`ReadImage`（校验长度、摘要、类型、宽高，不跟随链接）与 `ObserveUnavailable`。cleanup 拒绝新操作并等待进行中的操作；目录同步按平台分文件，Windows 为空操作。
-- `internal/app/llm`：`New(store, images ImageReader)`；`Call.Stream` 先做请求图片预算投影（从 provider 移入，按 `bytes` 计算 base64 长度），vision 模型再按 ID 读取保留下来的图片，放进 `Request.Images`；缺失或损坏换成 unavailable 占位文本，其他读取错误使请求失败。
+- `internal/app/llm`：`New(store, images ImageReader)`；`Call.Stream` 先做请求图片预算投影（从 provider 移入，按 `bytes` 计算 base64 长度），vision 模型再读取保留下来的图片，放进 `Request.Images`；相同内容声明共用读取，冲突引用的校验修复见[逐引用校验 Note](2026-10-06-attachment-occurrence-verification.md)。缺失或损坏换成 unavailable 占位文本，其他读取错误使请求失败。
 - provider：从 `Request.Images` 编码 base64，没有字节的引用是非法请求；wire 形态不变。
 - `read_image` 依赖 `ImageStore.SaveImage`，图片持久化后才返回结果；信封的字节数取自引用。
 - TUI：`/attach` 只规范化并保留引用与字节，`Submit`/`Steer` 前 `Commit`，失败不提交消息；注册 observer，每个不可用图片 ID 显示一次不持久化的 `attachment>` 提示；结果行显示 ID 前缀。
@@ -31,7 +31,7 @@
 
 ## Consequences
 
-会话体积与图片数量无关，fork 共享对象，每次请求读取都完整校验；`/attach` 未发送的图片不留对象。代价是新增一个永不清理的持久化位置，会话文件不再自包含（备份必须包含附件根），每个请求为保留的图片各读一次文件并计算摘要。附件缺失时模型只看到占位文本，用户在 TUI 看到一次提示。
+会话体积与图片数量无关，fork 共享对象，每次请求读取都完整校验；`/attach` 只准备的图片不留对象。代价是新增一个永不清理的持久化位置，会话文件不再自包含（备份必须包含附件根），每个请求为保留的不同内容声明各读一次文件并计算摘要。附件缺失时模型只看到占位文本，用户在 TUI 看到一次提示。
 
 分支已 rebase 到集成分支 `aacd1bd`：attachments 在 WP1 的新插件顺序中排在 LLM runtime、文件工具与 agent 层之前，`TestComposition_StartOrderEncodesShutdownQuiescence` 另外断言这一点；`00a9b30` 对 provider 与 `llm.Request` 的修改与本 WP 的图片字节传递并存。
 

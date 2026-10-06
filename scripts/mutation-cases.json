@@ -502,5 +502,33 @@
     "before": "state.selected == nil && state.current().MultiSelect && len(answer.Selected) > 0",
     "after": "false && state.selected == nil && state.current().MultiSelect && len(answer.Selected) > 0",
     "test": "^TestModelQuestion_MultiSelectKeepsChoicesForCustomStep$"
+  },
+  {
+    "id": "attachment-reference-claim",
+    "file": "internal/app/llm/images.go",
+    "before": "return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, width: image.Width, height: image.Height}",
+    "after": "return imageContent{id: image.ID, mediaType: image.MediaType, width: image.Width, height: image.Height}",
+    "test": "^Test(ResolveImages_VerifiesEveryReferenceToOneObject|CallStream_KeepsTheImagePayloadWithinTheBudget)$"
+  },
+  {
+    "id": "attachment-reference-media-type",
+    "file": "internal/app/llm/images.go",
+    "before": "return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, width: image.Width, height: image.Height}",
+    "after": "return imageContent{id: image.ID, bytes: image.Bytes, width: image.Width, height: image.Height}",
+    "test": "^TestResolveImages_VerifiesEveryReferenceToOneObject$"
+  },
+  {
+    "id": "attachment-reference-width",
+    "file": "internal/app/llm/images.go",
+    "before": "return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, width: image.Width, height: image.Height}",
+    "after": "return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, height: image.Height}",
+    "test": "^TestResolveImages_VerifiesEveryReferenceToOneObject$"
+  },
+  {
+    "id": "attachment-reference-height",
+    "file": "internal/app/llm/images.go",
+    "before": "return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, width: image.Width, height: image.Height}",
+    "after": "return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, width: image.Width}",
+    "test": "^TestResolveImages_VerifiesEveryReferenceToOneObject$"
   }
 ]
