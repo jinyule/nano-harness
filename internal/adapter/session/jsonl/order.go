@@ -102,8 +102,8 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 			if record.Turn != state.turn || record.Step != state.step {
 				return state, orderError("todo/write outside active step")
 			}
-			if _, exists := callNames[record.Todo.CallID]; !exists {
-				return state, orderError("todo/write has no pending call")
+			if callNames[record.Todo.CallID] != "todo_write" {
+				return state, orderError("todo/write does not name a pending todo_write call")
 			}
 			if _, exists := todoCalls[record.Todo.CallID]; exists {
 				return state, orderError("duplicate todo/write for call %q", record.Todo.CallID)

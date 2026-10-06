@@ -3,6 +3,7 @@ package question
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -262,5 +263,39 @@ func TestService_AskReturnsDetachedAnswersInRequestOrder(t *testing.T) {
 	selected[0] = "mutated"
 	if answers[0].Selected[0] != "UI" {
 		t.Fatal("answers alias the broker's slices")
+	}
+}
+
+func TestService_CancellationWinsOverBrokerAnswers(t *testing.T) {
+	for _, brokerErr := range []error{nil, ErrCancelled, errors.New("broker failed")} {
+		t.Run(fmt.Sprint(brokerErr), func(t *testing.T) {
+			service, _ := startService(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			entered := make(chan struct{})
+			if err := service.RegisterBroker(brokerFunc(func(ctx context.Context, _ Request) ([]Answer, error) {
+				close(entered)
+				<-ctx.Done()
+				return []Answer{{ID: "plan-review", Selected: []string{"Approve"}}}, brokerErr
+			}), &plugin.Scope{}); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan struct{})
+			var answers []Answer
+			var err error
+			go func() {
+				defer close(done)
+				answers, err = service.Ask(ctx, Request{Questions: []Question{{
+					ID: "plan-review", Text: "Approve?", Detail: "# Plan", Options: []Option{{Label: "Approve"}},
+					Intent: &Intent{Kind: IntentPlanReview, Approve: "Approve"},
+				}}})
+			}()
+			t.Cleanup(func() { cancel(); <-done })
+			<-entered
+			cancel()
+			<-done
+			if !errors.Is(err, ErrAborted) || answers != nil {
+				t.Fatalf("cancelled review = %+v, %v; want no answers and ErrAborted", answers, err)
+			}
+		})
 	}
 }

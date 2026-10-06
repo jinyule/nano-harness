@@ -13,6 +13,8 @@
 
 ## Decision
 
+job 名额测试的结算屏障证据见[边界修复 Note](2026-10-06-spill-question-and-call-validation.md)；本 Note 保留后台任务的产品决定与原始验证。
+
 长期契约记录在 [ADR-0009](../../../docs/decisions/0009-background-jobs.md)，当前事实分别归[架构](../../../docs/architecture.md#后台任务)、[安全](../../../docs/security.md#approvalshell-与进程)和[测试](../../../docs/testing.md#agent-与工具证据)文档。本次实施：
 
 - 新增 `internal/app/job`（插件 `jobs`）。producer 用 `Launch(Spec)` 提交阻塞式 `Run(ctx, *Output) Outcome`，服务在自己的 `WaitGroup` goroutine 中运行它；`Kill` 与关闭取消 `ctx`。effect/cleanup 对：`Start` 登记 `stop`，后者拒绝新 job、把活动 job 标为 `stopping` 并取消、等待全部 producer 返回、丢弃记录。所有操作校验调用方 session；每 owner 最多 10 个活动 job；输出环运行中 128 KiB、首次终态读取后 16 KiB；writer 暂存被拆开的 UTF-8 尾部；producer panic 收敛为 `failed`。

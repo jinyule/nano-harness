@@ -83,6 +83,7 @@ func TestSessionV2_RejectsChangedContract(t *testing.T) {
 		{"sequence-gap", `"seq":2`, `"seq":3`, ErrCorruptSession},
 		{"unknown-record", `"type":"turn/start"`, `"type":"turn/unknown"`, ErrCorruptSession},
 		{"causal-step", `"type":"step/start","turn":1,"step":1`, `"type":"step/start","turn":1,"step":2`, ErrCorruptSession},
+		{"decision-call-reference", `"outcome":"allowed-once"`, `"outcome":"allowed-once","call_id":"other"`, ErrCorruptSession},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			file := temporaryFile(t)

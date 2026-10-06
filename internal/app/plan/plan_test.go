@@ -94,7 +94,7 @@ func TestService_Lifecycle(t *testing.T) {
 	if _, err := service.Step(t.Context(), journal, 1); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("step before start = %v", err)
 	}
-	if err := service.Exit("s"); !errors.Is(err, ErrNotRunning) {
+	if err := service.Exit(t.Context(), "s"); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("exit before start = %v", err)
 	}
 	service, scope := startPlan(t)
@@ -220,7 +220,7 @@ func TestService_SelectCancelsAPendingIdleOpposite(t *testing.T) {
 func TestService_ExitAppliesAtTheNextBoundaryWithoutNotice(t *testing.T) {
 	service, _ := startPlan(t)
 	journal := &memoryJournal{id: "s"}
-	if err := service.Exit("s"); !errors.Is(err, ErrInactive) {
+	if err := service.Exit(t.Context(), "s"); !errors.Is(err, ErrInactive) {
 		t.Fatalf("exit outside plan mode = %v", err)
 	}
 	journal.record(session.Record{Type: session.RecordPlanMode, Plan: &session.PlanMode{Active: true}})
@@ -232,7 +232,7 @@ func TestService_ExitAppliesAtTheNextBoundaryWithoutNotice(t *testing.T) {
 	if _, err := service.Select(t.Context(), journal, false, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Exit("s"); err != nil {
+	if err := service.Exit(t.Context(), "s"); err != nil {
 		t.Fatal(err)
 	}
 	if !service.Active("s") {
@@ -243,6 +243,35 @@ func TestService_ExitAppliesAtTheNextBoundaryWithoutNotice(t *testing.T) {
 	}
 	if got := journal.tail(3); !equal(got, []string{"plan/mode=off"}) {
 		t.Fatalf("approval records = %v", got)
+	}
+}
+
+func TestService_CancelledExitKeepsPlanMode(t *testing.T) {
+	service, _ := startPlan(t)
+	journal := &memoryJournal{id: "s"}
+	if _, err := service.Select(t.Context(), journal, true, false); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	entered := make(chan struct{})
+	done := make(chan error, 1)
+	service.mu.Lock()
+	go func() {
+		close(entered)
+		done <- service.Exit(ctx, "s")
+	}()
+	<-entered
+	cancel()
+	service.mu.Unlock()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled exit = %v", err)
+	}
+	if section, err := service.Step(t.Context(), journal, 1); err != nil || section != Section {
+		t.Fatalf("next boundary = %q, %v", section, err)
+	}
+	if len(journal.events) != 1 || !session.ProjectPlan(journal.events).Active {
+		t.Fatalf("cancelled exit changed the journal: %+v", journal.events)
 	}
 }
 

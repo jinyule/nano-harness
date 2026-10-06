@@ -156,6 +156,7 @@ func TestRecordValidateRejectsEveryInvalidShape(t *testing.T) {
 		"approval shape":            {Type: RecordApprovalAsked, Turn: 1, Step: 1},
 		"approval asked":            {Type: RecordApprovalAsked, Turn: 1, Step: 1, Approval: &ApprovalData{}},
 		"approval decided":          {Type: RecordApprovalDecided, Turn: 1, Step: 1, Approval: validApproval},
+		"decision call reference":   {Type: RecordApprovalDecided, Turn: 1, Step: 1, Approval: &ApprovalData{ID: "approval", CallID: "other", Outcome: ApprovalAllowedOnce}},
 		"approval policy":           {Type: RecordApprovalPolicy, Approval: &ApprovalData{Policy: "bad"}},
 		"retry shape":               {Type: RecordRetry, Turn: 1, Step: 1},
 		"retry identity":            {Type: RecordRetry, Turn: 1, Step: 1, Retry: &RetryData{}},

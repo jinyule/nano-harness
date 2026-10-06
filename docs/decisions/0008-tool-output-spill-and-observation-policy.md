@@ -22,7 +22,7 @@
 `internal/adapter/spill` 是 `spill-local` 插件，实现 `internal/app/tool.SpillStore`。
 
 - 根目录由 `--spill-root` 配置，默认是用户配置目录下的 `nano-harness/spill`。启动时创建为 `0700`；根目录可以是链接，但解析后必须是 owner-only 目录，否则启动失败。配置解析时对 spill 根目录已存在的最长前缀解析链接，它与解析后的 workspace 互相包含时启动失败：例如以 home 目录作为 `--root` 时，默认的 `~/.config` 或 `~/Library` 位置会落进 workspace，必须另选 `--spill-root`。
-- 每个 workspace 一个分区 `workspace-<sha256(workspace) 前 16 位十六进制>`，必须是真实的 owner-only 目录，不能是链接。分区内按会话分组 `session-<sha256(session ID) 前 12 位>`，文件名是 12 位随机十六进制加名称提示，例如 `3f…a1-grep-results.txt`。名称提示只接受 `[A-Za-z0-9._-]{1,64}`。
+- 每个 workspace 一个分区 `workspace-<sha256(workspace) 前 16 位十六进制>`，必须是真实的 owner-only 目录，不能是链接。分区内按会话分组 `session-<sha256(session ID) 前 12 位>`；会话目录每次创建文件前复用分区的私有目录校验，以 `Lstat` 拒绝链接、非目录和过宽权限。校验与文件的独占打开在 `layout` 锁内完成，避免本进程启动清理在两者之间删除目录。文件名是 12 位随机十六进制加名称提示，例如 `3f…a1-grep-results.txt`。名称提示只接受 `[A-Za-z0-9._-]{1,64}`。
 - 文件以 `O_EXCL` 和 `0600` 创建，已存在的条目（包括预先放置的链接）都会让创建失败；名称冲突或目录被并发清理时最多重试 3 次。提交时 `fsync` 后关闭，失败则删除部分文件。单个文件上限 64 MiB，超出后写入失败，调用方必须丢弃。
 - 定位符（locator）是文件的绝对路径，检索提示为上游原文 “Use read with offset/limit, or grep this path to search within it.”。
 
@@ -49,6 +49,8 @@
 - 渲染后的 `bash` 结果仍受通用策略约束：超出预算时 runtime 另存 `bash.txt` 并给出预览，预览尾部保留截断说明。
 
 ### 读回与安全边界
+
+已评估标准库 `os.Root`：在本仓支持的 Linux、macOS 和 Windows 上提供 descriptor/handle 相对打开并限制链接逃出根，但允许跟随根内链接，不能单独实现“不跟随链接且目录私有”的完整契约。采用它还需要统一创建、失败删除、Discard 与清理的根句柄所有权，并保留目录权限和身份校验。本仓继续使用路径 API；同一用户并发替换目录的 TOCTOU 边界由[安全规则](../security.md#spill-文件)明确约束。
 
 `workspace.Root.WithReadOnly(dir)` 只给 `Readable` 增加一个只读目录。`cmd` 把 spill 分区交给 `read` 与 `grep`：
 
@@ -95,6 +97,7 @@ composition ID 改为绑定 `fs-tools-v2`、`search-tools-v3`、`shell-tools-v3`
 ## 被否决方案
 
 - 把 spill 文件放在 workspace 内：会进入 `glob`/`grep` 结果和版本控制，并与用户文件混在一起。
+- 只依赖最终文件的 `O_EXCL`：无法约束祖先目录，预置会话链接仍可把写入导向分区外。
 - 允许 `read`/`grep` 读取任意绝对路径：会放松 workspace 读取边界，只为读回 spill 文件而开放整个文件系统。
 - 全局共享一个 spill 目录：`grep` 可以枚举其他 workspace 会话的输出。
 - 按会话限制读取：fork 后的子会话无法读取快照中父会话的定位符。
@@ -106,3 +109,4 @@ composition ID 改为绑定 `fs-tools-v2`、`search-tools-v3`、`shell-tools-v3`
 - 参考指针更新改变了 spill-policy 预算、估算方法、文案，或观察策略的语义。
 - 多模态结果需要 spill。
 - 有证据表明 spill 目录增长或启动清理成本需要配额或周期清理。
+- 文件对手模型需要覆盖同一用户的恶意并发进程。

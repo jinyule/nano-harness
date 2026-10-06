@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -280,6 +281,73 @@ func TestStore_CreatesPrivateUnpredictableArtifacts(t *testing.T) {
 	cancel()
 	if _, err := store.Create(canceled, "s", "x.txt"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled = %v", err)
+	}
+}
+
+func TestStore_RejectsUnsafeSessionDirectories(t *testing.T) {
+	for _, phase := range []string{"before start", "after sweep"} {
+		for _, kind := range []string{"symlink", "shared directory", "file"} {
+			t.Run(phase+"/"+kind, func(t *testing.T) {
+				if kind == "shared directory" && runtime.GOOS == "windows" {
+					t.Skip("Windows does not enforce Unix permission bits")
+				}
+				store, err := New(startedRuntime(t), Config{Root: filepath.Join(t.TempDir(), "spill"), Workspace: "/w"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				scope := &plugin.Scope{}
+				t.Cleanup(func() {
+					if err := scope.Close(context.Background()); err != nil {
+						t.Error(err)
+					}
+				})
+				if phase == "after sweep" {
+					if err := store.Start(t.Context(), scope); err != nil {
+						t.Fatal(err)
+					}
+					<-store.swept
+				} else if err := os.MkdirAll(store.Dir(), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				sum := sha256.Sum256([]byte("s"))
+				dir := filepath.Join(store.Dir(), "session-"+hex.EncodeToString(sum[:6]))
+				outside := t.TempDir()
+				switch kind {
+				case "symlink":
+					if err := os.Symlink(outside, dir); err != nil {
+						t.Fatal(err)
+					}
+				case "shared directory":
+					if err := os.Mkdir(dir, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // unsafe permissions are the regression input
+						t.Fatal(err)
+					}
+				case "file":
+					if err := os.WriteFile(dir, nil, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if phase == "before start" {
+					if err := store.Start(t.Context(), scope); err != nil {
+						t.Fatal(err)
+					}
+					<-store.swept
+				}
+				file, err := store.Create(t.Context(), "s", "x.txt")
+				entries, listErr := os.ReadDir(outside)
+				if file != nil {
+					_ = file.Discard()
+				}
+				if err == nil {
+					t.Error("unsafe session directory accepted")
+				}
+				if listErr != nil || len(entries) != 0 {
+					t.Fatalf("spill escaped to outside directory: %v, %v", entries, listErr)
+				}
+			})
+		}
 	}
 }
 

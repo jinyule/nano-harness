@@ -81,6 +81,7 @@ type answeringFrontend struct {
 	mu      sync.Mutex
 	answers [][]question.Answer
 	seen    []question.Request
+	ask     func(context.Context, question.Request) ([]question.Answer, error)
 }
 
 func (*answeringFrontend) ID() string { return "answering-frontend" }
@@ -89,16 +90,65 @@ func (frontend *answeringFrontend) Start(_ context.Context, scope *plugin.Scope)
 	return frontend.app.questions.RegisterBroker(frontend, scope)
 }
 
-func (frontend *answeringFrontend) Ask(_ context.Context, request question.Request) ([]question.Answer, error) {
+func (frontend *answeringFrontend) Ask(ctx context.Context, request question.Request) ([]question.Answer, error) {
 	frontend.mu.Lock()
 	defer frontend.mu.Unlock()
 	frontend.seen = append(frontend.seen, request)
+	if frontend.ask != nil {
+		return frontend.ask(ctx, request)
+	}
 	if len(frontend.answers) == 0 {
 		return nil, question.ErrCancelled
 	}
 	answers := frontend.answers[0]
 	frontend.answers = frontend.answers[1:]
 	return answers, nil
+}
+
+func TestComposition_CancelledPlanReviewCannotScheduleExit(t *testing.T) {
+	assembled, seen := startAssembled(t, []modelStep{
+		{tool: "exit_plan_mode", arguments: `{"plan":"# Plan\n\n- implement"}`},
+		{text: "still planning"},
+	})
+	if _, err := assembled.app.registry.SetPlanMode(t.Context(), "session-plan", true); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	assembled.frontend.ask = func(ctx context.Context, _ question.Request) ([]question.Answer, error) {
+		close(entered)
+		<-ctx.Done()
+		return []question.Answer{{ID: "plan-review", Selected: []string{"Approve"}}}, nil
+	}
+	turn, err := assembled.root.Submit(t.Context(), session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: "review the plan"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-t.Context().Done():
+		t.Fatal("review did not reach the broker")
+	}
+	assembled.root.Interrupt()
+	if result := <-turn; result.Outcome != session.OutcomeCanceled {
+		t.Fatalf("cancelled turn = %+v", result)
+	}
+	if result := assembled.turn(t, "continue planning"); result.Err != nil || result.Text != "still planning" {
+		t.Fatalf("next turn = %+v", result)
+	}
+	requests := seen()
+	if len(requests) != 2 || !strings.Contains(requests[1].Instructions, upstreamSection(t, "plan:policy")) {
+		t.Error("cancelled approval removed the next request's plan policy")
+	}
+	records := assembled.records(t)
+	results := orderedToolResults(records)
+	if len(results) != 1 || !results[0].IsError || results[0].Output != "Error: "+question.ErrAborted.Error() {
+		t.Errorf("cancelled review result = %+v", results)
+	}
+	for _, record := range records {
+		if record.Type == session.RecordPlanMode && !record.Plan.Active {
+			t.Error("cancelled approval committed an exit at the next boundary")
+		}
+	}
 }
 
 type assembledApp struct {

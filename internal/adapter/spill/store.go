@@ -249,16 +249,16 @@ func (store *Store) Create(ctx context.Context, sessionID, name string) (appTool
 	return nil, fmt.Errorf("create spill artifact: %w", lastErr)
 }
 
-// errDirectory marks a failure to create the session directory, which a
+// errDirectory marks a failure to prepare the session directory, which a
 // retry cannot fix.
 var errDirectory = errors.New("cannot create the session directory")
 
-// createIn creates dir and exclusively opens path inside it while holding the
-// layout lock, so this process's sweep cannot prune dir in between.
+// createIn prepares a private, real directory and exclusively opens path under
+// the layout lock, so this process's sweep cannot prune dir in between.
 func (store *Store) createIn(dir, path string) (artifactFile, error) {
 	store.layout.Lock()
 	defer store.layout.Unlock()
-	if err := makeDirs(dir, 0o700); err != nil {
+	if err := preparePrivate(dir, lstatPath); err != nil {
 		return nil, fmt.Errorf("%w: %w", errDirectory, err)
 	}
 	return openFile(path)

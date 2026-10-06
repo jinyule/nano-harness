@@ -34,7 +34,7 @@ var (
 	ErrNotRunning = errors.New("user-questions service is not running")
 	// ErrInvalidBroker identifies a broker registration that cannot be honored.
 	ErrInvalidBroker = errors.New("invalid user-questions broker registration")
-	// ErrAborted reports that the caller's context ended before an answer.
+	// ErrAborted reports that the caller's context ended before accepting an answer.
 	ErrAborted = errors.New("ask_user_question was aborted before the user answered")
 	// ErrCancelled reports that the user dismissed the questions. Brokers
 	// return it for an explicit cancellation.
@@ -185,6 +185,7 @@ func (service *Service) RegisterBroker(broker Broker, scope *plugin.Scope) error
 // Ask presents a validated request and returns one answer per question in
 // request order. Cancellation, a delegated caller, a missing broker, a broker
 // failure, and an answer that does not fit the request all fail closed.
+// Cancellation is checked after the broker returns, before accepting its answers.
 func (service *Service) Ask(ctx context.Context, request Request) ([]Answer, error) {
 	if ctx.Err() != nil {
 		return nil, ErrAborted
@@ -208,10 +209,10 @@ func (service *Service) Ask(ctx context.Context, request Request) ([]Answer, err
 		return nil, ErrUnavailable
 	}
 	answers, err := registered.broker.Ask(ctx, cloneRequest(request))
+	if ctx.Err() != nil {
+		return nil, ErrAborted
+	}
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ErrAborted
-		}
 		if errors.Is(err, ErrCancelled) {
 			return nil, ErrCancelled
 		}

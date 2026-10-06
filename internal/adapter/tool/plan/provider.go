@@ -39,7 +39,7 @@ func (err reviewError) Error() string { return string(err) }
 // Mode is the plan-mode state consumed by the tool.
 type Mode interface {
 	Active(sessionID string) bool
-	Exit(sessionID string) error
+	Exit(context.Context, string) error
 }
 
 // Asker presents the plan review.
@@ -118,7 +118,7 @@ func (provider *Provider) exit(ctx context.Context, invocation appTool.Invocatio
 		}
 		return appTool.Result{}, reviewError(feedbackText + review.Custom)
 	}
-	if err := provider.mode.Exit(invocation.SessionID); err != nil {
+	if err := provider.mode.Exit(ctx, invocation.SessionID); err != nil {
 		return appTool.Result{}, err
 	}
 	return appTool.Text(approvedText), nil

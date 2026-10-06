@@ -36,6 +36,8 @@
 
 第一行 header 固定 session/composition/workspace/parent/depth；后续 sequence 连续。strict decoder 与 order validator 拒绝未知字段、未来版本、torn line、非法顺序、unsafe 权限和 composition mismatch。append 写入、`fsync` 后才发布，失败回滚长度。
 
+`approval/asked` 用 call ID 关联尚未完成的工具调用，并要求工具名一致；`approval/decided` 只通过 approval ID 关联问题，不得携带多余的 `call_id`。生产写入和恢复修复都使用这一关联，额外 call ID 没有消费者且可能与原问题矛盾。补齐该校验不改变 format 或 composition ID：合法日志保持可读，非法日志整体拒绝，原文件保留供离线检查，不迁移或改写。
+
 `session.Surface` 从 raw log 折叠模型输入。compaction 追加 summary 与 shadowed sequence，不删除原事件。resume 对语法和因果均有效的中断 tail 追加 cancelled approval、interrupted tool result 和 step/turn closure；不截断或猜测损坏内容。
 
 composition ID 绑定 workspace 与工具/会话语义，不绑定可热切换 route；每个 request header 单独固定当次 provider、model、system 和 tool schema。

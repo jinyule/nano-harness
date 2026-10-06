@@ -17,6 +17,8 @@
 
 ## Decision
 
+边界校验与取消语义的补充实施见[修复 Note](2026-10-06-spill-question-and-call-validation.md)；本 Note 保留能力建立、生命周期和原始验证证据。
+
 长期决定见 [ADR-0010](../../../docs/decisions/0010-todo-write-session-record.md)，本节记录实施位置。
 
 - **执行上下文**：工具使用 `tool.Invocation` 的 `Journal`、`Turn`、`Step` 和 `CallID`。engine 为每个 agent 传入自己的 journal，所以 root 与 subagent 的写入落到各自 session；engine 测试断言这四个值来自调用方。

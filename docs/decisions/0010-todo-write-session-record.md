@@ -23,11 +23,11 @@
    {"type":"todo/write","turn":1,"step":1,"todo":{"call_id":"call-1","items":[{"content":"write tests","status":"in_progress"}]}}
    ```
 
-   `items` 必须存在，空数组表示清空列表。decoder 复用同一列表不变量，并要求 `content` 已经去空白。顺序校验要求记录位于活动 turn 与 step 内，`call_id` 指向尚未得到 result 的 call，且每个 call 最多一条 `todo/write`。上游负载没有 `call_id`；本仓增加该字段，使日志能证明快照由哪个已提交 call 产生。
+   `items` 必须存在，空数组表示清空列表。decoder 复用同一列表不变量，并要求 `content` 已经去空白。顺序校验要求记录位于活动 turn 与 step 内，`call_id` 指向名称为 `todo_write` 且尚未得到 result 的 call，且每个 call 最多一条 `todo/write`。上游负载没有 `call_id`；本仓增加该字段，使日志能证明快照由哪个已提交 call 产生。
 5. **模型可见信息。** 模型看到自己 `tool/call` 中的完整列表和固定格式的结果 `Updated todo list: <pending> pending, <inProgress> in progress, <completed> completed.`。`todo/write` 是 UI 与 replay 状态，不生成 surface 节点；compaction 像处理其他 call/result 一样处理这两条记录，不额外注入清单。因此模型上下文仍可只从权威事件重建。
 6. **投影。** `session.StandingTodos` 定义当前计划：最新一条之后没有更晚 `turn/start` 的 `todo/write`。`turn/end` 保留已完成清单，下一次 `turn/start` 清除它。TUI 在初始 replay 和实时事件上使用同一折叠规则。
 7. **版本识别与拒绝策略。** session format 保持 v2。`todo/write` 是加法记录：不含它的 v2 日志在格式上仍可解码，与 [ADR-0004](0004-provider-neutral-effort.md) 的加法字段一致。较旧的二进制遇到 `todo/write` 时按未知记录拒绝。composition ID 加入 `todo-tools-v1`，没有 `todo_write` 的组合创建的会话在恢复时因 composition mismatch 被拒绝，不迁移，也不静默接受。当前没有发布 tag，因此没有需要迁移的已发布会话。
-8. **保留与恢复。** `todo/write` 与其他事实保存在同一个只追加、`0600`、写后 `fsync` 的 JSONL 中，受单 record 6 MiB 与单 session 64 MiB 限制，compaction 不删除它，保留期与所在会话文件相同。恢复中断尾部时，已提交的 `todo/write` 保持不变，只为未结束的 call 补写 interrupted error result 并关闭 step 与 turn，因此计划在恢复后可见，直到下一次 turn 开始。字段、状态、顺序非法或行被截断的日志整体拒绝，文件不被截断或改写，维护者仍可离线检查原始数据。
+8. **保留与恢复。** `todo/write` 与其他事实保存在同一个只追加、`0600`、写后 `fsync` 的 JSONL 中，受单 record 6 MiB 与单 session 64 MiB 限制，compaction 不删除它，保留期与所在会话文件相同。恢复中断尾部时，已提交的 `todo/write` 保持不变，只为未结束的 call 补写 interrupted error result 并关闭 step 与 turn，因此计划在恢复后可见，直到下一次 turn 开始。字段、状态、call 关联、顺序非法或行被截断的日志整体拒绝，包括引用 `read` 等其他工具调用的快照；文件不被截断或改写，维护者仍可离线检查原始数据。补齐 call 类型校验不改变 format 或 composition ID，合法日志保持可读。
 
 ## 后果
 
@@ -41,6 +41,7 @@ composition ID 加入 `todo-tools-v1` 之前创建的会话不能用新组合恢
 - **只从 `tool/call` 参数推导列表**：replay 需要重新解析并校验模型参数，被拒绝的调用与成功调用无法从记录区分。
 - **提升到 format v3**：会拒绝所有 v2 日志，而加法记录没有歧义；恢复边界已由 composition ID 控制。
 - **沿用上游无 `call_id` 的负载**：order validator 无法把快照绑定到产生它的 call。
+- **只验证 call ID 存在**：其他工具的 pending call 也会通过，无法证明快照来自 `todo_write`。
 - **把计划注入系统提示或 compaction 摘要**：改变上游模型可见行为，并破坏请求前缀稳定。
 - **同时提供单一 `in_progress` 变体**：当前没有组合选择它，增加的配置没有调用方。
 

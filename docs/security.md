@@ -97,10 +97,12 @@ skill 正文是交给模型的指令。项目根 `<project>/.nano-harness/skills
 
 - spill 根目录与 workspace 不得互相包含（对 spill 根目录已存在的最长前缀解析链接后判断），否则启动失败，因此 spill 文件不会出现在 `glob`/`grep` 结果中，也不能被 `write`、`edit` 或 sandbox 内的 `bash` 改写。
 
-- 根目录为 `0700`，可以是链接但解析后必须是 owner-only 目录；workspace 分区与会话目录为 `0700` 的真实目录，分区是链接或权限过宽时启动失败。
+- 根目录为 `0700`，可以是链接但解析后必须是 owner-only 目录；workspace 分区与会话目录为 `0700` 的真实目录，两者复用同一私有目录校验：分区启动时检查，会话目录每次创建文件前以 `Lstat` 检查；链接、非目录或 group/other 权限非零都被拒绝。Windows 不用 Unix 权限位判断私有性。
 - 文件名是随机前缀加只含 `[A-Za-z0-9._-]` 的名称提示，以 `O_EXCL`、`0600` 创建，已存在的条目（包括预置链接）一律拒绝；提交前 `fsync`，失败删除部分文件；单个文件最多 64 MiB。
 - 只有本 workspace 的分区可被 `read`/`read_image`/`grep` 读取，其他 workspace 的输出不可见。分区内指向外部的链接被拒绝。
 - 启动清理只进入私有的 `workspace-*`/`session-*` 目录，只删除 30 天前的普通文件，不跟随或删除链接与无关条目，失败时保留现场。
+
+会话目录检查与文件打开由 `layout` 锁排序，阻止本进程启动清理在两者之间删除目录；该锁不约束其他进程。当前使用路径 API，`Lstat` 与 `OpenFile` 之间仍有 TOCTOU 窗口：同一用户的恶意进程可替换分区、会话目录或更改权限。预置的不安全会话目录被拒绝，但不宣称抵御这种并发替换。标准库 `os.Root` 的 descriptor 相对打开已评估，采用条件与限制见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md#读回与安全边界)。
 
 spill 文件可能包含命令输出或文件内容，与 transcript 一样只受本机 owner-only 权限保护，不是静态加密。
 
@@ -121,10 +123,10 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 ## 用户提问与规划模式
 
 - `ask_user_question` 与 `exit_plan_mode` 的问题来自模型参数，属于不可信输入。提问服务在呈现前限制为最多 16 题、每题最多 32 个选项，id 为无换行的 1–128 字节且唯一，问题与标签不能为空白，标签在题内唯一；文本总量受 128 KiB 参数上限约束。
-- 答案在进入模型前逐题校验：每题恰好一条，只能选择该题提供的标签，单选至多一个，自由回答不超过 16 KiB 且为合法 UTF-8。broker 缺失、取消、失败或非法答案都失败关闭为错误结果，不会被当作默认选择或批准。delegated agent 不能提问。
+- 答案在进入模型前逐题校验：每题恰好一条，只能选择该题提供的标签，单选至多一个，自由回答不超过 16 KiB 且为合法 UTF-8。broker 返回后先检查调用 context，已取消时无论是否返回合法答案或错误都按 aborted 处理；broker 缺失、取消、失败或非法答案都失败关闭为错误结果，不会被当作默认选择或批准。delegated agent 不能提问。
 - 答案是用户提供的数据，不是授权：它不改变 approval policy、sandbox 或工具 allowlist，写类工具仍在执行点请求一次性 approval。
 - 规划模式是提示词约束，不是授权边界：它不过滤工具，也不读取或改变 approval、sandbox 与 allowlist。需要强制只读时使用 `never` policy。评估与理由见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)。
-- 只有恰好选择 `Approve` 且没有自由回答的审查结果才会退出规划模式；退出在下一个 step 边界持久化为 `plan/mode`。
+- 只有恰好选择 `Approve` 且没有自由回答、提问未被取消且退出选择检查时 context 仍有效的审查结果才会退出规划模式；退出在下一个 step 边界持久化为 `plan/mode`。
 
 ## 长期目标
 
@@ -140,7 +142,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 - append 先写、`fsync`，再更新内存状态；失败尝试 truncate 回已知 durable prefix。回滚失败会和原错误一起返回。
 - resume 只对 schema 与因果均有效的完整记录做追加式 repair：取消未决 approval、补 tool error，并关闭 compaction/step/turn。它不截断 torn line、不删除未知内容、不迁移旧格式。
 - model-visible stream chunk、message、call/result、approval、retry、compaction summary、image、skill 目录与注入正文、规划模式切换与切换提示均进入日志；credential、OAuth notice 和内部 provider DTO 不进入。问题与答案只作为 `tool/call` 参数和 `tool/result` 存在。
-- `todo/write` 只由调用方 session 中尚未得到 result 的 `todo_write` call 写入，最多 256 项、每项 `content` 2048 字节。decoder 拒绝未知字段、未知状态、未去空白或重复的内容，以及不引用 pending call 的记录。
+- `todo/write` 只由调用方 session 中尚未得到 result 的 `todo_write` call 写入，最多 256 项、每项 `content` 2048 字节。decoder 拒绝未知字段、未知状态、未去空白或重复的内容，以及不引用 pending `todo_write` call 的记录。
 - `subagent/descriptor` 只接受 v2、`spawn`/`fork` provider 与已知 mode，且必须紧跟继承前缀、位于 turn 之外；`subagent/catalog` 必须位于活动 step，同一日志内 child id 唯一。fork 种子必须是从 1 开始连续、schema 有效且 turn 闭合的前缀，与 header 一次写入，校验失败时不创建文件。
 
 ## Subagent 与生命周期

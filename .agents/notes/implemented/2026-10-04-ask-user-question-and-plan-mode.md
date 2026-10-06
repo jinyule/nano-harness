@@ -15,6 +15,8 @@
 
 ## Decision
 
+边界校验与取消语义的补充实施见[修复 Note](2026-10-06-spill-question-and-call-validation.md)；本 Note 保留能力建立、生命周期和原始验证证据。
+
 长期契约记录在 [ADR-0014](../../../docs/decisions/0014-user-questions-and-plan-mode.md)，当前事实归[架构](../../../docs/architecture.md#用户提问与规划模式)、[安全](../../../docs/security.md#用户提问与规划模式)和[测试](../../../docs/testing.md)文档。本次实施：
 
 - `internal/app/question`（插件 `user-questions`）：`Service.Ask(ctx, Request) ([]Answer, error)` 与 `RegisterBroker(Broker, *plugin.Scope)`。请求在 broker 之前校验（上游文案加本仓上限），delegated 调用方被拒绝，答案逐题校验后按请求顺序返回并与 broker 切片解耦；取消、broker 缺失或失败、非法答案都失败关闭。broker 注册用指针 token 标识身份，因为函数类型的 broker 值不可比较，直接比较会在 cleanup 时 panic。

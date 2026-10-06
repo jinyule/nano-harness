@@ -281,7 +281,7 @@ func (record Record) requireApproval() error {
 			return invalid("approval/asked fields are invalid")
 		}
 	case RecordApprovalDecided:
-		if record.Step == 0 || validateIdentifier("approval ID", data.ID, 128) != nil || !validApprovalOutcome(data.Outcome) || data.ToolName != "" || data.Reason != "" || data.Policy != "" {
+		if record.Step == 0 || validateIdentifier("approval ID", data.ID, 128) != nil || !validApprovalOutcome(data.Outcome) || data.ToolName != "" || data.CallID != "" || data.Reason != "" || data.Policy != "" {
 			return invalid("approval/decided fields are invalid")
 		}
 	case RecordApprovalPolicy:

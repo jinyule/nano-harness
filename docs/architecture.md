@@ -260,13 +260,13 @@ list_agents                → parent 自己的 subagent/catalog；descendants �
 
 ## 用户提问与规划模式
 
-`internal/app/question.Service`（插件 `user-questions`）是用户提问接缝。所选前端用 `RegisterBroker` 发布唯一回答面；调用方用 `Ask(ctx, question.Request) ([]question.Answer, error)` 提问。服务在调用 broker 前校验请求（非空、数量与 id 上限、标签、`plan-review` intent），拒绝 delegated 调用方，并对答案逐题校验后按请求顺序返回；取消、broker 缺失或失败、非法答案都失败关闭。错误文本沿用上游，规则与上限见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)。问题与答案不另写记录：问题是 `tool/call` 参数，答案是 `tool/result`。
+`internal/app/question.Service`（插件 `user-questions`）是用户提问接缝。所选前端用 `RegisterBroker` 发布唯一回答面；调用方用 `Ask(ctx, question.Request) ([]question.Answer, error)` 提问。服务在调用 broker 前校验请求（非空、数量与 id 上限、标签、`plan-review` intent），拒绝 delegated 调用方，并对答案逐题校验后按请求顺序返回；broker 返回后优先检查 context 取消，即使返回合法答案也失败关闭；broker 缺失或失败、非法答案同样失败关闭。错误文本沿用上游，规则与上限见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)。问题与答案不另写记录：问题是 `tool/call` 参数，答案是 `tool/result`。
 
 `internal/app/plan.Service`（插件 `plan-mode`）拥有规划模式。持久化状态是最后一条 `plan/mode`，由 `session.ProjectPlan` 折叠：
 
 - `Registry.SetPlanMode` 是用户选择入口，只接受 live root agent，并在 worker 状态锁内调用 `Select`：没有打开的 turn 时立即追加 `turn:0` 记录，turn 进行中则保留到下一个 step 边界。
 - engine 在每个 step 的 `step/start` 前调用 `Step`：提交待生效选择；若是用户切换且最近一次 `request/header` 描述的是另一种模式，追加 `source.kind = "plan-mode"` 的切换提示；规划模式生效时返回 Base `section` 原文，prompt assembler 把它放在角色段落之后、工具段落之前。
-- `exit_plan_mode` 在本 step 处于规划模式时通过提问接缝提交计划审查；获批后用 `Exit` 安排在下一个边界静默退出，其余答案保持规划模式并把反馈作为错误结果返回。
+- `exit_plan_mode` 在本 step 处于规划模式时通过提问接缝提交计划审查；获批后用 `Exit(ctx, sessionID)` 在状态锁内检查取消，再安排在下一个边界静默退出，其余答案保持规划模式并把反馈作为错误结果返回。
 
 待生效选择只在进程内。规划模式不改变工具目录、approval、sandbox 或 allowlist，写类工具仍在执行点请求一次性 approval，评估见 ADR-0014。
 
@@ -323,13 +323,13 @@ subagent/descriptor, subagent/catalog, todo/write, plan/mode, goal/change, step/
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
 - composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）与 spill 策略的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
-- 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。
+- 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。`approval/asked` 的工具名必须等于 pending call 的名称；`approval/decided` 仅通过 approval ID 关联问题，不允许携带 `call_id`。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。
 - resume 会补写未决 approval 的 cancelled、未决 call 的 interrupted error、未结束 compaction/step/turn 的结束事实；不会截断 torn JSON、猜测未知格式或自动接受旧版本。
 - `session.Surface` 从 raw events 折叠消息、tool call/result 与 compaction replacements。TUI subscriber 只是可丢更新提示；磁盘 replay 仍是恢复来源。
 - `tool/result` 可以携带一张规范化图片（`image` 字段），校验与 user 图片相同；错误结果不能携带图片。图片随结果进入 surface。
-- `todo/write` 必须位于活动 step，引用尚未得到 result 的 call，且每个 call 最多一条。它不进入 surface；模型只从自己的 tool call 参数和 tool result 看到列表。`session.StandingTodos` 把最新一条之后没有更晚 `turn/start` 的 `todo/write` 投影为当前计划。
+- `todo/write` 必须位于活动 step，引用尚未得到 result 的 `todo_write` call，且每个 call 最多一条。它不进入 surface；模型只从自己的 tool call 参数和 tool result 看到列表。`session.StandingTodos` 把最新一条之后没有更晚 `turn/start` 的 `todo/write` 投影为当前计划。
 - `goal/change` 的 `turn` 与 `step` 都缺省，可出现在日志任意位置（人类命令可在 turn 进行中提交）。`session.GoalState.Apply` 校验 revision 连续、阶段迁移合法、时间戳不倒退、计数保持和目标 ID 不复用；`source.kind = "goal"` 的 `user/message` 必须携带 `goal_id`/`goal_revision`/`goal_round`，且恰为当前 active 目标当前 revision 的下一轮、不超过上限，其他来源不得携带这些字段。JSONL 在每次追加与读取时执行同一折叠，非法事实被拒绝且不写入。
 - 后台任务完成通知是 source kind 为 `tool-jobs` 的 `user/message`，agent 消息与子代理结算通知分别为 `agent-message` 和 `subagent-settled`，都没有专用记录类型；无工具调用的 step 之后可以出现 `user/message` 并继续 step。
 - `subagent/descriptor` 为 v2，是 child 自己写的第一条记录：位于 `inherited + 1` 号序列且不在 turn 内，`inherited` 是 fork 种子复制的事件数（spawn 为 0）。种子在创建时与 header 一次写入并整体校验，复制的事件保留原序号。`session.OwnEvents` 以最后一个 descriptor 区分继承前缀。

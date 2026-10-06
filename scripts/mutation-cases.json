@@ -166,5 +166,40 @@
     "before": "return need, available, need <= available",
     "after": "return need, available, true",
     "test": "^TestEngine_KeepsTurnsWorkingWhenImagesDoNotFit$"
+  },
+  {
+    "id": "spill-session-planted-link",
+    "file": "internal/adapter/spill/store.go",
+    "before": "if err := preparePrivate(dir, lstatPath); err != nil {",
+    "after": "if err := makeDirs(dir, 0o700); err != nil {",
+    "test": "^TestStore_RejectsUnsafeSessionDirectories$"
+  },
+  {
+    "id": "question-cancelled-answer",
+    "file": "internal/app/question/question.go",
+    "before": "answers, err := registered.broker.Ask(ctx, cloneRequest(request))\n\tif ctx.Err() != nil {",
+    "after": "answers, err := registered.broker.Ask(ctx, cloneRequest(request))\n\tif err != nil && ctx.Err() != nil {",
+    "test": "^TestService_CancellationWinsOverBrokerAnswers$"
+  },
+  {
+    "id": "plan-exit-cancellation",
+    "file": "internal/app/plan/plan.go",
+    "before": "if err := ctx.Err(); err != nil {",
+    "after": "if err := ctx.Err(); false && err != nil {",
+    "test": "^TestService_CancelledExitKeepsPlanMode$"
+  },
+  {
+    "id": "todo-call-kind",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": "if callNames[record.Todo.CallID] != \"todo_write\" {",
+    "after": "if _, exists := callNames[record.Todo.CallID]; !exists {",
+    "test": "^TestSessionV2Todo_RejectsChangedContract$"
+  },
+  {
+    "id": "approval-decision-call-reference",
+    "file": "internal/core/session/validate.go",
+    "before": "!validApprovalOutcome(data.Outcome) || data.ToolName != \"\" || data.CallID != \"\" || data.Reason",
+    "after": "!validApprovalOutcome(data.Outcome) || data.ToolName != \"\" || data.Reason",
+    "test": "^TestRecordValidateRejectsEveryInvalidShape$"
   }
 ]

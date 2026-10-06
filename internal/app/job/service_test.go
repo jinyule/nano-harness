@@ -261,10 +261,21 @@ func TestService_FencesOwnersAndUnknownJobs(t *testing.T) {
 
 func TestService_LimitsLiveJobsPerOwner(t *testing.T) {
 	service, _, _ := startService(t)
-	gates := make([]*gate, maxActivePerOwner)
-	for index := range gates {
-		gates[index] = newGate()
-		launch(t, service, "root", gates[index])
+	first := newGate()
+	settlement := make(chan struct{})
+	release := sync.OnceFunc(func() { close(settlement) })
+	t.Cleanup(release)
+	if _, err := service.Launch(Spec{Kind: "bash", Label: "sleep", Owner: "root", Run: func(ctx context.Context, output *Output) Outcome {
+		outcome := first.run(ctx, output)
+		// Keep the killed producer alive until the stopping-state assertion.
+		<-settlement
+		return outcome
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	<-first.started
+	for range maxActivePerOwner - 1 {
+		launch(t, service, "root", newGate())
 	}
 	_, err := service.Launch(Spec{Kind: "bash", Label: "x", Owner: "root", Run: newGate().run})
 	want := "background job limit reached for this owner (limit: 10); use job_kill to stop an unneeded job, wait for it to finish, then retry"
@@ -279,6 +290,7 @@ func TestService_LimitsLiveJobsPerOwner(t *testing.T) {
 	if _, err := service.Launch(Spec{Kind: "bash", Label: "x", Owner: "root", Run: newGate().run}); !errors.Is(err, ErrLimit) {
 		t.Fatalf("stopping job still counts: %v", err)
 	}
+	release()
 	waitSettled(t, service, "root", "bash-1")
 	if _, err := service.Launch(Spec{Kind: "subagent", Label: "x", Owner: "root", Run: func(context.Context, *Output) Outcome { return Outcome{Status: StatusCompleted} }}); err != nil {
 		t.Fatal(err)

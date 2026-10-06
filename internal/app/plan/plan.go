@@ -13,6 +13,7 @@ package plan
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/jinyule/nano-harness/internal/core/plugin"
@@ -223,10 +224,14 @@ func (service *Service) Active(sessionID string) bool {
 
 // Exit records an approved plan review: the session leaves plan mode at the
 // next step boundary, and no user-switch notice is added because the tool
-// result already tells the model.
-func (service *Service) Exit(sessionID string) error {
+// result already tells the model. Cancellation before the selection rejects
+// it without changing pending state.
+func (service *Service) Exit(ctx context.Context, sessionID string) error {
 	service.mu.Lock()
 	defer service.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("exit plan mode: %w", err)
+	}
 	if !service.running {
 		return ErrNotRunning
 	}

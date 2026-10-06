@@ -131,6 +131,7 @@ func TestSessionV2Todo_RejectsChangedContract(t *testing.T) {
 		{"null-items", items, `"items":null`},
 		{"missing-items", `,` + items, ``},
 		{"no-pending-call", `"todo":{"call_id":"call-todo"`, `"todo":{"call_id":"call-other"`},
+		{"wrong-tool", `"name":"todo_write"`, `"name":"read"`},
 		{"outside-step", `"type":"todo/write","turn":1,"step":1`, `"type":"todo/write","turn":1,"step":2`},
 		{"outside-turn", `"type":"todo/write","turn":1,"step":1`, `"type":"todo/write","turn":2,"step":1`},
 	} {
@@ -182,6 +183,34 @@ func TestValidateOrder_BindsTodoWriteToOnePendingCall(t *testing.T) {
 	}
 	if plan := standingTodos(reused); plan == nil || len(plan) != 0 {
 		t.Fatalf("empty replacement plan = %#v", plan)
+	}
+}
+
+func TestLog_RejectsTodoWriteForReadWithoutChangingTheFile(t *testing.T) {
+	manager, scope := startManager(t)
+	t.Cleanup(func() { _ = scope.Close(context.Background()) })
+	log, err := manager.Open(t.Context(), OpenOptions{SessionID: "read-todo", Create: true, Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = log.Close(context.Background()) })
+	for _, event := range withCall(withAssistant(orderPrefix())) {
+		record := event.Record
+		if record.Call != nil {
+			record.Call.Name = "read"
+		}
+		appendRecord(t, log, record)
+	}
+	before, err := os.ReadFile(filepath.Join(manager.config.Root, "read-todo.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.Append(t.Context(), todoWrite(1, 1, "call", fixtureTodos)); !errors.Is(err, ErrCorruptSession) {
+		t.Errorf("todo for read call = %v", err)
+	}
+	after, err := os.ReadFile(filepath.Join(manager.config.Root, "read-todo.jsonl"))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("rejected todo changed the file: %v", err)
 	}
 }
 

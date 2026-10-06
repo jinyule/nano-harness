@@ -40,11 +40,11 @@ func registerExitTool(t *testing.T, harness *engineHarness) {
 	scope := &plugin.Scope{}
 	approve := appTool.Define(appTool.Spec[engineArguments]{
 		Name: "approve", Description: "approves the plan", Parameters: appTool.Parameters{appTool.Optional("value", appTool.Number(""))},
-		Execute: func(_ context.Context, invocation appTool.Invocation, _ engineArguments) (appTool.Result, error) {
+		Execute: func(ctx context.Context, invocation appTool.Invocation, _ engineArguments) (appTool.Result, error) {
 			if !harness.plan.Active(invocation.SessionID) {
 				return appTool.Result{}, errors.New("not in plan mode")
 			}
-			return appTool.Text("approved"), harness.plan.Exit(invocation.SessionID)
+			return appTool.Text("approved"), harness.plan.Exit(ctx, invocation.SessionID)
 		},
 	})
 	if err := harness.tools.Register(approve, scope); err != nil {

@@ -27,7 +27,7 @@ func (*Service) Ask(ctx context.Context, request question.Request) ([]question.A
 
 `Request` 携带 session、tool call ID、`Delegated` 和问题列表；`Question` 有 id、问题、可选标题、可选详情（`Detail`）、选项、多选和可选 `Intent`（目前只有 `plan-review`，`Approve` 指明批准选项）。`Answer` 的 `Selected` 是选项标签，永不为 nil；`Custom` 是自由回答，单选时替代选择，多选时补充；两者都空表示跳过该题。
 
-`Ask` 依次拒绝：已取消的 context（`ask_user_question was aborted before the user answered`）、空列表（`ask_user_question requires at least one question`）、delegated 调用方（上游 `DELEGATED_CALLER` 原文），以及本仓的请求上限和 intent 校验。没有 broker 返回 `no user-questions answerer accepted the request`；broker 返回 `question.ErrCancelled` 时得到 `the user cancelled ask_user_question`；等待中取消仍是 aborted；broker 的其他错误一律视为不可用。broker 的答案必须对每题恰好一条、只选该题提供的标签且不重复、单选至多一个且有 `Custom` 时不选标签、`Custom` 是不超过 16 KiB 的合法 UTF-8；否则以 `the user-questions answerer returned an invalid answer batch` 失败关闭。答案按请求顺序返回，切片与 broker 解耦。
+`Ask` 依次拒绝：已取消的 context（`ask_user_question was aborted before the user answered`）、空列表（`ask_user_question requires at least one question`）、delegated 调用方（上游 `DELEGATED_CALLER` 原文），以及本仓的请求上限和 intent 校验。没有 broker 返回 `no user-questions answerer accepted the request`。broker 返回后先检查 context，等待中取消时返回 `question.ErrAborted` 和空答案，无论答案是否合法、错误是否为空；context 仍有效时，broker 返回 `question.ErrCancelled` 得到 `the user cancelled ask_user_question`，其他错误一律视为不可用。broker 的答案必须对每题恰好一条、只选该题提供的标签且不重复、单选至多一个且有 `Custom` 时不选标签、`Custom` 是不超过 16 KiB 的合法 UTF-8；否则以 `the user-questions answerer returned an invalid answer batch` 失败关闭。答案按请求顺序返回，切片与 broker 解耦。
 
 本仓在上游之外增加边界限制，错误文本对模型可见：每次最多 16 题、每题最多 32 个选项；id 为去除首尾空白、无换行的 1–128 字节且在本次调用内唯一（沿用上游 timed 变体的唯一性文案）；问题文本和选项标签不能为空白；同题标签唯一，因为答案用标签回指选项。文本长度由工具参数 128 KiB 上限约束。
 
@@ -56,7 +56,7 @@ TUI 是唯一 broker，与 approval 共用同一交互锁逐题提问：输入�
 
 - `Registry.SetPlanMode(ctx, sessionID, active) (plan.Change, error)` 是用户选择入口，只接受 live root agent。它在 agent worker 的状态锁内调用 `Service.Select`；worker 在追加 `turn/start` 前于同一把锁内标记忙碌，因此立即提交永远不会与 turn 开始交错。没有打开的 turn 时立即追加 `turn:0` 记录（`Committed`）；turn 进行中保留到下一个 step 边界（`Queued`）；撤回尚未生效的相反选择返回 `Cancelled`，重复选择返回 `Unchanged`。追加失败返回错误，状态不变。
 - engine 在每个 step 的主动 compaction 之后、`step/start` 之前调用 `Service.Step(ctx, journal, turn)`：提交待生效选择，在需要时追加用户切换提示，并返回本 step 请求使用的规划段落。任一追加失败使 turn 以 error 结束，选择保留到后续边界重试。
-- `Service.Active(sessionID)` 报告最近一次边界或提交后的模式，供本 step 内的工具使用；`Service.Exit(sessionID)` 记录一次获批退出。
+- `Service.Active(sessionID)` 报告最近一次边界或提交后的模式，供本 step 内的工具使用；`Service.Exit(ctx, sessionID)` 在状态锁内检查 context；已取消时用 `%w` 保留取消原因且不改变待生效选择，否则记录一次获批退出。接受退出选择之后的取消不撤销已经接受的选择。
 
 用户切换提示是 `source.kind = "plan-mode"` 的 `user/message`，文本沿用上游：`The user switched this session to plan mode.` 或 `The user switched this session back to the default mode.`。只有用户选择会请求提示，而且只在最近一次 `request/header` 描述的是另一种模式时追加；首个请求之前或往返切换后净变化为零时不追加。它位于 turn 的用户输入之后、`step/start` 之前；上游把它放在同一 step 的消息里，位置不同但模型同样在下一请求看到它。
 
@@ -72,7 +72,7 @@ TUI 是唯一 broker，与 approval 共用同一交互锁逐题提问：输入�
 
 `internal/adapter/tool/plan`（插件 `plan-tools`）的定义与上游 Base 逐字节一致。执行依次检查：会话在本 step 处于规划模式，否则 `exit_plan_mode is only available in plan mode`；去除首尾空白后以单个 `#`、空白和可见文本开头，否则 `exit_plan_mode requires a non-empty markdown plan starting with a # heading`。随后通过提问接缝发出上游同款审查问题（id `plan-review`，标题 `Plan review`，`Detail` 为计划原文，选项 `Approve` 与 `Keep planning`）。
 
-- 恰好选择 `Approve` 且没有自由回答：记录获批退出，返回 `Plan approved — plan mode exited; carry out the plan starting with your next step.`；本批次剩余调用仍在规划模式下执行，下一个边界追加 `plan/mode {active:false}`，不追加提示。
+- 恰好选择 `Approve` 且没有自由回答，并且退出选择检查时 context 仍有效：记录获批退出，返回 `Plan approved — plan mode exited; carry out the plan starting with your next step.`；本批次剩余调用仍在规划模式下执行，下一个边界追加 `plan/mode {active:false}`，不追加提示。
 - 其他答案（`Keep planning`、跳过或反馈）：返回错误结果 `The user chose to keep planning; revise the plan and present it again.`，有反馈时为 `The user chose to keep planning; their feedback: <text>`，模式不变。
 - 用户取消审查：返回上游的 `The user dismissed the plan review to speak instead; stay in plan mode, stop here, and wait for their message.`。
 - 回答面不可用、取消或服务停止：返回接缝的失败文本，保持规划模式；`/plan off` 始终是手动出口。
@@ -112,6 +112,7 @@ TUI 的 `/plan` 进入、`/plan off` 离开、`/plan TEXT` 进入后把文本与
 
 ## 被否决方案
 
+- **只在 broker 返回错误时检查取消**：合法答案与 nil 错误仍可越过取消，产生成功审查和待生效退出选择。
 - **timed 提问与迟到回答**：需要 pending 结果、`user-question-reply` 消息来源和单独投影，没有现有前端或组合需要它；上游默认组合也不启用。
 - **仿照 approval 另写 question asked/answered 记录**：与 `tool/call`、`tool/result` 重复同一事实，并引入第二套必须保持一致的顺序规则。
 - **在任意位置立即记录用户选择**：记录位置不再对应生效边界，`request/header` 中的段落与折叠出的模式可能不一致。

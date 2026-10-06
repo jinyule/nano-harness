@@ -13,6 +13,8 @@
 
 ## Decision
 
+边界校验与取消语义的补充实施见[修复 Note](2026-10-06-spill-question-and-call-validation.md)；本 Note 保留能力建立、生命周期和原始验证证据。
+
 长期决定见 [ADR-0008](../../../docs/decisions/0008-tool-output-spill-and-observation-policy.md)，当前事实归[架构](../../../docs/architecture.md#工具approval-与调度)、[安全](../../../docs/security.md#spill-文件)和[测试](../../../docs/testing.md#agent-与工具证据)文档；[ADR-0007](../../../docs/decisions/0007-upstream-base-tool-definitions.md) 的行为差异和 guidance 段落已同步。本次实施：
 
 - `internal/app/tool/spill.go`：消费方接口 `SpillStore`（`Create(ctx, sessionID, name) (SpillFile, error)`）、`SpillFile`（`io.Writer` + `Commit() (SpillRef, error)` + `Discard() error`）、`SpillRef{Locator, Bytes, Hint}`、`ErrSpillUnavailable`。`Runtime.UseSpill(store, scope)` 在调用方 Scope 内发布唯一的 store；`Invocation.CreateSpill`/`SaveText` 由 runtime 绑定调用方会话。runtime 对成功结果先修复 UTF-8，再按上游 spill-policy 算法保存超预算文本并替换为首尾预览，最后截断到 256 KiB。`Spec.KeepInline` 让 `read` 豁免；新增 `OrderWrite`/`OrderEdit`。
