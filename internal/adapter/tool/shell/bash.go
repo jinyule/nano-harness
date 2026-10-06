@@ -20,6 +20,7 @@ const (
 	// defaultTimeoutMS and maxTimeoutMS are the upstream Base executor budget.
 	defaultTimeoutMS = 60_000
 	maxTimeoutMS     = 600_000
+	terminationGrace = 3 * time.Second
 	description      = "Execute a bash command (`bash -c`) and return its stdout/stderr. " +
 		"Each call runs in a fresh shell; pass `workdir` instead of using `cd`. " +
 		"Managed `$DSH_*` variables expose current harness environment facts. " +
@@ -140,6 +141,7 @@ func (provider *Provider) bash(ctx context.Context, invocation appTool.Invocatio
 	request := platformProcess.Request{
 		Path: provider.bashPath, Args: []string{"-c", arguments.Command},
 		Root: provider.root.Path(), Cwd: workdir, TempDir: temporary, Mode: mode, Additional: environment,
+		TerminationGrace: terminationGrace,
 	}
 	if arguments.background() {
 		if ctx.Err() != nil {
@@ -219,8 +221,9 @@ func (provider *Provider) foreground(ctx context.Context, invocation appTool.Inv
 		// Only the call's cancellation or shutdown ends a wait on its own
 		// live job; the command goes with the call. The record leaves once
 		// the kill settles, since the model never saw the ID.
-		_, _, _ = provider.jobs.Kill(owner, id, "tool call aborted")
-		_, _ = provider.jobs.Wait(context.WithoutCancel(ctx), owner, id, timeout)
+		reason := "tool call aborted"
+		_, _, _ = provider.jobs.Kill(owner, id, &reason)
+		_, _ = provider.jobs.Wait(context.WithoutCancel(ctx), owner, id, terminationGrace+2*time.Second)
 		_ = provider.jobs.Remove(owner, id)
 		return appTool.Result{}, errors.New("tool call aborted")
 	}
@@ -260,6 +263,8 @@ func finish(ctx context.Context, run processRun, timeoutMS float64) (appTool.Res
 // facts join the detail every status line shows.
 func outcome(result platformProcess.Result, err error) appJob.Outcome {
 	switch {
+	case result.RunnerFailed:
+		return appJob.Outcome{Status: appJob.StatusFailed, Detail: "[sandbox: the sandbox runner itself failed under workspace-write mode — the command did not run; this is a sandbox problem, not a command failure]"}
 	case err != nil && !errors.Is(err, context.Canceled):
 		return appJob.Outcome{Status: appJob.StatusFailed, Detail: err.Error()}
 	case result.Signal != "":

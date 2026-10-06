@@ -572,5 +572,47 @@
     "before": "if completion.Stop == llm.StopMaxTokens {",
     "after": "if false && completion.Stop == llm.StopMaxTokens {",
     "test": "^TestMaybe_TruncatedSummary(FailsCompaction|PreservesFinishFailure)$"
+  },
+  {
+    "id": "sandbox-runner-failure-priority",
+    "file": "internal/platform/process/runner.go",
+    "before": "if request.Mode == ModeWorkspace && result.ExitCode > 0 {",
+    "after": "if false && request.Mode == ModeWorkspace && result.ExitCode > 0 {",
+    "test": "^TestRunnerRun_RunnerFailureOutranksDenial$"
+  },
+  {
+    "id": "process-term-grace",
+    "file": "internal/platform/process/runner.go",
+    "before": "if request.TerminationGrace > 0 {",
+    "after": "if false && request.TerminationGrace > 0 {",
+    "test": "^TestRunnerRun_GraceAllowsTERMTrapToFinish$"
+  },
+  {
+    "id": "job-decoded-output-budget",
+    "file": "internal/app/job/ring.go",
+    "before": "writer.output.service.write(writer.output.record, writer.channel, decodeUTF8(pending[:complete]))",
+    "after": "writer.output.service.write(writer.output.record, writer.channel, pending[:complete])",
+    "test": "^TestOutput_DecodesBeforeCountingRetention$"
+  },
+  {
+    "id": "job-output-status-envelope",
+    "file": "internal/adapter/tool/job/output.go",
+    "before": "session.MaxTextBytes-len(envelope)-1",
+    "after": "session.MaxTextBytes",
+    "test": "^TestJobOutput_LargeValueKeepsFinalEnvelope$"
+  },
+  {
+    "id": "job-explicit-empty-reason",
+    "file": "internal/app/job/service.go",
+    "before": "if reason != nil {",
+    "after": "if reason != nil && *reason != \"\" {",
+    "test": "^TestService_ExplicitEmptyKillReasonClearsPriorIntent$"
+  },
+  {
+    "id": "job-wait-identity-priority",
+    "file": "internal/adapter/tool/job/provider.go",
+    "before": "if _, err := provider.jobs.Get(invocation.SessionID, arguments.JobID); err != nil {",
+    "after": "if _, err := provider.jobs.Get(invocation.SessionID, arguments.JobID); false && err != nil {",
+    "test": "^TestJobOutput_IdentityErrorsPrecedeInvalidWait$"
   }
 ]

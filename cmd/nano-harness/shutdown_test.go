@@ -69,7 +69,7 @@ func (model *shutdownModel) ServeHTTP(writer http.ResponseWriter, request *http.
 		arguments["sandbox_permissions"], arguments["justification"] = "danger-full-access", "shutdown test"
 		return arguments
 	}
-	heartbeat := `printf %s $$ > pid; while :; do date > "$TMPDIR/beat" || : > lost; sleep 0.02; done`
+	heartbeat := `trap 'printf cleaned > term-cleanup; exit 0' TERM; printf %s $$ > pid; while :; do date > "$TMPDIR/beat" || : > lost; sleep 0.02; done`
 	calls := []scriptedCall{{"bash", host(map[string]any{"description": "Late call", "command": "true"})}}
 	if step == 1 {
 		calls = []scriptedCall{
@@ -164,6 +164,9 @@ func shutdownQuiescesAgents(t *testing.T, activeJobs int) {
 	defer stop()
 	if err := runtime.Shutdown(shutdown); err != nil {
 		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "term-cleanup")); err != nil || string(data) != "cleaned" { //nolint:gosec // rooted in this test's private workspace
+		t.Fatalf("assembled shutdown did not run TERM trap: %q, %v", data, err)
 	}
 
 	select {

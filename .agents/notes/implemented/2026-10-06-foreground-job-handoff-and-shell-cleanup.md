@@ -13,6 +13,8 @@
 
 ## Decision
 
+进程终止与输出信封的边界由[shell/job 边界 Note](2026-10-06-shell-and-job-boundary-alignment.md)补充；本 Note 继续拥有前台预留、原子交接和回退 Scope 的证据。
+
 这些修复沿用后台任务现有契约，前台交接、回退执行归属和关闭顺序统一归 [ADR-0009](../../../docs/decisions/0009-background-jobs.md)，平台限制在[安全规则](../../../docs/security.md#approvalshell-与进程)。
 
 - 前台 `Spec.Foreground` 在注册锁内预留完成收集；首次 `Read` 在同一锁内读取状态并释放预留。终态由前台渲染并移除；只有仍活动的 job 才交给后台，后续完成最多通知一次。`Wait` 的现有 waiter 计数继续服务实际等待者。

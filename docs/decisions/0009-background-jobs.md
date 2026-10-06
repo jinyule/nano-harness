@@ -32,36 +32,56 @@
 - producer 用 `Launch(Spec)` 提交 `Kind`、`Label`、`Owner`、可选 `Foreground` 和阻塞式 `Run(ctx, *Output) Outcome`。服务在自己拥有的 goroutine 中运行 `Run`，`Kill` 和关闭会取消 `ctx`；producer 在资源释放后返回结果。producer panic 被收敛为 `failed`。`Foreground` 在注册锁内预留完成收集权，不计入实际 `Wait` 调用数，详见[完成通知](#完成通知)。
 - 所有读写和控制操作都带调用方 session；访问他人 job 返回 `job <id> belongs to another session`，未知 ID 返回 `unknown job <id>`。ID 可预测，所以边界是所有权而不是保密。
 - ID 计数按 kind、在一个服务实例内递增。前台 `bash` 调用也会消耗编号，所以第一个后台 job 可能是 `bash-2`，与上游一致。
-- 每个 owner 最多 10 个 `running` 或 `stopping` 的 job。输出环在运行中保留 128 KiB；上游保留 256 KiB，但本仓一次读取连同状态行必须放进 256 KiB 的 tool result，减半后完整读取永远不会被统一截断。settle 时保留全部未读字节，settle 后第一次读取把保留量裁到 16 KiB。游标落到保留窗口之前时，读取追加 `[some output was dropped from memory; full output: <文件>]`，列出 job 当前声明的完整输出文件（见 [ADR-0008](0008-tool-output-spill-and-observation-policy.md#bash-完整输出)），没有文件时为 `(unavailable)`。
-- `Output` 的 stdout/stderr writer 暂存被拆开的 UTF-8 尾部，字符跨进程写入时仍整体进入输出环。
+- 每个 owner 最多 10 个 `running` 或 `stopping` 的 job。输出环按解码后的 UTF-8 文本字节计量，运行中保留 128 KiB；上游保留 256 KiB。本仓较小的窗口为结果包装留出空间，但不保证值结果、状态 detail 或完整输出定位符也能全部放入 256 KiB。`job_output` 单独预算最终信封：状态行最多 4 KiB，过长 detail 用 `…]` 收尾；丢失提示最多 4 KiB，定位符超限时显示 `(unavailable)`；剩余预算用于双流输出与值结果，按 rune 边界截断并追加 `[output truncated]`。状态与丢失提示保留在末尾，spill 不可用时也不会被统一字节截断挤掉。settle 时保留全部未读字节，settle 后第一次读取把保留量裁到 16 KiB。游标落到保留窗口之前时，读取追加 `[some output was dropped from memory; full output: <文件>]`，列出 job 当前声明的完整输出文件（见 [ADR-0008](0008-tool-output-spill-and-observation-policy.md#bash-完整输出)），没有文件时为 `(unavailable)`。
+- `Output` 的 stdout/stderr writer 各自暂存不完整的 UTF-8 尾部，字符跨写入时整体进入输出环；非法序列按解码器的最大合法前缀替换为 U+FFFD，最后的不完整序列在 settle 前替换。游标与保留量均使用替换后的文本字节，不使用原始进程字节。完整 shell spill 仍保存原始字节。
 - 关闭顺序：拒绝新 job，把活动 job 标为 `stopping` 并取消，等待全部 producer goroutine 返回，然后丢弃记录。job 的 context 来自插件启动 context，进程收到终止信号时运行中的命令同样停止。
 - 已结束的 job 一直列出，直到前台调用把它移除或服务关闭；没有保留数量上限，与上游相同。每次 `bash` 都需要用户审批，job 数量受人工节奏约束。
 
-本仓暂不实现上游的 controller 挂载检查、非消费式观察读取、progress 行和 owner 销毁时的 job 清理：当前 composition 总是同时注册 job 工具；没有 UI 观察者；`bash` 没有 progress；WP3 中能启动 job 的只有根 agent，它在 `jobs` 之后关闭。WP7 引入可在服务运行期间关闭的 owner 时，必须同时增加 owner 释放。
+owner 销毁清理由 `job.Service.Release` 实现：先取消该 owner 的活动 job，等待 settle 后删除它的全部记录，不发完成通知；context 提前结束时返回取消错误，剩余记录由服务关闭清理。child 释放路径见 [ADR-0013](0013-background-continuable-subagents.md#6-job-的-owner-释放)。
 
-> 已被取代：暂缓 owner 销毁清理的部分由 [ADR-0013](0013-background-continuable-subagents.md#6-job-的-owner-释放) 取代，child 关闭时释放其 job；其他暂缓项保留。
+本仓暂不实现上游的 controller 挂载检查、非消费式观察读取与 progress 行：当前 composition 同时注册 job 工具，没有 UI 观察者，`bash` 没有 progress consumer。
 
 ### job 工具
 
 `internal/adapter/tool/job` 是插件 `job-tools`，注册与上游逐字节一致的 `job_output`、`job_list`、`job_kill`：
 
-- `job_output` 可选先 wait（默认 30 s、上限 10 min，超过上限按上限，非正值报 `invalid wait timeout`；wait 被取消返回 `tool call aborted`），然后消费式读取。文本依次为 stdout、`[stderr]` 段、丢失提示、只交出一次的值结果；为空时显示 `(no new output)`，最后一行是 `[status: <status>]` 或 `[status: <status>, <detail>]`。
+- `job_output` 可选先 wait（默认 30 s、上限 10 min，超过上限按上限，非正值报 `invalid wait timeout`；wait 被取消返回 `tool call aborted`），然后消费式读取。先检查 job 是否存在与 owner，再校验 wait timeout；未启用 wait 时忽略 timeout。文本依次为 stdout、`[stderr]` 段、只交出一次的值结果、丢失提示；输出与值结果为空时显示 `(no new output)`，最后一行是 `[status: <status>]` 或 `[status: <status>, <detail>]`。
 - `job_list` 每行一个 `<id> [<kind>] <status> — <label>`，没有 job 时显示 `(no background jobs)`。
-- `job_kill` 对活动 job 返回 `requested cancellation of job <id>`，对已结束 job 返回 `job <id> had already finished <status line>`。reason 在 job 以 `killed` 结束时并入 detail，例如 `signal: SIGKILL; not needed`；调用参数本身也作为 `tool/call` 持久化。
+- `job_kill` 对活动 job 返回 `requested cancellation of job <id>`，对已结束 job 返回 `job <id> had already finished <status line>`。reason 在 job 以 `killed` 结束时并入 detail，例如 `signal: SIGKILL; not needed`；活动 job 连续 kill 时，省略 reason 保留旧意图，显式 `reason: ""` 清除旧意图，其他显式值替换旧意图；已结束 job 不更新理由。调用参数本身也作为 `tool/call` 持久化。
 - 三个工具都是 exclusive，与上游未声明并发安全一致。上游 `tool:jobs` 段落以 section order 1600（`appTool.OrderJobs`）逐字采用，挂在 `job_output` 上，只在该工具可见时出现。
 
 ### bash
 
 `bash` 改为 Base 的后台变体：在 `workdir` 之后声明 `run_in_background`，`timeoutMs` 使用 “moves to the background as a job instead of being killed” 描述，升级字段排在其后。
 
-- 每次调用在审批和执行点检查之后注册为 kind `bash`、label 为命令文本的 job。job 中的进程没有 runner 截止时间，只在自行结束、`job_kill` 或关闭时停止；取消时 runner 终止整个进程组并等待退出。
+- 每次调用在审批和执行点检查之后注册为 kind `bash`、label 为命令文本的 job。job 中的进程没有 runner 截止时间，只在自行结束、`job_kill` 或关闭时停止；取消时 runner 向整个进程组发 SIGTERM，最多等待 3 s 后发 SIGKILL，并等待退出与输出收尾；TERM trap 可以执行。
 - `run_in_background: true` 立即返回 `started background job <id>`，不应用 `timeoutMs`。审批原因为 `run a background shell command in the workspace sandbox: <description>`；升级请求仍使用升级原因。
 - 前台调用从注册时起预留完成收集权，等待 `timeoutMs`（默认 60 s、上限 10 min）。及时结束时移除 job 记录，按原有前台格式渲染（stdout/stderr 各保留最后 64,000 字节、退出码、信号和 sandbox 标记）。超时时做一次消费式读取：读取时已结束的 job 仍按前台结果返回并移除，不发通知；仍活动时才返回已有输出和 `[still running after <N>ms; moved to background job <id>]` 及上游的后续说明，并允许后续完成通知。之后的 `job_output` 从这次读取之后继续。
 - 调用被取消（或服务在等待期间关闭）时，以 reason `tool call aborted` kill 该 job，等待其结束并移除，返回 `tool call aborted`。owner 达到 job 上限时，后台调用返回上限错误，前台调用退回到期即终止的执行方式并可能返回 `[timed out after Nms]`。
-- job 结局：信号终止为 `killed`（`signal: <name>`，未启动即取消为 `killed before exit`），正常退出为 `completed`（`exit code: N`，sandbox 拒绝时追加拒绝标记和升级提示），无法启动或 sandbox 不可用为 `failed`。
+- job 结局：信号终止为 `killed`（`signal: <name>`，未启动即取消为 `killed before exit`），正常退出为 `completed`（`exit code: N`，sandbox 拒绝时追加拒绝标记和升级提示），无法启动或 sandbox 不可用为 `failed`。sandbox runner 的致命诊断优先于文件拒绝：非零退出时匹配当前后端的 `sandbox-exec: ` 或 `bwrap: `，保留匹配诊断并返回可识别的 `SANDBOX_UNAVAILABLE`；后台携带 `RunnerFailed` 事实并说明 `command did not run`，不建议权限升级。普通命令非零退出仍是 completed，不是 tool error。runner 可执行文件启动失败同样保留 sandbox 分类和原始原因。
 - approval、sandbox、`danger-full-access` 升级与 delegated 拒绝语义不变，后台命令同样经过它们。
 - 后台命令使用 shell provider 的临时目录作为 `TMPDIR`。job 上限回退执行由 shell provider 在自己的 Scope 下跟踪，保留调用方取消；准入与 cleanup 共用锁，关闭开始后不再增加执行贡献。`cmd/nano-harness` 先关闭 agent，再关闭 jobs，最后关闭 shell provider：等待全部 job producer 后，provider 拒绝新回退、取消并等待全部回退 runner 与 spill 收尾，再删除该目录。
 - Scope 的 join 只证明受管执行静止。Linux workspace sandbox 有 PID namespace；macOS `sandbox-exec` 没有，`killpg` 无法保证终止调用 `setsid()` 或离开原进程组的后代。host 模式同样没有 namespace。完整平台与模式边界归[安全规则](../security.md#approvalshell-与进程)，更强回收保证需要独立容器、VM 或执行后端。
+
+### 固定预算与托管环境
+
+上游可配置的这些预算在本仓保持固定常量，不提供启动或热配置：
+
+| 预算 | 本仓不变量与理由 |
+|---|---|
+| bash 前台等待 / 回退超时 | 默认 60 s、cap 600 s；限制一次 exclusive 工具占用的等待时间，后台 job 自管生命周期，前台超时交接不终止 job |
+| 进程终止 | bash/job 的 TERM 宽限固定 3 s，KILL 后管道排空最多 1 s；给清理 trap 时间，同时限制受管进程关闭等待；搜索零宽限立即 KILL，理由见 ADR-0007 |
+| 前台输出 | stdout/stderr 各保留 64,000 字节尾部；避免任意命令无限占用内存，完整流按 ADR-0008 保存 |
+| job 输出 | 活动环 128 KiB，首次终态读取后 16 KiB，按解码后的 UTF-8 字节计量；最终信封按上文独立预算 |
+| 活动 job 数 | 每 owner 最多 10 个 running/stopping job；限制一个会话同时拥有的执行与输出内存，不限制已结束记录数量 |
+| job_output wait | 默认 30 s、cap 600 s；给消费式读取有界阻塞期限，超时不取消 producer |
+| 最终工具文本 | session 固定 256 KiB；包含编码替换、标记与 metadata，不能只预算内部输出环 |
+
+这些值固定产品的资源与交接契约，并让模型可见的边界、恢复结果和静止证据可复现。当前没有需要另一套预算的生产部署 consumer；增加配置会扩大组合验证面。调整预算须同时更新 owning 常量、边界测试与本文，不能静默放宽安全或信封上限。
+
+关闭先同时取消所有活动 job；shell provider 同时取消全部回退执行，再等待各自返回。每个真实 runner 的终止阶段由 3 s 宽限加 1 s 管道排空约束，等待不按 job 数串行累加。前台取消另有 5 s 的结算等待预算，不复用可能长达 10 min 的命令等待。该期限针对 OS 进程终止与管道回收，不承诺外部文件系统同步或不遵守取消契约的自定义 producer 的硬期限；Scope 仍等待全部受管执行静止。
+
+托管变量只提供 `DSH_SHELL=1`、当前 `DSH_SESSION_ID` 和固定环境 allowlist。上游 `DSH_HOME` 指统一 Harness home，本仓 settings、credentials、session、spill、attachments 根均可独立部署，没有唯一等价目录；不把其中一个根伪装成 home，也不从父环境继承该变量。上游 `DSH_PROFILE` / `DSH_PROFILE_DIR` 描述启动器选择的 profile 及安装包目录，本仓使用编译时 composition，没有 profile 启动上下文，因此省略两者。它们不是仅因凭据隔离而被删除：首先缺少可诚实映射的托管事实。已有 workspace 事实由 `NANO_WORKSPACE` 给出。未来出现 profile 或统一 home consumer 时应按显式注入、allowlist 与启动校验重新评估，不建立无 consumer 的 contributor registry。
 
 ### 完成通知
 
@@ -90,7 +110,7 @@ background job <id> (<kind>: <label>) finished <status line>. Read its output wi
 
 ### 恢复与身份
 
-job 与计数器不持久化；尚未投递的完成通知自 [ADR-0023](0023-durable-job-notices.md) 起持久化并在恢复后投递。恢复后旧 transcript 中的 job ID 对 `job_*` 工具是 `unknown job`，新进程的编号从 1 重新开始，复用编号后旧 ID 可能指向新 job。composition ID 改为绑定 `shell-tools-v2` 和新增的 `job-tools-v1`（ADR-0023 升为 `job-tools-v2`），旧会话按 composition mismatch 拒绝恢复；本仓尚无发布 tag，没有已发布的用户会话需要迁移。
+job 与计数器不持久化；尚未投递的完成通知自 [ADR-0023](0023-durable-job-notices.md) 起持久化并在恢复后投递。新进程的编号从 1 重新开始；旧 transcript 中的 job ID 只在编号尚未复用时返回 `unknown job`。同 owner 新建同名 ID 后，旧文本可指向新 job，ID 不构成跨进程身份。composition ID 改为绑定 `shell-tools-v2` 和新增的 `job-tools-v1`（ADR-0023 升为 `job-tools-v2`），旧会话按 composition mismatch 拒绝恢复；本仓尚无发布 tag，没有已发布的用户会话需要迁移。
 
 > 已被取代：本节的 `shell-tools-v2` 由 [ADR-0008](0008-tool-output-spill-and-observation-policy.md#身份) 提升为 `shell-tools-v3`；此处保留后台任务落地时的身份。
 

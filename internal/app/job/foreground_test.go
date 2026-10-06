@@ -92,7 +92,7 @@ func TestService_ForegroundCancellationBeforeKillDoesNotNotify(t *testing.T) {
 	}
 	producer.release <- Outcome{Status: StatusCompleted}
 	service.group.Wait()
-	_, _, _ = service.Kill("root", id, "tool call aborted")
+	_, _, _ = service.Kill("root", id, new("tool call aborted"))
 	if texts := notifier.texts(); len(texts) != 0 {
 		t.Fatalf("completion between cancelled Wait and Kill notified: %q", texts)
 	}

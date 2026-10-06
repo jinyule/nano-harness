@@ -67,11 +67,12 @@ func TestComposition_BackgroundJobsEndToEnd(t *testing.T) {
 		arguments["sandbox_permissions"], arguments["justification"] = "danger-full-access", "e2e host job"
 		return arguments
 	}
+	trapped := `trap 'printf cleaned > term-cleanup; trap - TERM; kill -TERM $$' TERM; printf one; touch printed; while :; do :; done`
 	// Files order the steps causally: the foreground bash call returns only
 	// after bash-1 printed, and bash-2 finishes only after turn one.
 	script := [][]scriptedCall{
 		{
-			{"bash", host(map[string]any{"description": "Print then hold", "command": "printf one; touch printed; sleep 30", "run_in_background": true})},
+			{"bash", host(map[string]any{"description": "Print then hold", "command": trapped, "run_in_background": true})},
 			{"bash", host(map[string]any{"description": "Wait for notify", "command": "while [ ! -e notify ]; do sleep 0.05; done; printf three", "run_in_background": true})},
 		},
 		{{"bash", host(map[string]any{"description": "Wait for print", "command": "while [ ! -e printed ]; do sleep 0.01; done"})}, {"job_list", map[string]any{}}},
@@ -184,7 +185,7 @@ func TestComposition_BackgroundJobsEndToEnd(t *testing.T) {
 		"call-0-1": "started background job bash-2",
 		"call-1-0": "(no output)",
 		"call-2-0": "requested cancellation of job bash-1",
-		"call-2-1": "one\n[status: killed, signal: SIGKILL; not needed]",
+		"call-2-1": "one\n[status: killed, signal: SIGTERM; not needed]",
 		"call-2-2": "(no new output)\n[status: running]",
 		"call-4-0": "three\n[status: completed, exit code: 0]",
 	} {
@@ -192,8 +193,11 @@ func TestComposition_BackgroundJobsEndToEnd(t *testing.T) {
 			t.Errorf("%s = %q, want %q", callID, outputs[callID], want)
 		}
 	}
-	if list := outputs["call-1-1"]; list != "bash-1 [bash] running — printf one; touch printed; sleep 30\nbash-2 [bash] running — while [ ! -e notify ]; do sleep 0.05; done; printf three" {
+	if list := outputs["call-1-1"]; list != "bash-1 [bash] running — "+trapped+"\nbash-2 [bash] running — while [ ! -e notify ]; do sleep 0.05; done; printf three" {
 		t.Errorf("job_list = %q", list)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "term-cleanup")); err != nil || string(data) != "cleaned" { //nolint:gosec // rooted in this test's private workspace
+		t.Fatalf("assembled job_kill did not run TERM trap: %q, %v", data, err)
 	}
 	// Only bash-2 notifies: bash-1 was killed by the model.
 	want := "turn 2: background job bash-2 (bash: while [ ! -e notify ]; do sleep 0.05; done; printf three) finished [status: completed, exit code: 0]. Read its output with job_output."

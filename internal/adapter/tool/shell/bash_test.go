@@ -415,7 +415,7 @@ func TestBash_PromotesForegroundCommandAfterTimeout(t *testing.T) {
 	if handed := strings.TrimSuffix(strings.TrimSuffix(result.Output, handoff), "\n"); handed+read.Stdout != "partial" || read.Job.Status != appJob.StatusRunning {
 		t.Fatalf("handed %q then read %+v", handed, read)
 	}
-	if _, requested, err := h.jobs.Kill("session-1", "bash-1", "done"); !requested || err != nil {
+	if _, requested, err := h.jobs.Kill("session-1", "bash-1", new("done")); !requested || err != nil {
 		t.Fatalf("kill = %v, %v", requested, err)
 	}
 	if view := h.settled(t, "bash-1"); view.StatusLine() != "[status: killed, signal: SIGKILL; done]" {
@@ -682,10 +682,10 @@ func TestBash_RealBackgroundAndPromotedProcesses(t *testing.T) {
 		t.Fatalf("promoted = %#v", result)
 	}
 	started := time.Now()
-	if _, requested, err := h.jobs.Kill("session-1", "bash-2", "test done"); !requested || err != nil {
+	if _, requested, err := h.jobs.Kill("session-1", "bash-2", new("test done")); !requested || err != nil {
 		t.Fatalf("kill = %v, %v", requested, err)
 	}
-	if view := h.settled(t, "bash-2"); view.StatusLine() != "[status: killed, signal: SIGKILL; test done]" || time.Since(started) > 10*time.Second {
+	if view := h.settled(t, "bash-2"); view.StatusLine() != "[status: killed, signal: SIGTERM; test done]" || time.Since(started) > 10*time.Second {
 		t.Fatalf("killed view = %q after %v", view.StatusLine(), time.Since(started))
 	}
 	read, _ := h.jobs.Read("session-1", "bash-2")

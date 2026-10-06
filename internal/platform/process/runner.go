@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -26,8 +27,8 @@ const (
 var (
 	// ErrInvalidConfig identifies a process request the runner cannot execute safely.
 	ErrInvalidConfig = errors.New("invalid process configuration")
-	// ErrSandboxUnavailable indicates workspace mode has no supported OS sandbox executable.
-	ErrSandboxUnavailable = errors.New("workspace sandbox is unavailable")
+	// ErrSandboxUnavailable identifies a missing or failed workspace sandbox runner.
+	ErrSandboxUnavailable = errors.New("SANDBOX_UNAVAILABLE: workspace sandbox is unavailable")
 	operatingSystem       = runtime.GOOS
 	findExecutable        = exec.LookPath
 	processAbs            = filepath.Abs
@@ -63,10 +64,14 @@ type Request struct {
 	// requires it; an empty value in host mode leaves TMPDIR unset.
 	TempDir string
 	Mode    Mode
-	// Timeout kills the process group when it expires; zero leaves ctx as
+	// Timeout terminates the process group when it expires; zero leaves ctx as
 	// the only bound, for work a background job owner cancels explicitly.
 	Timeout    time.Duration
 	Additional map[string]string
+	// TerminationGrace permits SIGTERM cleanup before SIGKILL on cancellation
+	// or timeout. It is bounded to three seconds; zero kills immediately,
+	// as required by read-only search.
+	TerminationGrace time.Duration
 	// StdoutLimit is the retained stdout tail in bytes; zero selects the
 	// default. Output.Truncated reports that more was written.
 	StdoutLimit int
@@ -93,11 +98,13 @@ type Result struct {
 	ExitCode int
 	// Signal names the terminating signal, or is empty after a normal exit.
 	Signal string
-	// TimedOut reports that the request timeout killed the process group.
+	// TimedOut reports that the request timeout requested group termination.
 	TimedOut bool
 	// SandboxDenied reports a failed workspace-mode run whose stderr carries
 	// the active sandbox's file-denial signature.
 	SandboxDenied bool
+	// RunnerFailed distinguishes sandbox infrastructure failure from a command exit.
+	RunnerFailed bool
 }
 
 // Runner resolves sandbox support once and owns no process beyond Run.
@@ -122,7 +129,7 @@ func New() *Runner {
 // group is killed and reaped. Exit status, signals, and timeouts are facts
 // in Result; errors mean the process could not run or the caller canceled.
 func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) {
-	if request.Path == "" || request.Root == "" || request.Cwd == "" || request.TempDir == "" && request.Mode != ModeHost || request.Mode != ModeWorkspace && request.Mode != ModeHost || request.Timeout < 0 || request.Timeout > 10*time.Minute || request.StdoutLimit < 0 || request.StderrLimit < 0 {
+	if request.Path == "" || request.Root == "" || request.Cwd == "" || request.TempDir == "" && request.Mode != ModeHost || request.Mode != ModeWorkspace && request.Mode != ModeHost || request.Timeout < 0 || request.Timeout > 10*time.Minute || request.TerminationGrace < 0 || request.TerminationGrace > 3*time.Second || request.StdoutLimit < 0 || request.StderrLimit < 0 {
 		return Result{}, ErrInvalidConfig
 	}
 	paths := make([]string, 3)
@@ -149,25 +156,51 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 		runContext, cancel = context.WithTimeout(ctx, request.Timeout)
 	}
 	defer cancel()
-	command := exec.CommandContext(runContext, path, args...) //nolint:gosec // executable and arguments are intentionally selected by the approved tool call
+	if err := runContext.Err(); err != nil {
+		return Result{}, err
+	}
+	command := exec.Command(path, args...) //nolint:gosec,noctx // approved argv; the joined observer below owns group cancellation so exec's pipe deadline cannot shorten TERM grace
 	command.Dir = cwd
 	command.Env = cleanEnvironment(root, temporary, request.Additional)
 	configureProcess(command)
 	var killed atomic.Bool
-	command.Cancel = func() error {
-		killed.Store(true)
-		killProcessGroup(command)
-		return nil
-	}
 	command.WaitDelay = pipeDrainDelay
 	stdout, stderr := tailBuffer{limit: request.StdoutLimit}, tailBuffer{limit: request.StderrLimit}
 	command.Stdout, command.Stderr = observed(&stdout, request.Stdout), observed(&stderr, request.Stderr)
-	err = command.Run()
-	// Descendants left in the group are stopped so the call reaches quiescence.
-	killProcessGroup(command)
-	if command.ProcessState == nil {
+	if err = command.Start(); err != nil {
+		if request.Mode == ModeWorkspace && runnerSpawnFailure(err, path, cwd) {
+			return Result{RunnerFailed: true}, fmt.Errorf("%w: start sandbox runner: %w", ErrSandboxUnavailable, err)
+		}
 		return Result{}, fmt.Errorf("start process: %w", err)
 	}
+	// The cancellation observer belongs to this invocation and is joined
+	// before returning, so no delayed signal outlives the invocation.
+	done, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		select {
+		case <-done:
+			return
+		case <-runContext.Done():
+			killed.Store(true)
+		}
+		if request.TerminationGrace > 0 {
+			terminateProcessGroup(command)
+			timer := time.NewTimer(request.TerminationGrace)
+			defer timer.Stop()
+			select {
+			case <-done:
+				return
+			case <-timer.C:
+			}
+		}
+		killProcessGroup(command)
+	}()
+	_ = command.Wait() // nonzero exit and pipe drain expiry are represented by the process facts
+	close(done)
+	<-stopped
+	// Descendants left in the group are stopped so the call reaches quiescence.
+	killProcessGroup(command)
 	result := Result{
 		Stdout: stdout.output(), Stderr: stderr.output(),
 		ExitCode: command.ProcessState.ExitCode(), Signal: exitSignal(command.ProcessState),
@@ -176,9 +209,30 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 		return result, ctx.Err()
 	}
 	result.TimedOut = killed.Load()
+	if request.Mode == ModeWorkspace && result.ExitCode > 0 {
+		prefix := map[string]string{"darwin": "sandbox-exec: ", "linux": "bwrap: "}[runner.goos]
+		for line := range strings.SplitSeq(result.Stderr.Text, "\n") {
+			if prefix != "" && strings.Contains(strings.ToLower(line), prefix) {
+				result.RunnerFailed = true
+				return result, fmt.Errorf("%w: %s", ErrSandboxUnavailable, strings.TrimSpace(line))
+			}
+		}
+	}
 	signature, ok := denialSignatures[runner.goos]
 	result.SandboxDenied = request.Mode == ModeWorkspace && ok && result.ExitCode > 0 && strings.Contains(strings.ToLower(result.Stderr.Text), signature)
 	return result, nil
+}
+
+// runnerSpawnFailure rules out cwd failure before attributing an executable
+// launch error to confinement. Go's fork/exec error names argv[0] even when
+// the child's chdir fails, so the path alone does not establish the stage.
+func runnerSpawnFailure(err error, path, cwd string) bool {
+	var failure *os.PathError
+	if !errors.As(err, &failure) || failure.Path != path || !errors.Is(err, os.ErrNotExist) && !errors.Is(err, os.ErrPermission) {
+		return false
+	}
+	info, statErr := os.Stat(cwd)
+	return statErr == nil && info.IsDir() && canEnter(cwd)
 }
 
 func (runner *Runner) command(root, cwd, temporary string, request Request) (string, []string, error) {

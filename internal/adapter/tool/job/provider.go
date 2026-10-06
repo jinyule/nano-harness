@@ -89,19 +89,7 @@ func (provider *Provider) outputTool() *appTool.Tool {
 // read. A timed-out wait still reads, so the result shows progress.
 func (provider *Provider) output(ctx context.Context, invocation appTool.Invocation, arguments outputArgs) (appTool.Result, error) {
 	if arguments.Wait != nil && *arguments.Wait {
-		timeoutMS := float64(defaultWaitMS)
-		if arguments.TimeoutMS != nil {
-			timeoutMS = *arguments.TimeoutMS
-		}
-		timeoutMS = min(timeoutMS, maxWaitMS)
-		if timeoutMS <= 0 {
-			return appTool.Result{}, fmt.Errorf("invalid wait timeout: expected a positive number of milliseconds, got %s", strconv.FormatFloat(timeoutMS, 'f', -1, 64))
-		}
-		timeout := max(time.Duration(timeoutMS*float64(time.Millisecond)), time.Nanosecond)
-		if _, err := provider.jobs.Wait(ctx, invocation.SessionID, arguments.JobID, timeout); err != nil {
-			if ctx.Err() != nil {
-				return appTool.Result{}, errors.New("tool call aborted")
-			}
+		if err := provider.wait(ctx, invocation, arguments); err != nil {
 			return appTool.Result{}, err
 		}
 	}
@@ -109,14 +97,27 @@ func (provider *Provider) output(ctx context.Context, invocation appTool.Invocat
 	if err != nil {
 		return appTool.Result{}, err
 	}
-	body := read.Delta()
-	if read.Result != "" {
-		body = withNewline(body) + read.Result
+	return appTool.Text(renderOutput(read)), nil
+}
+
+func (provider *Provider) wait(ctx context.Context, invocation appTool.Invocation, arguments outputArgs) error {
+	if _, err := provider.jobs.Get(invocation.SessionID, arguments.JobID); err != nil {
+		return err
 	}
-	if body == "" {
-		body = "(no new output)"
+	timeoutMS := float64(defaultWaitMS)
+	if arguments.TimeoutMS != nil {
+		timeoutMS = *arguments.TimeoutMS
 	}
-	return appTool.Text(withNewline(body) + read.Job.StatusLine()), nil
+	timeoutMS = min(timeoutMS, maxWaitMS)
+	if timeoutMS <= 0 {
+		return fmt.Errorf("invalid wait timeout: expected a positive number of milliseconds, got %s", strconv.FormatFloat(timeoutMS, 'f', -1, 64))
+	}
+	timeout := max(time.Duration(timeoutMS*float64(time.Millisecond)), time.Nanosecond)
+	_, err := provider.jobs.Wait(ctx, invocation.SessionID, arguments.JobID, timeout)
+	if err != nil && ctx.Err() != nil {
+		return errors.New("tool call aborted")
+	}
+	return err
 }
 
 func withNewline(text string) string {
@@ -161,11 +162,7 @@ func (provider *Provider) killTool() *appTool.Tool {
 		},
 		Check: func(_ appTool.Invocation, arguments killArgs) error { return checkJobID(arguments.JobID) },
 		Execute: func(_ context.Context, invocation appTool.Invocation, arguments killArgs) (appTool.Result, error) {
-			reason := ""
-			if arguments.Reason != nil {
-				reason = *arguments.Reason
-			}
-			view, requested, err := provider.jobs.Kill(invocation.SessionID, arguments.JobID, reason)
+			view, requested, err := provider.jobs.Kill(invocation.SessionID, arguments.JobID, arguments.Reason)
 			if err != nil {
 				return appTool.Result{}, err
 			}

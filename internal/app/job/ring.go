@@ -98,7 +98,7 @@ func (writer channelWriter) Write(data []byte) (int, error) {
 	pending := slices.Concat(writer.output.pending[writer.channel], data)
 	complete := len(pending) - incompleteSuffix(pending)
 	writer.output.pending[writer.channel] = slices.Clone(pending[complete:])
-	writer.output.service.write(writer.output.record, writer.channel, pending[:complete])
+	writer.output.service.write(writer.output.record, writer.channel, decodeUTF8(pending[:complete]))
 	return len(data), nil
 }
 
@@ -109,13 +109,33 @@ func (output *Output) Advertise(channel Channel, locator string) {
 	output.service.advertise(output.record, channel, locator)
 }
 
-// flush appends bytes still held as incomplete sequences; rendering
-// replaces them with the replacement character.
+// flush decodes an incomplete final sequence as a replacement character.
 func (output *Output) flush() {
 	for channel, pending := range output.pending {
-		output.service.write(output.record, Channel(channel), pending)
+		output.service.write(output.record, Channel(channel), decodeUTF8(pending))
 		output.pending[channel] = nil
 	}
+}
+
+// decodeUTF8 replaces each malformed sequence's maximal valid prefix, as
+// a streaming text decoder does. Consecutive invalid leading bytes remain
+// distinct replacements; write boundaries do not change the decoded text.
+func decodeUTF8(data []byte) []byte {
+	var text strings.Builder
+	for len(data) > 0 {
+		char, size := utf8.DecodeRune(data)
+		if char == utf8.RuneError && size == 1 {
+			for size < len(data) && size < utf8.UTFMax && !utf8.FullRune(data[:size]) {
+				size++
+			}
+			if size > 1 && utf8.FullRune(data[:size]) {
+				size--
+			}
+		}
+		text.WriteRune(char)
+		data = data[size:]
+	}
+	return []byte(text.String())
 }
 
 // incompleteSuffix measures a trailing UTF-8 sequence that could still be

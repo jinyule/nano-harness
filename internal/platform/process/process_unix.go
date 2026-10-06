@@ -28,6 +28,14 @@ func killProcessGroup(command *exec.Cmd) {
 	}
 }
 
+func terminateProcessGroup(command *exec.Cmd) {
+	_ = syscall.Kill(-command.Process.Pid, syscall.SIGTERM)
+}
+
+func canEnter(path string) bool {
+	return syscall.Access(path, 1) == nil // X_OK: entering the caller's cwd requires search permission
+}
+
 // exitSignal names the signal that terminated the process, if any.
 func exitSignal(state *os.ProcessState) string {
 	status, ok := state.Sys().(syscall.WaitStatus)

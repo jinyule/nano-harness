@@ -299,14 +299,15 @@ func (service *Service) Read(owner, id string) (Read, error) {
 // returns ctx's error only while the job is live, because a settlement that
 // already happened wins.
 func (service *Service) Wait(ctx context.Context, owner, id string, timeout time.Duration) (View, error) {
-	if timeout <= 0 {
-		return View{}, fmt.Errorf("%w: wait timeout must be positive", ErrInvalidConfig)
-	}
 	service.mu.Lock()
 	current, err := service.find(owner, id)
 	if err != nil {
 		service.mu.Unlock()
 		return View{}, err
+	}
+	if timeout <= 0 {
+		service.mu.Unlock()
+		return View{}, fmt.Errorf("%w: wait timeout must be positive", ErrInvalidConfig)
 	}
 	if current.status.terminal() {
 		view := current.view()
@@ -336,10 +337,10 @@ func (service *Service) Wait(ctx context.Context, owner, id string, timeout time
 
 // Kill requests cancellation of a live job, reports whether it did, and
 // returns the projection after the request; a settled job is left
-// unchanged. A non-empty reason is appended to the terminal detail when the
-// job settles killed. A killed job sends no completion notice: the killer's
+// unchanged. A supplied reason replaces the prior intent, including an empty
+// string; nil preserves it. A killed job sends no completion notice: the killer's
 // own result reports it.
-func (service *Service) Kill(owner, id, reason string) (View, bool, error) {
+func (service *Service) Kill(owner, id string, reason *string) (View, bool, error) {
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	current, err := service.find(owner, id)
@@ -351,8 +352,8 @@ func (service *Service) Kill(owner, id, reason string) (View, bool, error) {
 	}
 	current.cancel()
 	current.status, current.cause = StatusStopping, causeKill
-	if reason != "" {
-		current.killReason = reason
+	if reason != nil {
+		current.killReason = *reason
 	}
 	return current.view(), true, nil
 }

@@ -80,6 +80,8 @@ func TestRunnerRun_ValidatesRequestAndPaths(t *testing.T) {
 		func(request *Request) { request.StderrLimit = -1 },
 		func(request *Request) { request.Timeout = -time.Second },
 		func(request *Request) { request.Timeout = 11 * time.Minute },
+		func(request *Request) { request.TerminationGrace = -time.Second },
+		func(request *Request) { request.TerminationGrace = 4 * time.Second },
 		func(request *Request) { request.Cwd = filepath.Dir(temporary) },
 		func(request *Request) { request.TempDir = filepath.Dir(temporary) },
 	} {

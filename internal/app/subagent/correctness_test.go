@@ -151,7 +151,7 @@ func TestService_CancelledJobWithTeardownFailureIsFailed(t *testing.T) {
 	closeAgent = func(registry *agent.Registry, ctx context.Context, target string) error {
 		return errors.Join(previous(registry, ctx, target), errors.New("release failed"))
 	}
-	if _, _, err := h.jobs.Kill("root", id, "stop"); err != nil {
+	if _, _, err := h.jobs.Kill("root", id, new("stop")); err != nil {
 		t.Fatal(err)
 	}
 	view, err := h.jobs.Wait(context.Background(), "root", id, waitLimit)
@@ -389,7 +389,7 @@ func TestService_BackgroundKillCancelsStartup(t *testing.T) {
 	var group sync.WaitGroup
 	t.Cleanup(func() {
 		for _, view := range h.jobs.List("root") {
-			_, _, _ = h.jobs.Kill("root", view.ID, "cleanup")
+			_, _, _ = h.jobs.Kill("root", view.ID, new("cleanup"))
 		}
 		group.Wait()
 	})
@@ -406,7 +406,7 @@ func TestService_BackgroundKillCancelsStartup(t *testing.T) {
 	if len(views) != 1 {
 		t.Fatalf("startup was not job-owned: %#v", views)
 	}
-	if _, _, err := h.jobs.Kill("root", views[0].ID, "stop startup"); err != nil {
+	if _, _, err := h.jobs.Kill("root", views[0].ID, new("stop startup")); err != nil {
 		t.Fatal(err)
 	}
 	if id := receive(t, returned); id != views[0].ID {

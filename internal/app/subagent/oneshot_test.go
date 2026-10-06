@@ -229,7 +229,7 @@ func TestService_StartBackgroundRunsOneShotAsParentJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	receive(t, h.model.blocked)
-	if _, requested, err := h.jobs.Kill("root", killed, "superseded"); err != nil || !requested {
+	if _, requested, err := h.jobs.Kill("root", killed, new("superseded")); err != nil || !requested {
 		t.Fatalf("Kill = %t, %v", requested, err)
 	}
 	if view, err := h.jobs.Wait(context.Background(), "root", killed, waitLimit); err != nil || view.Status != job.StatusKilled {

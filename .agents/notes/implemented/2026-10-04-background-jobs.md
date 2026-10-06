@@ -13,6 +13,8 @@
 
 ## Decision
 
+runner 失败、TERM 宽限、解码后输出预算、kill/wait 边界与固定环境取舍由[shell/job 边界 Note](2026-10-06-shell-and-job-boundary-alignment.md)补充，本 Note 保留后台任务的其余设计与原始验证。
+
 job 名额测试的结算屏障证据见[边界修复 Note](2026-10-06-spill-question-and-call-validation.md)；本 Note 保留后台任务的产品决定与原始验证。
 
 前台完成收集、超时原子交接、回退执行所有权与平台回收边界由[前台 job 交接 Note](2026-10-06-foreground-job-handoff-and-shell-cleanup.md)补充；本 Note 保留后台任务的其余设计与实施证据，当前契约以 [ADR-0009](../../../docs/decisions/0009-background-jobs.md) 为准。
@@ -61,7 +63,7 @@ job 名额测试的结算屏障证据见[边界修复 Note](2026-10-06-spill-que
 代价与风险：
 
 - 通知可以在没有用户输入时开启 turn 并消耗模型调用；每个通知最多触发一个 turn，而启动新 job 需要用户审批。
-- 正常关闭取消并等待受管执行，丢弃尚未投递的通知；脱离进程组的后代回收受[平台与模式边界](../../../docs/security.md#approvalshell-与进程)限制；恢复后旧 job ID 为 `unknown job`，编号从 1 重新开始。
+- 正常关闭取消并等待受管执行，丢弃尚未投递的通知；脱离进程组的后代回收受[平台与模式边界](../../../docs/security.md#approvalshell-与进程)限制；编号从 1 重新开始，旧 ID 仅在尚未复用时为 `unknown job`；当前限制见 ADR-0009。
 - 前台命令多一次 job 注册与输出复制；每 owner 内存上限为 10 个活动 job 的输出环。
 - 输出环保留量（128 KiB）小于上游（256 KiB），超出窗口的输出在 spill 落地前无法找回。
 - 旧会话按 composition mismatch 拒绝恢复；本仓尚无发布 tag。

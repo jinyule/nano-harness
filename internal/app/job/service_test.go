@@ -186,7 +186,7 @@ func TestService_ReadsOutputIncrementallyAndRendersStatus(t *testing.T) {
 		t.Fatalf("view = %+v", view)
 	}
 	read, _ = service.Read("root", id)
-	if read.Stderr != "\xe4" || read.Result != "value" {
+	if read.Stderr != "�" || read.Result != "value" {
 		t.Fatalf("terminal read = %+v", read)
 	}
 	if read, _ := service.Read("root", id); read.Result != "" {
@@ -227,7 +227,7 @@ func TestService_FencesOwnersAndUnknownJobs(t *testing.T) {
 		"get":    func() error { _, err := service.Get("child", id); return err },
 		"read":   func() error { _, err := service.Read("child", id); return err },
 		"wait":   func() error { _, err := service.Wait(context.Background(), "child", id, time.Second); return err },
-		"kill":   func() error { _, _, err := service.Kill("child", id, ""); return err },
+		"kill":   func() error { _, _, err := service.Kill("child", id, new("")); return err },
 		"remove": func() error { return service.Remove("child", id) },
 	} {
 		if err := call(); !errors.Is(err, ErrForeignJob) || err.Error() != foreign {
@@ -284,7 +284,7 @@ func TestService_LimitsLiveJobsPerOwner(t *testing.T) {
 	}
 	// Other owners have their own budget, and a settled job frees a slot.
 	launch(t, service, "child", newGate())
-	if _, _, err := service.Kill("root", "bash-1", ""); err != nil {
+	if _, _, err := service.Kill("root", "bash-1", new("")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.Launch(Spec{Kind: "bash", Label: "x", Owner: "root", Run: newGate().run}); !errors.Is(err, ErrLimit) {
@@ -376,14 +376,14 @@ func TestService_KillRecordsReasonWithoutNotice(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		view, requested, err := service.Kill("root", id, test.reason)
+		view, requested, err := service.Kill("root", id, new(test.reason))
 		if err != nil || !requested || view.Status != StatusStopping {
 			t.Fatalf("kill = %+v, %v, %v", view, requested, err)
 		}
 		if view := waitSettled(t, service, "root", id); view.StatusLine() != test.want {
 			t.Fatalf("killed view = %q, want %q", view.StatusLine(), test.want)
 		}
-		if view, requested, err := service.Kill("root", id, "again"); err != nil || requested || view.StatusLine() != test.want {
+		if view, requested, err := service.Kill("root", id, new("again")); err != nil || requested || view.StatusLine() != test.want {
 			t.Fatalf("kill settled = %+v, %v, %v", view, requested, err)
 		}
 	}
@@ -396,7 +396,7 @@ func TestService_KillRecordsReasonWithoutNotice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := service.Kill("root", id, "too late"); err != nil {
+	if _, _, err := service.Kill("root", id, new("too late")); err != nil {
 		t.Fatal(err)
 	}
 	close(release)

@@ -93,6 +93,10 @@ spill 与先读后写另有专门证据：预览算法用上游 retention 的 Py
 
 `TestComposition_LargeWriteAndEditArgumentsEndToEnd` 经真实配置、composition、loopback Responses 与放行审批的前端，证明内容为 128 KiB、序列化后超出旧上限的 write/edit 从测试进程独立重读文件得到全部内容。`TestComposition_OversizedArgumentsRecoverEndToEnd` 让模型先提议超过参数预算的 write，再缩小参数成功写入：磁盘没有拒绝目标，call 保存显式省略标记且无审批，下一请求携带错误结果，turn 为 completed。三个 provider 的协议测试覆盖 131,111 字节、恰好上限、越界、完整参数与分片累积，engine 测试另覆盖绕过网络 adapter 的提案。`TestLog_ArgumentLimitFitsEscapedRecords` 验证最坏 HTML 转义的 chunk 和可接受 call 追加后仍可重读。
 
+`TestRunnerRun_RunnerFailureOutranksDenial` 与 shell 的真实 runner fixture 证明致命诊断优先于拒绝关键词，前台为 `SANDBOX_UNAVAILABLE`、后台为 failed/command did not run，目标命令没有运行。`TestBash_CancellationAndShutdownRunTERMTrap` 通过输出握手后取消，验证前台、job kill、关闭和 job 上限回退的实际 TERM 清理文件；并发关闭测试用两个忽略 TERM 的进程证明只等待一次 3 s 宽限，再 KILL 并 join。真实 composition 的 job kill 与关闭也从 workspace 清理文件证明 trap 执行。
+
+job 输出回归验证逐字节拆分与整块写入的解码一致、替换后字节计量、非法 UTF-8 与大值结果在无 spill 时保留状态和丢失提示、metadata 超限保留括号信封。重复 kill 用 producer 结算 barrier 固定两次意图先于 settle；wait 参数测试证明未知/他人 job 错误先于无效 timeout。`TestComposition_JobOutputKeepsDecodedLossAndStatus` 从真实配置、磁盘工具结果和下一次 provider wire 证明丢失信封进入模型上下文。
+
 ## Session、设置、账户与图片
 
 - JSONL：创建、append/fsync、close/reopen、list/inspect、连续 sequence、全部非法 transition、unknown field/version、torn line、权限、composition mismatch、writer lock、I/O rollback 和 interrupted-tail repair。`todo/write` 另覆盖缺失 call、跨 step/turn、同一 call 重复写入、result 之后写入、call ID 复用，以及中断修复后计划仍可从日志投影。fork 种子覆盖与 header 一次写入、事件行与 parent 逐字节相同、恢复时的自有事件边界，以及非连续、schema 非法、turn 未闭合、超出单 record 或单 session 上限的种子被拒且不留文件。

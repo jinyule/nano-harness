@@ -16,7 +16,7 @@ const (
 	// maxActivePerOwner bounds running plus stopping jobs per owning session.
 	maxActivePerOwner = 10
 	// liveRetainBytes bounds one job's retained output while it runs. It is
-	// half a tool result, so a complete read and its status line always fit.
+	// half a tool result; the tool separately budgets metadata and value results.
 	liveRetainBytes = 128 << 10
 	// settledRetainBytes is the retention after the first terminal read.
 	settledRetainBytes = 16 << 10

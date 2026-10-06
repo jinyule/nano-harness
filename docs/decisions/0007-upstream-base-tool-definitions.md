@@ -90,7 +90,7 @@ ripgrep 以 argv 直接运行，不经过 shell，也不进入 workspace sandbox
 - `write` 新建文件为 `0600`（与上游一致）、新建目录为 `0700`（上游受 umask 约束的 `0777`）。
 - `write` 与 `edit` 的 staging 路径接受调用 context，创建 staging 前与 link/rename 前检查取消。取消不发布、不改变目标或观察摘要，删除 staging；成功发布后不回滚。当前内核文件 I/O 返回后才能响应取消，细节见安全规则。
 - `glob`/`grep` 的搜索根必须在 workspace 内（上游不限制；`grep` 与 `read` 另可读取本 workspace 的 spill 分区，见 ADR-0008），并以规范化的 workspace 相对路径交给 ripgrep，所以输出不保留 `./` 之类的原始拼写，绝对路径参数也显示为相对路径。不传 `HOME`，用户的全局 git excludes 不生效；上游的 subprocess 环境保留 `HOME`。`grep` 拒绝把 FIFO 等特殊文件作为显式路径。结果顺序与上游一样取决于 ripgrep：`glob` 按修改时间排序，`grep` 的跨文件顺序不固定。
-- `bash` 默认超时 60 s、上限 10 min，与 Base 配置一致；stdout 与 stderr 各保留最后 64,000 字节，截断时给出 ADR-0008 的完整输出文件位置，没有文件时显示上游的 `(unavailable)`；只提供 `DSH_SHELL` 与 `DSH_SESSION_ID`，不暴露 harness home 或 profile。
+- `bash` 默认超时 60 s、上限 10 min，与 Base 配置一致；stdout 与 stderr 各保留最后 64,000 字节，截断时给出 ADR-0008 的完整输出文件位置，没有文件时显示上游的 `(unavailable)`；只提供 `DSH_SHELL` 与 `DSH_SESSION_ID`，home/profile 的取舍见 [ADR-0009](0009-background-jobs.md#固定预算与托管环境)。
 
 搜索参数空白判定采用共享纯函数 `internal/app/tool.IsBlank`：按 ECMAScript WhiteSpace 与 LineTerminator 集合判断 `trim()` 后是否为空，包含 U+FEFF、排除 U+0085；原参数不被修改。`glob` pattern/path 与 `grep` path/include 使用该判定，grep pattern 仍只拒绝空字符串，允许纯空格正则。web 查询复用同一函数，见 [ADR-0011](0011-provider-web-search-and-public-fetch.md)。
 

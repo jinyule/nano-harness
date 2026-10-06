@@ -191,7 +191,7 @@ Submit user message
 
 `internal/adapter/spill` 是 `spill-local` 插件：在 `--spill-root` 下按 workspace 分区、按会话分组保存 owner-only 文件，启动时清理 30 天前的文件，关闭时等待已打开的文件。`fs-tools` 持有按会话记录的读取观察（`read` 与 `read_image` 都会记录），`write` 只覆盖读过且内容未变的文件，`edit` 必须先读；观察状态只在内存中。存储布局、读回边界、观察语义和降级见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md)。
 
-`search-tools` 与 `shell-tools` 共用 `cmd` 构造的同一个 platform process runner。search provider 在构造时从 PATH 解析 `rg`，找不到时组装失败；`Start` 运行 `rg --version`，低于 15.0.0 时启动失败，不注册降级工具。`glob` 与 `grep` 按上游参数调用 ripgrep，并解析它的路径列表或 `--json` 输出；进程边界见[安全工程规则](security.md#approvalshell-与进程)，版本前提见[开发规范](development.md#ripgrep)。search 请求显式选择 65,536 字节 stderr 尾部，runner 默认及 bash 仍为 64,000 字节。`glob` 的 pattern/path、`grep` 的 path/include 与 web 查询共享 `app/tool.IsBlank` 的 ECMAScript 空白判定；该入口委托 `core/text.IsSpace`，todo、goal、skill 与 durable todo/goal 文本与 goal 标识校验使用同一集合（含 U+FEFF、不含 U+0085），core 不反向依赖 app；grep pattern 只拒绝空字符串。
+`search-tools` 与 `shell-tools` 共用 `cmd` 构造的同一个 platform process runner。search provider 在构造时从 PATH 解析 `rg`，找不到时组装失败；`Start` 运行 `rg --version`，低于 15.0.0 时启动失败，不注册降级工具。`glob` 与 `grep` 按上游参数调用 ripgrep，并解析它的路径列表或 `--json` 输出；进程边界见[安全工程规则](security.md#approvalshell-与进程)，版本前提见[开发规范](development.md#ripgrep)。search 请求显式选择 65,536 字节 stderr 尾部并使用零终止宽限；bash 使用 3 s TERM 宽限，再 KILL 并等待输出收尾，runner 默认及 bash stderr 仍为 64,000 字节。sandbox runner 致命诊断优先分类为不可用，不与普通命令非零退出或权限拒绝混淆。`glob` 的 pattern/path、`grep` 的 path/include 与 web 查询共享 `app/tool.IsBlank` 的 ECMAScript 空白判定；该入口委托 `core/text.IsSpace`，todo、goal、skill 与 durable todo/goal 文本与 goal 标识校验使用同一集合（含 U+FEFF、不含 U+0085），core 不反向依赖 app；grep pattern 只拒绝空字符串。
 
 `read`、`read_image`、`glob`、`grep`、`web_search`、`web_fetch`、`skill`、`subagent`、`subagent_fork` 可并行；`write`、`edit`、`bash` 和 `job_*` 是 exclusive；`write`、`edit`、`bash` 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。`bash` 的 `sandbox_permissions: danger-full-access` 是唯一离开 workspace sandbox 的方式，规则见[安全工程规则](security.md#approvalshell-与进程)。
 
@@ -236,7 +236,7 @@ producer Launch(kind, label, owner, Run)
 ```
 
 - job 属于启动它的 session，所有操作都校验调用方 session；ID 为 `<kind>-<n>`。状态为 `running`、可选 `stopping`，再到 `completed`、`killed`、`failed` 之一，先到先得。
-- 每个 owner 最多 10 个活动 job。输出环运行中保留 128 KiB，settle 后第一次读取裁到 16 KiB；模型游标消费式读取，settle 后第一次读取还交出 producer 的值结果。
+- 每个 owner 最多 10 个活动 job。输出环按解码后的 UTF-8 字节在运行中保留 128 KiB，settle 后第一次读取裁到 16 KiB；job_output 独立保留最终状态与丢失提示的信封预算；模型游标消费式读取，settle 后第一次读取还交出 producer 的值结果。
 - cleanup 先拒绝新 job，再取消全部活动 job，等待 producer goroutine 返回后丢弃记录。`jobs` 在 `shell-tools` 之后启动，所以受管 runner 在 shell 临时目录删除之前返回；provider 自己拥有 job 上限回退执行，取消并等待它们及输出收尾后才删除目录。
 - `bash` 的每次调用优先作为 kind `bash` 的 job 运行：`run_in_background` 立即返回 ID；前台注册以 `Spec.Foreground` 原子预留完成收集权，等待 `timeoutMs`，及时结束时移除记录并按前台格式返回。超时后的首次 `Read` 在锁内释放预留：终态由前台收集；仍活动则交给后台并允许后续唯一完成通知。
 - job 与计数器不持久化，正常关闭取消并等待受管执行；完成通知在入队前提交为 `notice/queued`，重启后仍欠着的通知在下一个 turn 投递（[ADR-0023](decisions/0023-durable-job-notices.md)）；脱离进程组的后代限制见[安全规则](security.md#approvalshell-与进程)。

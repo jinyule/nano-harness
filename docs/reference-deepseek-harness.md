@@ -162,3 +162,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 | 绝对定位符不依赖当前写入 root | 在既有 workspace 安全边界内采纳精确 transcript 历史授权，见 ADR-0008 |
 
 多模态 spill 与 PTC 不由此变更扩展；图片的会话引用与附件存储已由 [ADR-0017](decisions/0017-content-addressed-image-attachments.md) 采纳，独立于本次文本 spill 对齐。
+
+## Shell 与 job 边界复核
+
+参考 `5badb15009ae` 的 `packages/shell`、`packages/jobs` 与 `packages/subprocess`：runner 致命诊断优先于拒绝、bash/job 的 TERM→3 s→KILL、解码后输出计量、显式空 kill reason 与身份先于 wait timeout 校验均采纳。只读搜索保留立即 KILL；固定预算、托管 home/profile 取舍、owner 释放与 ID 复用限制由 [ADR-0009](decisions/0009-background-jobs.md) 和 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md) 拥有。基础设施失败保留本仓 `failed` 终态，上游尚将部分启动失败映射为 killed/completed。复现、平台证据与未覆盖范围见[实施 Note](../.agents/notes/implemented/2026-10-06-shell-and-job-boundary-alignment.md)。

@@ -36,7 +36,7 @@ func TestComposition_ForegroundBashDoesNotCommitCompletionNotice(t *testing.T) {
 		runner foregroundRunner
 		want   string
 	}{
-		{"sandbox unavailable", foregroundRunner{err: platformProcess.ErrSandboxUnavailable}, "Error: workspace sandbox is unavailable"},
+		{"sandbox unavailable", foregroundRunner{err: platformProcess.ErrSandboxUnavailable}, "Error: SANDBOX_UNAVAILABLE: workspace sandbox is unavailable"},
 		{"start failed", foregroundRunner{err: errors.New("start process: missing executable")}, "Error: start process: missing executable"},
 		{"fast command", foregroundRunner{result: platformProcess.Result{Stdout: platformProcess.Output{Text: "done"}}}, "done"},
 	} {
