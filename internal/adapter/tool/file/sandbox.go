@@ -22,7 +22,7 @@ func mutationMode(ctx context.Context, invocation appTool.Invocation, requested,
 		return "", err
 	}
 	if mode == session.SandboxReadOnly {
-		return "", fmt.Errorf("%s\n%s", workspace.DenialMarker(string(mode)), workspace.EscalationHint("operation"))
+		return "", fsFailure("FS_SANDBOX_DENIED", fmt.Errorf("%s\n%s", workspace.DenialMarker(string(mode)), workspace.EscalationHint("operation")))
 	}
 	return mode, nil
 }

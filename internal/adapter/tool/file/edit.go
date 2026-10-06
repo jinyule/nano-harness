@@ -13,6 +13,7 @@ import (
 
 	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
+	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
 const (
@@ -59,7 +60,7 @@ func (provider *Provider) editTool() *appTool.Tool {
 			// execution re-checks them under the target's lock.
 			target, err := provider.root.WritableIn(arguments.FilePath, mode)
 			if err != nil {
-				return fmt.Errorf("cannot edit %q: %w", arguments.FilePath, err)
+				return classifyIO(fmt.Errorf("cannot edit %q: %w", arguments.FilePath, err))
 			}
 			_, _, err = provider.observedContent(invocation.SessionID, target)
 			return err
@@ -81,7 +82,7 @@ func (provider *Provider) edit(ctx context.Context, invocation appTool.Invocatio
 		return appTool.Result{}, errors.New("edit approval was not granted")
 	}
 	if err := ctx.Err(); err != nil {
-		return appTool.Result{}, fmt.Errorf("edit aborted: %w", err)
+		return appTool.Result{}, fsFailure("FS_ABORTED", fmt.Errorf("edit aborted: %w", err))
 	}
 	if invocation.Delegated {
 		return appTool.Result{}, errors.New("subagents cannot obtain file approval")
@@ -92,7 +93,7 @@ func (provider *Provider) edit(ctx context.Context, invocation appTool.Invocatio
 	}
 	target, err := provider.root.WritableIn(arguments.FilePath, mode)
 	if err != nil {
-		return appTool.Result{}, fmt.Errorf("cannot edit %q: %w", arguments.FilePath, err)
+		return appTool.Result{}, classifyIO(fmt.Errorf("cannot edit %q: %w", arguments.FilePath, err))
 	}
 	defer provider.mutate.lock(target)()
 	info, raw, err := provider.observedContent(invocation.SessionID, target)
@@ -103,14 +104,15 @@ func (provider *Provider) edit(ctx context.Context, invocation appTool.Invocatio
 	if err != nil {
 		return appTool.Result{}, err
 	}
+	meta := editMeta(target, raw, edited, arguments.OldString, arguments.NewString)
 	if err := writeAtomic(ctx, target, edited, info.Mode().Perm(), false); err != nil {
-		return appTool.Result{}, fmt.Errorf("cannot edit %q: %w", target, err)
+		return appTool.Result{}, classifyIO(fmt.Errorf("cannot edit %q: %w", target, err))
 	}
 	provider.observed.record(invocation.SessionID, target, observed(edited))
 	if arguments.ReplaceAll != nil && *arguments.ReplaceAll {
-		return appTool.Text(fmt.Sprintf("The file %s has been updated. All occurrences were successfully replaced.", target)), nil
+		return appTool.Result{Text: fmt.Sprintf("The file %s has been updated. All occurrences were successfully replaced.", target), Meta: &session.ToolMeta{Edit: &meta}}, nil
 	}
-	return appTool.Text(fmt.Sprintf("The file %s has been updated successfully.", target)), nil
+	return appTool.Result{Text: fmt.Sprintf("The file %s has been updated successfully.", target), Meta: &session.ToolMeta{Edit: &meta}}, nil
 }
 
 // observedContent loads an edit target only when the session observed it
@@ -122,24 +124,24 @@ func (provider *Provider) observedContent(sessionID, target string) (fs.FileInfo
 	case !seen:
 		return nil, nil, errNotRead(target)
 	case !prior.present:
-		return nil, nil, fmt.Errorf("cannot edit %q: not found", target)
+		return nil, nil, fsFailure("FS_NOT_FOUND", fmt.Errorf("cannot edit %q: not found", target))
 	}
 	info, err := lstatFile(target)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return nil, nil, errStale("edit", target, "file changed since it was read")
 	case err != nil:
-		return nil, nil, fmt.Errorf("cannot edit %q: %w", target, err)
+		return nil, nil, classifyIO(fmt.Errorf("cannot edit %q: %w", target, err))
 	case !info.Mode().IsRegular():
-		return nil, nil, fmt.Errorf("cannot edit %q: not a regular file", target)
+		return nil, nil, fsFailure("FS_NOT_REGULAR_FILE", fmt.Errorf("cannot edit %q: not a regular file", target))
 	case info.Size() != prior.size:
 		return nil, nil, errStale("edit", target, "file changed since it was read")
 	case info.Size() > maxEditBytes:
-		return nil, nil, fmt.Errorf("cannot edit %q: %d bytes exceeds the %d-byte limit", target, info.Size(), maxEditBytes)
+		return nil, nil, fsFailure("FS_TOO_LARGE", fmt.Errorf("cannot edit %q: %d bytes exceeds the %d-byte limit", target, info.Size(), maxEditBytes))
 	}
 	raw, err := readLimited(target)
 	if err != nil {
-		return nil, nil, fmt.Errorf("cannot edit %q: %w", target, err)
+		return nil, nil, classifyIO(fmt.Errorf("cannot edit %q: %w", target, err))
 	}
 	if digest(raw) != prior.version {
 		return nil, nil, errStale("edit", target, "file changed since it was read")
@@ -158,7 +160,7 @@ func readLimited(path string) ([]byte, error) {
 		return nil, err
 	}
 	if len(data) > maxEditBytes {
-		return nil, fmt.Errorf("content exceeds the %d-byte limit", maxEditBytes)
+		return nil, fsFailure("FS_TOO_LARGE", fmt.Errorf("content exceeds the %d-byte limit", maxEditBytes))
 	}
 	return data, nil
 }
@@ -168,10 +170,10 @@ func readLimited(path string) ([]byte, error) {
 // restored on write-back, and a leading BOM is preserved.
 func replaceLiteral(raw []byte, oldString, newString string, replaceAll bool, display string) ([]byte, error) {
 	if bytes.IndexByte(raw, 0) >= 0 {
-		return nil, fmt.Errorf("cannot edit %q: binary file", display)
+		return nil, fsFailure("FS_NOT_TEXT", fmt.Errorf("cannot edit %q: binary file", display))
 	}
 	if !utf8.Valid(raw) {
-		return nil, fmt.Errorf("cannot edit %q: invalid UTF-8 text", display)
+		return nil, fsFailure("FS_NOT_TEXT", fmt.Errorf("cannot edit %q: invalid UTF-8 text", display))
 	}
 	bom := bytes.HasPrefix(raw, utf8BOM)
 	text := string(bytes.TrimPrefix(raw, utf8BOM))
@@ -184,9 +186,9 @@ func replaceLiteral(raw []byte, oldString, newString string, replaceAll bool, di
 	matches := strings.Count(content, needle)
 	switch {
 	case matches == 0:
-		return nil, fmt.Errorf("old_string was not found in %q", display)
+		return nil, fsFailure("FS_EDIT_NOT_FOUND", fmt.Errorf("old_string was not found in %q", display))
 	case matches > 1 && !replaceAll:
-		return nil, fmt.Errorf("old_string matched %d times in %q; provide a more specific old_string or set replace_all to true", matches, display)
+		return nil, fsFailure("FS_AMBIGUOUS_EDIT", fmt.Errorf("old_string matched %d times in %q; provide a more specific old_string or set replace_all to true", matches, display))
 	}
 	content = strings.ReplaceAll(content, needle, replacement)
 	if useCRLF {

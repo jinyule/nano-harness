@@ -92,6 +92,10 @@ func testCanceledPublication(t *testing.T, tool string, present bool) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("%s after cancellation = %v, want context.Canceled", tool, err)
 	}
+	var failure appTool.Failure
+	if !errors.As(err, &failure) || failure.ToolError().Code != "FS_ABORTED" {
+		t.Errorf("%s cancellation classification = %v, want FS_ABORTED", tool, err)
+	}
 	if publications != 0 {
 		t.Errorf("%s published %d times after cancellation", tool, publications)
 	}

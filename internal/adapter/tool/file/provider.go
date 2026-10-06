@@ -95,7 +95,7 @@ func (provider *Provider) Start(_ context.Context, scope *plugin.Scope) error {
 // a successful link or rename is the commit point and is never undone.
 func writeAtomic(ctx context.Context, target string, data []byte, mode fs.FileMode, exclusive bool) (err error) {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("write aborted: %w", err)
+		return fsFailure("FS_ABORTED", fmt.Errorf("write aborted: %w", err))
 	}
 	staged, err := createTemp(filepath.Dir(target), "."+filepath.Base(target)+".*.tmp")
 	if err != nil {
@@ -117,7 +117,7 @@ func writeAtomic(ctx context.Context, target string, data []byte, mode fs.FileMo
 		return err
 	}
 	if err = ctx.Err(); err != nil {
-		return fmt.Errorf("write aborted: %w", err)
+		return fsFailure("FS_ABORTED", fmt.Errorf("write aborted: %w", err))
 	}
 	if !exclusive {
 		return renameFile(staged.Name(), target)

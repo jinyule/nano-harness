@@ -329,7 +329,7 @@ func composeTUI(config applicationConfig, deps dependencies) (*composition, erro
 // require a provider-token bump; other compatibility changes follow the owning
 // ADR's version policy. See docs/architecture.md, "事件、持久化与 replay".
 func compositionID(config applicationConfig) string {
-	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00tool-runtime-v3\x00fs-tools-v4\x00search-tools-v4\x00shell-tools-v5\x00job-tools-v2\x00subagent-tools-v4\x00todo-tools-v1\x00web-tools-v2\x00question-tools-v1\x00plan-tools-v1\x00skill-tools-v1\x00goal-tools-v2\x00spill-v1\x00attachments-v1\x00tool-result-prune-v1\x00sandbox-policy-v1\x00session-v2"
+	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00tool-runtime-v3\x00fs-tools-v5\x00search-tools-v4\x00shell-tools-v5\x00job-tools-v2\x00subagent-tools-v4\x00todo-tools-v1\x00web-tools-v2\x00question-tools-v1\x00plan-tools-v1\x00skill-tools-v1\x00goal-tools-v2\x00spill-v1\x00attachments-v1\x00tool-result-prune-v1\x00sandbox-policy-v1\x00session-v2"
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
 }

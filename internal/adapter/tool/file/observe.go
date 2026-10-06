@@ -75,26 +75,44 @@ func digest(data []byte) version { return sha256.Sum256(data) }
 const digestBufferBytes = 64 << 10
 
 // digestFile hashes the complete current content of path, calling stop
-// before every read so a caller can cancel hashing a large file.
-func digestFile(path string, stop func() error) (version, error) {
+// before every read so a caller can cancel hashing a large file. When retain
+// is true, the same read keeps a diff basis strictly below maxEditBytes; nil
+// means no basis, while a non-nil empty slice represents an empty file.
+func digestFile(path string, retain bool, stop func() error) (version, []byte, error) {
 	reader, err := openFile(path)
 	if err != nil {
-		return version{}, err
+		return version{}, nil, err
 	}
 	defer func() { _ = reader.Close() }() // read-only; close cannot lose data
 	hasher := sha256.New()
+	var before []byte
 	buffer := make([]byte, digestBufferBytes)
 	for {
 		if err := stop(); err != nil {
-			return version{}, err
+			return version{}, nil, err
 		}
 		count, err := reader.Read(buffer)
 		_, _ = hasher.Write(buffer[:count]) // hash writes never fail
+		if retain {
+			if len(before)+count >= maxEditBytes {
+				before, retain = nil, false
+			} else {
+				if size := len(before) + count; size > cap(before) {
+					grown := make([]byte, len(before), min(maxEditBytes-1, max(size, cap(before)*2)))
+					copy(grown, before)
+					before = grown
+				}
+				before = append(before, buffer[:count]...)
+			}
+		}
 		if errors.Is(err, io.EOF) {
-			return version(hasher.Sum(nil)), nil
+			if retain && before == nil {
+				before = []byte{}
+			}
+			return version(hasher.Sum(nil)), before, nil
 		}
 		if err != nil {
-			return version{}, err
+			return version{}, nil, err
 		}
 	}
 }
@@ -138,9 +156,9 @@ func (locks *pathLocks) lock(path string) func() {
 // errNotRead and errStale carry upstream's model-facing remedies for the two
 // guarded-mutation failures.
 func errNotRead(target string) error {
-	return fmt.Errorf("cannot modify %q: file has not been read — read the file, then retry", target)
+	return fsFailure("FS_NOT_OBSERVED", fmt.Errorf("cannot modify %q: file has not been read — read the file, then retry", target))
 }
 
 func errStale(operation, target, reason string) error {
-	return fmt.Errorf("cannot %s %q: %s — re-read the file, then retry", operation, target, reason)
+	return fsFailure("FS_STALE_VERSION", fmt.Errorf("cannot %s %q: %s — re-read the file, then retry", operation, target, reason))
 }

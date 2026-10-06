@@ -228,6 +228,9 @@ func TestComposition_ReadImageEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if result.Meta == nil || result.Meta.ReadImage == nil || *result.Meta.ReadImage != (session.ReadImageMeta{Path: filepath.Join(resolved, "shots", "wide.png")}) {
+		t.Fatalf("image metadata = %+v", result.Meta)
+	}
 	normalized := attachmentObject(t, config.attachmentRoot, result.Image)
 	digest := sha256.Sum256(normalized)
 	wantEnvelope := fmt.Sprintf("<path>%s</path>\n<type>image</type>\n<content>\nimage/jpeg image, 2048x682 px, %d bytes (downscaled from 3000x1000 px; multiply x coordinates by 1.46 and y coordinates by 1.47 to locate features in the original file)\n</content>", filepath.Join(resolved, "shots", "wide.png"), len(normalized))

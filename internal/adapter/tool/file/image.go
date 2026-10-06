@@ -84,22 +84,25 @@ func (provider *Provider) readImage(ctx context.Context, invocation appTool.Invo
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		provider.observed.record(invocation.SessionID, display, observation{})
-		return appTool.Result{}, fmt.Errorf("cannot read %q: not found", display)
+		if display == "" {
+			return appTool.Result{}, fmt.Errorf("cannot read %q: not found", display)
+		}
+		return appTool.Result{}, &fsError{code: "FS_NOT_FOUND", message: fmt.Sprintf("cannot read %q: not found", display), err: err}
 	case err != nil:
-		return appTool.Result{}, fmt.Errorf("cannot read %q: %w", arguments.FilePath, err)
+		return appTool.Result{}, classifyPath(display, fmt.Errorf("cannot read %q: %w", arguments.FilePath, err))
 	}
 	info, err := statFile(path)
 	switch {
 	case err != nil:
-		return appTool.Result{}, fmt.Errorf("cannot read %q: %w", display, err)
+		return appTool.Result{}, classifyIO(fmt.Errorf("cannot read %q: %w", display, err))
 	case !info.Mode().IsRegular():
-		return appTool.Result{}, fmt.Errorf("cannot read %q: not a regular file", display)
+		return appTool.Result{}, fsFailure("FS_NOT_REGULAR_FILE", fmt.Errorf("cannot read %q: not a regular file", display))
 	case info.Size() > session.MaxImageSourceBytes:
-		return appTool.Result{}, fmt.Errorf("cannot read %q: %d bytes exceeds the %d-byte limit", display, info.Size(), session.MaxImageSourceBytes)
+		return appTool.Result{}, fsFailure("FS_TOO_LARGE", fmt.Errorf("cannot read %q: %d bytes exceeds the %d-byte limit", display, info.Size(), session.MaxImageSourceBytes))
 	}
 	data, err := readImageBytes(path)
 	if err != nil {
-		return appTool.Result{}, fmt.Errorf("cannot read %q: %w", display, err)
+		return appTool.Result{}, classifyIO(fmt.Errorf("cannot read %q: %w", display, err))
 	}
 	declared := imageExtensions[strings.ToLower(extname(arguments.FilePath))]
 	actual := sniffImage(data)
@@ -125,7 +128,7 @@ func (provider *Provider) readImage(ctx context.Context, invocation appTool.Invo
 		return appTool.Result{}, fmt.Errorf("cannot read %q: %w", display, err)
 	}
 	provider.observed.record(invocation.SessionID, path, observed(data))
-	return appTool.Result{Text: formatImageRead(display, normalized, source), Image: &normalized}, nil
+	return appTool.Result{Text: formatImageRead(display, normalized, source), Image: &normalized, Meta: &session.ToolMeta{ReadImage: &session.ReadImageMeta{Path: display}}}, nil
 }
 
 func errUndecodable(display string) error {
@@ -145,7 +148,7 @@ func readImageBytes(path string) ([]byte, error) {
 		return nil, err
 	}
 	if len(data) > session.MaxImageSourceBytes {
-		return nil, fmt.Errorf("content exceeds the %d-byte limit", session.MaxImageSourceBytes)
+		return nil, fsFailure("FS_TOO_LARGE", fmt.Errorf("content exceeds the %d-byte limit", session.MaxImageSourceBytes))
 	}
 	return data, nil
 }

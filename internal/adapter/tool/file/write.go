@@ -11,6 +11,7 @@ import (
 
 	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
+	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
 const (
@@ -48,9 +49,9 @@ func (provider *Provider) writeTool() *appTool.Tool {
 			// are hashed only at the execution point.
 			target, err := provider.root.WritableIn(arguments.FilePath, mode)
 			if err != nil {
-				return fmt.Errorf("cannot write %q: %w", arguments.FilePath, err)
+				return classifyIO(fmt.Errorf("cannot write %q: %w", arguments.FilePath, err))
 			}
-			_, _, err = provider.admitWrite(invocation.SessionID, target, maxEditBytes, ctx.Err)
+			_, _, _, err = provider.admitWrite(invocation.SessionID, target, maxEditBytes, false, ctx.Err)
 			return err
 		},
 		Guidance: appTool.Guidance{Order: appTool.OrderWrite, Text: func(visible func(string) bool) string {
@@ -76,7 +77,7 @@ func (provider *Provider) write(ctx context.Context, invocation appTool.Invocati
 		return appTool.Result{}, errors.New("write approval was not granted")
 	}
 	if err := ctx.Err(); err != nil {
-		return appTool.Result{}, fmt.Errorf("write aborted: %w", err)
+		return appTool.Result{}, fsFailure("FS_ABORTED", fmt.Errorf("write aborted: %w", err))
 	}
 	if invocation.Delegated {
 		return appTool.Result{}, errors.New("subagents cannot obtain file approval")
@@ -87,10 +88,10 @@ func (provider *Provider) write(ctx context.Context, invocation appTool.Invocati
 	}
 	target, err := provider.root.WritableIn(arguments.FilePath, mode)
 	if err != nil {
-		return appTool.Result{}, fmt.Errorf("cannot write %q: %w", arguments.FilePath, err)
+		return appTool.Result{}, classifyIO(fmt.Errorf("cannot write %q: %w", arguments.FilePath, err))
 	}
 	defer provider.mutate.lock(target)()
-	info, exists, err := provider.admitWrite(invocation.SessionID, target, math.MaxInt64, ctx.Err)
+	info, exists, before, err := provider.admitWrite(invocation.SessionID, target, math.MaxInt64, len(arguments.Content) < maxEditBytes, ctx.Err)
 	if err != nil {
 		return appTool.Result{}, err
 	}
@@ -99,17 +100,18 @@ func (provider *Provider) write(ctx context.Context, invocation appTool.Invocati
 		permissions, operation = info.Mode().Perm(), "Updated"
 	}
 	if err := makeDirs(filepath.Dir(target), newDirectoryMode); err != nil {
-		return appTool.Result{}, fmt.Errorf("cannot write %q: %w", target, err)
+		return appTool.Result{}, classifyIO(fmt.Errorf("cannot write %q: %w", target, err))
 	}
 	content := []byte(arguments.Content)
+	meta := writeMeta(target, exists, before, content)
 	if err := writeAtomic(ctx, target, content, permissions, !exists); err != nil {
 		if _, statErr := lstatFile(target); !exists && statErr == nil {
 			return appTool.Result{}, errNotRead(target)
 		}
-		return appTool.Result{}, fmt.Errorf("cannot write %q: %w", target, err)
+		return appTool.Result{}, classifyIO(fmt.Errorf("cannot write %q: %w", target, err))
 	}
 	provider.observed.record(invocation.SessionID, target, observed(content))
-	return appTool.Text(fmt.Sprintf("<path>%s</path>\n<type>file</type>\n<content>\n%s file\n</content>", target, operation)), nil
+	return appTool.Result{Text: fmt.Sprintf("<path>%s</path>\n<type>file</type>\n<content>\n%s file\n</content>", target, operation), Meta: &session.ToolMeta{Write: &meta}}, nil
 }
 
 // admitWrite decides upstream's write intent without side effects and
@@ -117,32 +119,35 @@ func (provider *Provider) write(ctx context.Context, invocation appTool.Invocati
 // missing; one observed present must still hold the observed content, and
 // any other target may only be created. A size change is stale at once;
 // otherwise the content is hashed when it is at most hashLimit bytes, with
-// stop checked between reads.
-func (provider *Provider) admitWrite(sessionID, target string, hashLimit int64, stop func() error) (fs.FileInfo, bool, error) {
+// stop checked between reads. retain requests a bounded diff basis from the
+// same read; Check never retains content and Execute does so under its lock.
+func (provider *Provider) admitWrite(sessionID, target string, hashLimit int64, retain bool, stop func() error) (fs.FileInfo, bool, []byte, error) {
 	info, err := lstatFile(target)
 	exists := err == nil
 	switch {
 	case exists && !info.Mode().IsRegular():
-		return nil, false, fmt.Errorf("cannot write %q: not a regular file", target)
+		return nil, false, nil, fsFailure("FS_NOT_REGULAR_FILE", fmt.Errorf("cannot write %q: not a regular file", target))
 	case !exists && !errors.Is(err, fs.ErrNotExist):
-		return nil, false, fmt.Errorf("cannot write %q: %w", target, err)
+		return nil, false, nil, classifyIO(fmt.Errorf("cannot write %q: %w", target, err))
 	}
+	var before []byte
 	prior, _ := provider.observed.lookup(sessionID, target)
 	switch {
 	case prior.present && !exists:
-		return nil, false, errStale("write", target, "file no longer exists")
+		return nil, false, nil, errStale("write", target, "file no longer exists")
 	case prior.present && info.Size() != prior.size:
-		return nil, false, errStale("write", target, "file changed since it was read")
+		return nil, false, nil, errStale("write", target, "file changed since it was read")
 	case prior.present && info.Size() <= hashLimit:
-		current, err := digestFile(target, stop)
+		current, content, err := digestFile(target, retain && info.Size() < maxEditBytes, stop)
 		if err != nil {
-			return nil, false, fmt.Errorf("cannot write %q: %w", target, err)
+			return nil, false, nil, classifyIO(fmt.Errorf("cannot write %q: %w", target, err))
 		}
+		before = content
 		if current != prior.version {
-			return nil, false, errStale("write", target, "file changed since it was read")
+			return nil, false, nil, errStale("write", target, "file changed since it was read")
 		}
 	case !prior.present && exists:
-		return nil, false, errNotRead(target)
+		return nil, false, nil, errNotRead(target)
 	}
-	return info, exists, nil
+	return info, exists, before, nil
 }

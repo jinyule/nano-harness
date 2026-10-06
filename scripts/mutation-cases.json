@@ -1055,5 +1055,40 @@
     "before": "return appTool.Result{}, aborted(errors.Join(ctx.Err(), run.err))",
     "after": "return appTool.Result{}, errors.New(\"tool call aborted\")",
     "test": "^TestBash_PersistsAbortedWaitAndFallback$"
+  },
+  {
+    "id": "file-error-classification",
+    "file": "internal/adapter/tool/file/error.go",
+    "before": "func (failure *fsError) ToolError() session.ToolError {",
+    "after": "func (failure *fsError) ToolErrorOmitted() session.ToolError {",
+    "test": "^TestFileResults_ClassifyFailures$"
+  },
+  {
+    "id": "file-result-metadata",
+    "file": "internal/adapter/tool/file/write.go",
+    "before": "Meta: &session.ToolMeta{Write: &meta}",
+    "after": "Meta: func() *session.ToolMeta { _ = meta; return nil }()",
+    "test": "^TestFileResults_DiffsMatchPublishedFiles$"
+  },
+  {
+    "id": "file-spill-keeps-meta",
+    "file": "internal/app/tool/runtime.go",
+    "before": "text = retainInline(ctx, invocation, candidate.Name, text)",
+    "after": "text = retainInline(ctx, invocation, candidate.Name, text)\n\t\t\tresult.Meta = nil",
+    "test": "^TestRuntime_SpillKeepsMetadataAndPanicsDropIt$"
+  },
+  {
+    "id": "file-diff-LF-basis",
+    "file": "internal/adapter/tool/file/diff.go",
+    "before": "return strings.ReplaceAll(string(bytes.TrimPrefix(raw, utf8BOM)), \"\\r\\n\", \"\\n\")",
+    "after": "return string(bytes.TrimPrefix(raw, utf8BOM))",
+    "test": "^TestFileResults_DiffsMatchPublishedFiles$"
+  },
+  {
+    "id": "file-diff-basis-cap",
+    "file": "internal/adapter/tool/file/observe.go",
+    "before": "if len(before)+count >= maxEditBytes {",
+    "after": "if len(before)+count > maxEditBytes {",
+    "test": "^TestDigestFile_RetentionAndCancellation$"
   }
 ]

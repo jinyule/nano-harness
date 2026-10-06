@@ -189,6 +189,8 @@ Submit user message
 
 `internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。`cmd` 用 `WithReadOnly` 把当前 spill 分区只读地交给 `read`、`read_image` 与 `grep`。这些工具在执行点用 `ReadableFrom` 从调用方已提交的原始日志授权精确的历史 spill 文件，恢复时更换写入 root 不会撤销日志中的定位符；fork 继承与 compaction 遮蔽的结果也可读回。`shell-tools` 收到不含该分区的 root。
 
+文件四工具的成功结果分别填写 `read` 窗口、`read_image` 显示路径、`write` 操作和 diff、`edit` diff 的类型化 metadata。文件边界的失败经保留正文和原因的 `FsError` 包装带出分类；审批、参数语义、策略日志和图片规范化的普通失败不分类。write 在目标锁内与观察摘要校验共用一次读取，只保留小于 10 MiB 的旧字节；write/edit 在 link/rename 前生成按 LF 比较、三行上下文的 hunk，超预算片段在复制前跳过。字段、上限与错误映射由 [ADR-0019](decisions/0019-structured-tool-results.md) 拥有。
+
 路径 resolver 逐段确定物理身份，父目录遍历不先做词法清理；含 `..` 的成功路径返回物理显示路径，避免搜索 consumer 再次清理后改变目标。文件发布接受调用 context，在 staging 关闭后、link/rename 前检查取消，发布成功后才更新读取观察。路径边界与提交点由[安全规则](security.md#workspace-文件边界)定义，采纳与差异由 ADR-0007 记录。
 
 `internal/adapter/spill` 是 `spill-local` 插件：在 `--spill-root` 下按 workspace 分区、按会话分组保存 owner-only 文件，启动时清理 30 天前的文件，关闭时等待已打开的文件。`fs-tools` 持有按会话记录的读取观察（`read` 与 `read_image` 都会记录），`write` 只覆盖读过且内容未变的文件，`edit` 必须先读；观察状态只在内存中。存储布局、读回边界、观察语义和降级见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md)。
@@ -341,7 +343,7 @@ notice/queued, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、工具运行时（`tool-runtime-v3`，含结构化错误分类与结果 metadata）、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、持久化的完成通知（`job-tools-v2`）、goal 停止语义（`goal-tools-v2`）、检索请求审计（`web-tools-v2`）、spill 策略、附件引用格式（`attachments-v1`）与工具结果裁剪（`tool-result-prune-v1`）的语义版本和 session v2。会话 sandbox 使用 `sandbox-policy-v1`、`fs-tools-v4` 与 `shell-tools-v4`；工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、工具运行时（`tool-runtime-v3`，含结构化错误分类与结果 metadata）、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、持久化的完成通知（`job-tools-v2`）、goal 停止语义（`goal-tools-v2`）、检索请求审计（`web-tools-v2`）、spill 策略、附件引用格式（`attachments-v1`）与工具结果裁剪（`tool-result-prune-v1`）的语义版本和 session v2。会话 sandbox 使用 `sandbox-policy-v1` 与 `shell-tools-v5`；文件结构化结果使用 `fs-tools-v5`（含 sandbox 文件策略）；工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。`approval/asked` 的工具名必须等于 pending call 的名称；`approval/decided` 仅通过 approval ID 关联问题，不允许携带 `call_id`。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。

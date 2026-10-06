@@ -90,10 +90,10 @@ producer 要在外部提交前完成可能失败的 meta 构造。write/edit 的
 | `ToolOutcomeUnknownError` / `TOOL_OUTCOME_UNKNOWN` | JSONL resume 修复写入的 `Error: interrupted before a result was committed`。nano 在执行批次前提交全部 tool/call，未决调用都可能已经开始，因此不写 `TOOL_NOT_STARTED`。 |
 | `FsError` / `FS_NOT_FOUND`、`FS_NOT_REGULAR_FILE` | read/read_image 的目标不存在，或路径中间段不是目录（上游同样把 ENOTDIR 归为 `FS_NOT_FOUND`）；edit 观察到目标缺失；目标是目录或特殊文件。上游的 `FS_NOT_DIRECTORY` 只用于目录列举，本仓文件工具没有对应路径。 |
 | `FsError` / `FS_NOT_TEXT`、`FS_TOO_LARGE` | read/edit 遇到二进制或非法 UTF-8；edit 超过 10 MiB；read_image 超过源字节上限。read 的窗口截断是成功，不是 `FS_TOO_LARGE`。 |
-| `FsError` / `FS_NOT_OBSERVED`、`FS_STALE_VERSION` | write/edit 的 `errNotRead`、`errStale`，包括已读后变化或删除、并发创建导致的盲覆盖拒绝。 |
+| `FsError` / `FS_NOT_OBSERVED`、`FS_STALE_VERSION` | write/edit 的 `errNotRead`、`errStale`，`FS_NOT_OBSERVED` 包括未读目标和并发创建导致的盲覆盖拒绝；`FS_STALE_VERSION` 包括已读后变化或删除。 |
 | `FsError` / `FS_EDIT_NOT_FOUND`、`FS_AMBIGUOUS_EDIT` | 字面替换零次匹配；多次匹配且未设 `replace_all`。 |
 | `FsError` / `FS_ABORTED` | `read aborted`、`write aborted`、`edit aborted`：读取、摘要或发布前发现取消。link/rename 成功后写入即已提交，工具返回成功；若此时调用已取消，按第 2 节替换为 `ABORTED`，文件保持已发布。 |
-| `FsError` / `FS_PERMISSION_DENIED`、`FS_SANDBOX_DENIED`、`FS_IO_ERROR` | `fs.ErrPermission`；workspace 越界或符号链接拒绝；其他 stat/open/read/摘要/暂存/同步/link/rename 失败。`FS_SANDBOX_DENIED` 的具体条件在 WP14 会话 sandbox 模式合入后按实际路径重新核对。 |
+| `FsError` / `FS_PERMISSION_DENIED`、`FS_SANDBOX_DENIED`、`FS_IO_ERROR` | `fs.ErrPermission`；workspace 越界或符号链接拒绝；其他 stat/open/read/摘要/暂存/同步/link/rename 失败。WP14 的 read-only write/edit 拒绝同样为 `FS_SANDBOX_DENIED`；danger-full-access 放宽路径范围，但仍拒绝写入跨越符号链接。策略日志读取失败、升级参数语义错误和图片规范化失败没有文件分类。 |
 | `SearchError` / `SEARCH_INVALID_PATTERN`、`SEARCH_FAILED`、`SEARCH_RAW_OUTPUT_OVERFLOW`、`SEARCH_ABORTED` | rg 拒绝正则或 glob；搜索根失败、显式特殊文件、启动失败、信号、非 0/1 退出、`--json` 输出畸形；stdout 超过 20,000,000 字节；搜索超时或调用方取消。rg 缺失或版本过低是启动错误，不产生工具结果。 |
 | `WebError` / `app/web` 的全部 Code | 包括上游同名码和本仓已有的 `WEB_SEARCH_TIMEOUT`、`WEB_REQUEST_RECORD_FAILED`；文本保持 `<CODE>: <message>`。非 2xx HTTP 是成功结果。 |
 | `SandboxUnavailableError` / `SANDBOX_UNAVAILABLE` | 前台 bash 的 runner 缺失或失败，即 `errors.Is(err, process.ErrSandboxUnavailable)`；文本保留上游 `SandboxUnavailableError` 原文，按实际 launch mode 使用 `read-only` 或 `workspace-write`，runner 故障保留 `Runner failure: <行>`。`danger-full-access` 使用 host runner，不要求 sandbox 后端。platform 不依赖领域层，分类在 shell adapter 补上。后台 job 的 runner 失败只记录为 failed 状态，不是工具错误。 |
@@ -112,7 +112,7 @@ producer 要在外部提交前完成可能失败的 meta 构造。write/edit 的
 |---|---|---|
 | `read` | `path, offset, lines[{number,text}], total_lines, truncated` | 从实际返回的窗口生成。`number` 是 1-based 文件行号，`text` 是已截行的值，`total_lines` 精确。空文件为 `offset=1, total_lines=0, lines=[]`。`truncated` 只表示第 5 节的预算移除了尾部行；窗口本身的截断由 `lines` 与 `total_lines` 表达。不持久化上游的 `lang`，渲染方可以从 path 推导，本仓不维护扩展名映射表。 |
 | `read_image` | `path` | 图片 ID、尺寸和字节仍以 `result.image` 为唯一引用，不复制图片或附件路径。 |
-| `write` | `operation:"create"\|"update", diffs[{path, old_text: string\|null, new_text}], truncated` | 按上游取舍，create 和内容相同的覆盖写的 `diffs` 为空。旧文件或新内容达到 10 MiB、旧文件是二进制或非法 UTF-8 时，没有 diff 基础，`diffs` 为空且 `truncated=true`。 |
+| `write` | `operation:"create"\|"update", diffs[{path, old_text: string\|null, new_text}], truncated` | 按上游取舍，create 和内容相同的覆盖写的 `diffs` 为空。旧文件或新内容达到 10 MiB、任一侧是二进制或非法 UTF-8 时，没有 diff 基础，`diffs` 为空且 `truncated=true`。 |
 | `edit` | `diffs[{path, old_text: string\|null, new_text}], truncated` | 从替换前后的实际内容生成，`replace_all` 覆盖全部替换位置，不把 `old_string/new_string` 当成文件变化。 |
 | `glob` | `paths, total, truncated` | `total` 是发现的全部路径数，`paths` 是现有按修改时间排序的前至多 100 条。`truncated` 与上游相同，是结果上限和 meta 预算的并集。 |
 | `grep` | `files[{path, matches[{line_number, line}]}], total, truncated` | 使用现有前至多 250 个匹配、每行 2000 字节预览和首次出现顺序分组。`total` 是解析得到的匹配总数，不因裁剪降低。 |
