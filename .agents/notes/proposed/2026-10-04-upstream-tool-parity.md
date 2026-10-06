@@ -84,7 +84,7 @@
 | `web_fetch` 对 IPv6 字面量跳过 NAT64 校验（SSRF） | Blocker | WP5 | 已合入 `6d3322c` |
 | 关闭时工具先于在途 turn 撤销，前台 `bash` 可能在临时目录删除后才取消 | Suggestion | WP1 | 已合入 `2fa6aa7`：agent 层最后启动、先关闭，registry 一次性取消并等待全部在途 turn |
 | job 上限回退路径不归 Scope；超时交接竞态；macOS 进程组回收承诺 | Suggestion | WP3 | 修复中 |
-| `send_message` 后 `interrupt_agent` 丢弃已确认消息；one-shot 子代理被通知唤醒 | Suggestion | WP7 | 修复中 |
+| `send_message` 后 `interrupt_agent` 丢弃已确认消息；one-shot 子代理被通知唤醒 | Suggestion | WP7 | 已合入 `091cb74`：取消结束且有未提交投递时保持驻留；one-shot 只在唯一 turn 期间接受通知 |
 | fork 子代理 `get_goal` 返回父目标；driver 只等 root 空闲（核实与上游一致） | Suggestion | WP10 | 已合入 `7959206` |
 | spill 清理顺序、`write` 大文件校验、spill root 位置、长工具名 | Suggestion | WP2 | 已合入 `ec3c142` |
 | 会话被内联图片写满 | Suggestion | WP9 | 已合入 `fe565ad`，后续 WP11 |
