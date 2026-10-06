@@ -16,7 +16,7 @@
 
 1. **定义与调度。** 两个工具用 [ADR-0007](0007-upstream-base-tool-definitions.md) 的 `tool.Spec`/`tool.Define` 声明。`web_search` 的描述和参数 schema 为 `{"type":"object","properties":{"queries":{"type":"array","description":"1–4 search queries; their results are merged.","items":{"type":"string"}}},"required":["queries"]}`，`web_fetch` 为 `{"type":"object","properties":{"url":{"type":"string","description":"The HTTP(S) URL to fetch."}},"required":["url"]}`，与参考生成目录逐字节一致，并收录在 `cmd/nano-harness/testdata/upstream-base-tools.json`。参考根对象对未知成员开放；本仓按 ADR-0007 的统一规则拒绝未声明的根成员，schema 不变。两者始终注册、`Concurrent` 恒为 true、不请求 approval，delegated agent 同样可用。
 2. **能力接缝。** `internal/app/web.Service` 是插件，拥有查询校验、检索合并、时限、错误分类和在途操作的取消与等待；它依赖具体的 `llm.Runtime` 与 `settings.Service`，抓取通过自身定义的 `Fetcher` 接口注入。`internal/adapter/tool/web` 定义消费的 `Service` 小接口，只负责定义、guidance 和展示；查询数量、空白查询和空 URL 等语义校验只由 `app/web` 负责。`internal/adapter/web/fetch` 是无连接池、无生命周期 effect 的抓取实现，由 `cmd` 注入。当前每种能力只有一个实现，不建立 provider 注册表。
-3. **检索 route。** settings 新增可选 `web.search.provider/model`，两者同时给出，provider 必须是已安装的三者之一且 model 在其目录中，否则加载失败。默认未配置：每次检索都是一次额外计费的模型请求，计费账户和模型必须由用户显式选择，不回退到会话 route。未配置时工具仍注册，以保持 schema 和 prompt 在热重载中稳定，调用返回 `WEB_PROVIDER_UNAVAILABLE`，与参考“已启用工具在 provider 不可用时可见并在执行时失败”一致。
+3. **检索 route。** settings 新增可选 `web.search.provider/model`，两者同时给出，provider 必须是已安装的三者之一且 model 在其目录中，否则加载失败。默认未配置：每次检索都是一次额外计费的模型请求，计费账户和模型必须由用户显式选择，不回退到会话 route。未配置时工具仍注册，以保持 schema 和 prompt 在热重载中稳定，调用返回 `WEB_PROVIDER_UNAVAILABLE`，与参考“已启用工具在 provider 不可用时可见并在执行时失败”一致。检索复用所选 provider 的 endpoint，不能独立配置检索 endpoint；参考 DeepSeek 检索 provider 支持独立 endpoint。本仓用同一冻结 route 复用认证、传输与配置校验，避免增加第二套 endpoint 配置和路由状态；代价是修改该 provider 的 endpoint 会同时影响其对话与检索，无法单独把检索送往另一个网关。
 4. **provider wire。** `llm.PreparedModel` 增加 `Search`，`llm.Call.Search` 复用 `PrepareCall` 冻结的 endpoint、目录项（含 `effort`，映射同 [ADR-0004](0004-provider-neutral-effort.md)）和刷新后的账户。三个 provider 都实现它，提示词沿用参考的 `Perform a web search for the query: <query>`：
    - OpenAI Responses 与 Codex Responses：`tools: [{"type":"web_search"}]`、`tool_choice: "auto"`、`stream: true`、`store: false`，带固定简短 instructions；读取 `response.output_item.done`，必须出现 `web_search_call`，回答取 `output_text`，来源取 `url_citation`。
    - Anthropic Messages：与参考相同的非流式请求体（`max_tokens: 4096`，`web_search_20250305`，`max_uses: 5`）；必须出现 `web_search_tool_result`，来源取 `web_search_result`，片段取 citation 的首个 `cited_text`，回答取 text 块；全部结果块为工具错误时，`too_many_requests` 映射限流、`unavailable` 映射服务端、其余映射非法请求。
@@ -24,10 +24,14 @@
    每个响应的回答最多 `session.MaxTextBytes`，来源按 URL 去重、跳过空或超过 4096 字节的 URL，最多 64 条。检索不自动重试。所有 provider 请求（包括既有对话请求和 OAuth 令牌、key 交换请求）拒绝跟随重定向，归类为 protocol 错误，以免把凭据、OAuth 秘密或请求体转发到其他 URL。
 5. **检索语义。** 一次调用接受 1–4 个按 ECMAScript `trim()` 空白集判定非空的查询（共享 `app/tool.IsBlank`，含 U+FEFF、不含 U+0085），保留原文并折叠精确重复项；只准备一次账户，查询并发执行，首个失败取消其余并在全部结束后返回。单查询来源截到 8 条；多查询先逐个截断，再按 rank 轮转合并、按 URL 去重并截到 8 条，回答以 `### <查询>` 标注。整个调用限时 60 s，与 Base 相同。
 6. **抓取策略。** URL 最长 2048 个 UTF-16 code unit、只允许 HTTP(S)、拒绝 userinfo；URL/IDNA 规范化后，每一跳确定目的地址集合（IP 字面量即其本身，主机名取全部解析答案，与参考把字面量放入同一答案集一致），拒绝任何非全局单播地址（IPv4-mapped 按内嵌 IPv4 判断；集合含 IPv6，包括 IPv6 字面量时，按 RFC 7050 发现 DNS64 前缀并拒绝翻译到非公网 IPv4 的地址；解析器返回非 IP 答案时与参考一样以 `WEB_PROVIDER_ERROR` 失败），并发回退只拨号已校验的 IP:端口，TLS 仍按 URL 主机名校验。每跳使用独立 transport 并在结束时关闭；最多 5 次同源重定向，跨源重定向要求模型另发调用；不发送 cookie 或凭据，不读取代理环境变量。总时限 30 s，解压后正文最多 5,000,000 字节（声明超限失败，流式或解压超限截断），解码文本最多 100,000 个 UTF-16 code unit；只接受文本类内容，charset 按 WHATWG 标签解码。这些都是固定安全上限，不是部署设置；细节与上游取舍见下文。
-7. **展示。** 工具输出以参考的外部内容说明开头。检索输出包含可选回答、`- [标题或主机名](URL) — 片段 (日期)` 来源列表、截断提示和引用要求；抓取输出为 `Fetched <url> (HTTP <status>)`、说明和正文，HTML 转为 Markdown 并删除脚本、样式、嵌入对象与隐藏元素，嵌套超过 512 层时输出固定省略标记。完整输出不超过 `session.MaxTextBytes`，截断时附参考提示。两个工具通过 `tool.Guidance` 贡献参考的 `tool:web_search`、`tool:web_fetch` 段落，order 取参考 section 表的 `TOOL_WEB_SEARCH: 2000`、`TOOL_WEB_FETCH: 2100`，由 `Runtime.Catalog` 只在工具可见时渲染；检索段落只在 `web_fetch` 同时可见时建议用它抓取全文。
+7. **展示。** 工具输出包含参考的外部内容说明。检索输出包含可选回答、`- [标题或主机名](URL) — 片段 (日期)` 来源列表、截断提示和引用要求；抓取输出为 `Fetched <url> (HTTP <status>)`、说明和正文。HTML 转为 Markdown，保留删除线、任务框的 checked 状态、代码块语言和代码中的空白；普通文本及链接/图片标签中的 Markdown 字面量转义，代码内容不转义，反引号围栏避开正文中的反引号。转换删除脚本、样式、嵌入对象与隐藏元素；隐式闭合先于隐藏状态继承，后续可见段落和列表项不会被未显式闭合的隐藏元素吞掉。嵌套超过 512 层时输出固定省略标记。与 Turndown 对照的排版差异限于等价的列表标记间距与嵌套缩进、强调/分隔线标记、表格单元格填充、引用空行的尾部空格及块间空行；硬换行和代码内空白不属于可忽略的排版。
+
+   `web_fetch` 的转换输入和完整格式化输出上限均为参考的 200,000 个 UTF-16 code unit；完整预算包含标题、说明、正文和截断提示，超限时预留参考 footer。截断在 UTF-8 rune 边界进行，补充平面字符占两个单元；若最后只剩一个单元则省略整个字符，避免半个 surrogate 破坏 UTF-8。格式化结果随后进入 [ADR-0008](0008-tool-output-spill-and-observation-policy.md) 的通用 spill 策略：超过内联预算时保存完整的有界格式化结果，再产生预览；工具层不先按 256 KiB 截断。没有 store、没有会话或保存失败时仍按 runtime 的 256 KiB 兜底，不能保证完整正文可读回。
+
+   两个工具通过 `tool.Guidance` 贡献参考的 `tool:web_search`、`tool:web_fetch` 段落，order 取参考 section 表的 `TOOL_WEB_SEARCH: 2000`、`TOOL_WEB_FETCH: 2100`，由 `Runtime.Catalog` 只在工具可见时渲染；检索段落只在 `web_fetch` 同时可见时建议用它抓取全文。
 8. **错误。** `app/web.Error` 携带稳定代码（`WEB_PROVIDER_UNAVAILABLE`、`WEB_PROVIDER_CREDENTIAL_MISSING`、`WEB_PROVIDER_ERROR`、`WEB_ABORTED`、`WEB_SEARCH_TIMEOUT`、`WEB_INVALID_URL`、`WEB_BLOCKED_URL`、`WEB_REDIRECT_BLOCKED`、`WEB_FETCH_TOO_LARGE`、`WEB_FETCH_TIMEOUT`、`WEB_UNSUPPORTED_CONTENT_TYPE`）和不含凭据或远端错误正文的消息，经 tool runtime 以上游 `Error: <message>` 格式进入结果，即 `Error: <CODE>: <消息>`。时限与取消先按操作 context 判断，再看 provider 错误类别。
 9. **持久化。** 不新增 session 记录或字段：schema 在 `request/header` 冻结，渲染文本在 `tool/result` 中。composition ID 增加 `web-tools-v1`，旧会话按现有严格规则拒绝恢复；本仓尚无发布 tag，没有已发布用户数据需要迁移。settings 新字段在未配置时不写入 YAML，未知子字段被 strict decoder 拒绝。
-10. **依赖。** 新增 `golang.org/x/net` v0.59.0（HTML tokenizer 与 `html/charset`）和 `golang.org/x/text` v0.42.0（WHATWG 编码），均为 Go 团队维护、BSD-3-Clause、无 cgo；`golang.org/x/sync` 作为传递依赖从 v0.22.0 升到 v0.23.0。它们替代自写 HTML 解析和多字节编码表。
+10. **依赖。** 新增 `golang.org/x/net` v0.59.0（HTML tokenizer 与 `html/charset`）和 `golang.org/x/text` v0.42.0（WHATWG 编码），均为 Go 团队维护、BSD-3-Clause、无 cgo；`golang.org/x/sync` 作为传递依赖从 v0.22.0 升到 v0.23.0。依赖替代的是自写 tokenizer、charset 标签查找和多字节编码表；HTML 转 Markdown、元素栈、隐式闭合与展示规则仍由 `internal/adapter/tool/web` 自写实现，以参考行为的表驱动测试约束，不等同于采用完整 DOM 或 Turndown。
 
 ### 抓取传输语义
 
@@ -53,7 +57,7 @@
 - **自动跟随跨源重定向并重新校验**：参考要求新调用，让模型看到并决定新源；自动跟随会扩大一次调用可触达的目的地。
 - **使用 `ProxyFromEnvironment`**：代理代为解析 DNS，会绕过地址校验和固定连接；需要代理时另行设计。
 - **逐次 approval**：参考在所有沙箱与审批模式下都不确认 web 工具；只读检索与公网 GET 的边界由地址策略承担，需要确认的部署应新增执行点策略。
-- **自写 HTML 解析与字符集解码**：解析容错和多字节编码表的自有代码与安全负担明显高于成熟的 Go 团队依赖。
+- **自写 HTML tokenizer 与字符集解码表**：词法解析、charset 标签和多字节编码表的维护负担高于成熟的 Go 团队依赖；采用依赖不免除本仓转换器与元素栈的容错责任。
 
 ## 复审触发条件
 

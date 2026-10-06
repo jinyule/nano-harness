@@ -23,7 +23,7 @@
 - **工具定义。** 两个工具用 `tool.Spec` 声明，`Concurrent` 恒为 true，没有 `Approval`，也没有 `Check`（语义校验只在 `app/web`）。根对象未声明参数按 ADR-0007 被拒绝且不触达 service。`internal/app/tool/define.go` 增加参考 section 表的 `OrderWebSearch = 2000`、`OrderWebFetch = 2100`；guidance 由 `Runtime.Catalog` 渲染，prompt assembler 没有 web 专用分支。
 - **证据 fixture。** `cmd/nano-harness/testdata/tool-catalog.json` 与 `upstream-base-tools.json` 收录两个工具，后者的条目已与参考 `docs/tool-catalog.md` 的 JSON 块逐项比对。
 - **composition ID** 在 `todo-tools-v1` 之后、`session-v2` 之前增加 `web-tools-v1`。
-- **依赖。** `golang.org/x/net` v0.59.0 提供 HTML tokenizer 与 WHATWG charset 查找，`golang.org/x/text` v0.42.0 提供编码表；两者 Go 团队维护、BSD-3-Clause、纯 Go。`golang.org/x/sync` 作为传递依赖从 v0.22.0 升到 v0.23.0。`CGO_ENABLED=0 go build -trimpath` 的 darwin/arm64 二进制从 14,395,842 增至 15,676,146 字节（+1.28 MB，含本 WP 全部代码）。替代方案是自写 HTML 解析与多字节编码表或只支持 UTF-8，前者安全负担高，后者无法解码 GBK/Shift_JIS 等页面，与参考 `TextDecoder` 不一致。
+- **依赖。** `golang.org/x/net` v0.59.0 提供 HTML tokenizer 与 WHATWG charset 查找，`golang.org/x/text` v0.42.0 提供编码表；两者 Go 团队维护、BSD-3-Clause、纯 Go。`golang.org/x/sync` 作为传递依赖从 v0.22.0 升到 v0.23.0。`CGO_ENABLED=0 go build -trimpath` 的 darwin/arm64 二进制从 14,395,842 增至 15,676,146 字节（+1.28 MB，含本 WP 全部代码）。替代方案是自写 tokenizer 与多字节编码表或只支持 UTF-8，前者安全负担高，后者无法解码 GBK/Shift_JIS 等页面，与参考 `TextDecoder` 不一致。依赖只承担词法与字符集边界，Markdown 转换、元素栈和容错规则仍为本仓实现。
 - **定向 mutation** 增加 `web-fetch-public-address` 与 `web-fetch-redirect-origin`。
 
 与其他工作包共享的接触面：`internal/app/llm/runtime.go`（类型与接口）、四个 PreparedModel 测试替身（agent、compaction、subagent、llm）各加一个 `Search` 桩、`internal/app/tool/define.go`（两个 order 常量）、`internal/app/settings/settings.go`、provider 包的 `wire_common.go`/`responses.go`/`anthropic.go`、`cmd/nano-harness/application.go`/`main.go`/`main_test.go`（上游工具数量断言 7→9；e2e 复用 todo 测试的 `readTranscript`）、两个 testdata fixture 和 `scripts/mutation-cases.json`。
@@ -32,7 +32,7 @@
 
 模型获得与参考 schema 一致的检索和抓取；检索复用现有账户，抓取以地址策略阻断 SSRF 与 DNS 重绑定，并在设置热重载时保持工具集合不变。对话请求也不再跟随重定向，这是对既有凭据转发风险的收紧；依赖 endpoint 重定向的部署需要改为直接配置最终 HTTPS 地址。
 
-代价：检索默认关闭，用户必须在 `settings.yaml` 选择 route，每次检索额外计费；Codex Responses 边界对 `web_search` 工具的接受度没有 live 证据。抓取不读取代理环境变量；没有逐次确认，模型仍可把数据编码进公网 URL。检索纯文本结果受 [ADR-0008](../../../docs/decisions/0008-tool-output-spill-and-observation-policy.md) 的通用 spill 与最终截断约束。查询空白判定的补充证据见[对齐 Note](2026-10-06-search-spill-query-parity.md)。HTML 转换是近似 Markdown，不追求与 turndown 逐字节一致。旧会话因 composition ID 变化而拒绝恢复，本仓尚无发布数据。
+代价：检索默认关闭，用户必须在 `settings.yaml` 选择 route，每次检索额外计费；Codex Responses 边界对 `web_search` 工具的接受度没有 live 证据。检索 endpoint 复用所选 provider，无法独立配置，取舍见 ADR-0011。抓取不读取代理环境变量；没有逐次确认，模型仍可把数据编码进公网 URL。两个工具的文本成功结果已进入 [通用 spill 策略](2026-10-05-tool-output-spill-and-read-before-write.md)；抓取先按 ADR-0011 的 UTF-16 格式化预算限额，再保存超过内联预算的完整格式化结果，存储不可用时仍受 runtime 的字节兜底。查询空白判定的补充证据见[对齐 Note](2026-10-06-search-spill-query-parity.md)。HTML 语义与预算的实施证据由 [转换与输出预算 Note](2026-10-06-web-fetch-html-and-output-budget.md)补充，等价排版差异归 ADR-0011。旧会话因 composition ID 变化而拒绝恢复，本仓尚无发布数据。
 
 参考 `docs/reference-deepseek-harness.md` 中“新工具暂缓”的那一行由总体计划在全部 WP 合并后更新，本 WP 未改动。
 

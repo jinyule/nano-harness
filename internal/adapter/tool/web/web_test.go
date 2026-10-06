@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/jinyule/nano-harness/internal/app/llm"
@@ -269,7 +271,52 @@ func TestFormatFetch_BoundsCompleteOutput(t *testing.T) {
 	}
 	limit := 200
 	cut := formatFetch(appWeb.FetchResult{URL: "https://x.example", StatusCode: 200, Kind: appWeb.FetchText, Content: strings.Repeat("界", 100)}, limit)
-	if len(cut) > limit || !utf8.ValidString(cut) || !strings.HasSuffix(cut, fetchFooter) {
+	if len(utf16.Encode([]rune(cut))) > limit || !utf8.ValidString(cut) || !strings.HasSuffix(cut, fetchFooter) {
 		t.Fatalf("bounded output len=%d valid=%v %q", len(cut), utf8.ValidString(cut), cut)
+	}
+}
+
+func TestFormatFetch_MatchesUpstreamUTF16Budget(t *testing.T) {
+	const limit = 256
+	const url = "https://x.example"
+	header := fmt.Sprintf("Fetched %s (HTTP 200)\n\n%s\n\n", url, externalNotice)
+	available := limit - len(header)
+	for _, test := range []struct {
+		name, content, want string
+		truncated           bool
+	}{
+		{"ASCII at cap", strings.Repeat("a", available), header + strings.Repeat("a", available), false},
+		{"CJK at cap", strings.Repeat("界", available), header + strings.Repeat("界", available), false},
+		{"CJK over cap", strings.Repeat("界", available+1), header + strings.Repeat("界", available-len(fetchFooter)) + fetchFooter, false},
+		{"emoji at cap", strings.Repeat("😀", available/2) + strings.Repeat("a", available%2), header + strings.Repeat("😀", available/2) + strings.Repeat("a", available%2), false},
+		{"emoji over cap", strings.Repeat("😀", available), header + strings.Repeat("😀", (available-len(fetchFooter))/2) + fetchFooter, false},
+		{"provider footer fits", strings.Repeat("界", available-len(fetchFooter)), header + strings.Repeat("界", available-len(fetchFooter)) + fetchFooter, true},
+		{"provider footer over cap", strings.Repeat("界", available), header + strings.Repeat("界", available-len(fetchFooter)) + fetchFooter, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := formatFetch(appWeb.FetchResult{URL: url, StatusCode: 200, Kind: appWeb.FetchText, Content: test.content, Truncated: test.truncated}, limit)
+			if got != test.want || !utf8.ValidString(got) {
+				t.Fatalf("got=%q\nwant=%q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestFormatFetch_BoundsConversionSourceAndSmallBudgets(t *testing.T) {
+	for _, test := range []struct {
+		name, source string
+		limit        int
+		want         string
+	}{
+		{"empty budget", "body", 0, ""},
+		{"short budget", "body", 7, "Fetched"},
+		{"source cut before conversion", "<script>" + strings.Repeat("x", 256) + "</script><p>tail</p>", 256, "Fetched https://x.example (HTTP 200)\n\n" + externalNotice + "\n\n" + fetchFooter},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := formatFetch(appWeb.FetchResult{URL: "https://x.example", StatusCode: 200, Kind: appWeb.FetchHTML, Content: test.source}, test.limit)
+			if got != test.want {
+				t.Fatalf("got=%q\nwant=%q", got, test.want)
+			}
+		})
 	}
 }

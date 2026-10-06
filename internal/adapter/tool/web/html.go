@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"regexp"
 	"slices"
 	"strconv"
@@ -34,11 +35,6 @@ var blockElements = map[string]bool{
 	"summary": true, "title": true,
 }
 
-var (
-	trailingSpace    = regexp.MustCompile(`[ \t]+\n`)
-	excessBlankLines = regexp.MustCompile(`\n{3,}`)
-)
-
 type frameKind int
 
 const (
@@ -48,6 +44,7 @@ const (
 	frameLink
 	frameStrong
 	frameEmphasis
+	frameStrike
 	frameCode
 	frameQuote
 	frameList
@@ -59,10 +56,11 @@ const (
 )
 
 type frame struct {
-	tag    string
-	kind   frameKind
-	hidden bool
-	href   string
+	tag      string
+	kind     frameKind
+	hidden   bool
+	href     string
+	language string
 }
 
 type list struct {
@@ -77,8 +75,21 @@ type row struct {
 
 // buffer is one capture level; last remembers the final written byte.
 type buffer struct {
-	text strings.Builder
+	text bytes.Buffer
 	last byte
+}
+
+func (current *buffer) trimLineSpace() {
+	content := current.text.Bytes()
+	end := len(content)
+	for end > 0 && (content[end-1] == ' ' || content[end-1] == '\t') {
+		end--
+	}
+	current.text.Truncate(end)
+	current.last = 0
+	if end > 0 {
+		current.last = content[end-1]
+	}
 }
 
 func (current *buffer) write(value string) {
@@ -97,6 +108,7 @@ type renderer struct {
 	rows     []*row
 	hidden   int
 	pre      int
+	code     int
 	newlines int
 	space    bool
 	marker   bool
@@ -115,8 +127,7 @@ func renderHTML(source string) string {
 			for len(state.stack) > 0 {
 				state.pop()
 			}
-			text := trailingSpace.ReplaceAllString(state.captures[0].text.String(), "\n")
-			return strings.TrimSpace(excessBlankLines.ReplaceAllString(text, "\n\n"))
+			return strings.TrimSpace(state.captures[0].text.String())
 		case html.TextToken:
 			state.text(string(tokenizer.Text()))
 		case html.StartTagToken:
@@ -153,6 +164,9 @@ func (state *renderer) flush() {
 	switch {
 	case current.text.Len() == 0 || state.marker:
 	case state.newlines > 0:
+		if state.pre == 0 {
+			current.trimLineSpace()
+		}
 		current.write(strings.Repeat("\n", state.newlines))
 	case state.space && current.last != ' ' && current.last != '\n':
 		current.write(" ")
@@ -178,6 +192,9 @@ func (state *renderer) text(value string) {
 	if state.pre > 0 {
 		state.emit(value)
 		return
+	}
+	if state.code == 0 {
+		value = escapeMarkdown(value)
 	}
 	start := -1
 	for index, char := range value {
@@ -232,6 +249,9 @@ func attribute(token html.Token, key string) string {
 }
 
 func (state *renderer) void(token html.Token) {
+	if token.Data == "hr" {
+		state.closeInScope([]string{"p"}, paragraphScope)
+	}
 	if state.hidden > 0 || hiddenElement(token) {
 		return
 	}
@@ -240,7 +260,9 @@ func (state *renderer) void(token html.Token) {
 		if state.pre > 0 {
 			state.emit("\n")
 		} else {
-			state.breakLines(1)
+			state.flush()
+			state.current().trimLineSpace()
+			state.current().write("  \n")
 		}
 	case "hr":
 		state.breakLines(2)
@@ -249,9 +271,19 @@ func (state *renderer) void(token html.Token) {
 	case "img":
 		alt, source := attribute(token, "alt"), attribute(token, "src")
 		if source != "" && !strings.HasPrefix(strings.ToLower(source), "data:") {
-			state.emit("![" + collapse(alt) + "](" + source + ")")
+			state.emit("![" + escapeMarkdown(collapse(alt)) + "](" + escapeDestination(source) + ")")
 		} else if alt != "" {
-			state.emit(collapse(alt))
+			state.emit(escapeMarkdown(collapse(alt)))
+		}
+	case "input":
+		if len(state.stack) > 0 && state.stack[len(state.stack)-1].tag == "li" && strings.EqualFold(attribute(token, "type"), "checkbox") {
+			marker := "[ ] "
+			for _, attr := range token.Attr {
+				if attr.Key == "checked" {
+					marker = "[x] "
+				}
+			}
+			state.emit(marker)
 		}
 	}
 }
@@ -259,6 +291,7 @@ func (state *renderer) void(token html.Token) {
 // open pushes one element and applies its opening effect. It reports false when
 // the nesting limit is exceeded.
 func (state *renderer) open(token html.Token) bool {
+	state.closeImplied(token.Data)
 	if len(state.stack) >= maxHTMLDepth {
 		return false
 	}
@@ -283,10 +316,18 @@ func (state *renderer) open(token html.Token) bool {
 	case "em", "i":
 		current.kind = frameEmphasis
 		state.capture()
+	case "del", "s", "strike":
+		current.kind = frameStrike
+		state.capture()
 	case "code", "kbd", "samp":
 		if state.pre == 0 {
 			current.kind = frameCode
+			state.code++
 			state.capture()
+		} else if token.Data == "code" {
+			if match := codeLanguage.FindStringSubmatch(attribute(token, "class")); len(match) > 1 {
+				state.stack[len(state.stack)-1].language = match[1]
+			}
 		}
 	case "blockquote":
 		current.kind = frameQuote
@@ -303,7 +344,7 @@ func (state *renderer) open(token html.Token) bool {
 	case "pre":
 		current.kind = framePre
 		state.breakLines(2)
-		state.emit("```\n")
+		state.capture()
 		state.pre++
 	case "table":
 		current.kind = frameTable
@@ -327,6 +368,54 @@ func (state *renderer) open(token html.Token) bool {
 	}
 	state.stack = append(state.stack, current)
 	return true
+}
+
+// HTML start tags close optional end tags before visibility is inherited.
+// Scope boundaries keep a nested list, table or template from closing an
+// ancestor's item or paragraph.
+func (state *renderer) closeImplied(tag string) {
+	switch tag {
+	case "address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl",
+		"fieldset", "figcaption", "figure", "footer", "form", "header", "hgroup", "main", "menu", "nav",
+		"ol", "p", "search", "section", "summary", "ul", "h1", "h2", "h3", "h4", "h5", "h6",
+		"li", "dt", "dd", "pre", "listing", "table":
+		state.closeInScope([]string{"p"}, paragraphScope)
+	}
+	switch tag {
+	case "li":
+		state.closeInScope([]string{"li"}, []string{"ul", "ol", "template"})
+	case "dt", "dd":
+		state.closeInScope([]string{"dt", "dd"}, []string{"dl", "template"})
+	case "h1", "h2", "h3", "h4", "h5", "h6":
+		state.closeInScope([]string{"h1", "h2", "h3", "h4", "h5", "h6"}, paragraphScope)
+	case "tr":
+		state.closeInScope([]string{"tr"}, []string{"table", "template"})
+	case "td", "th":
+		state.closeInScope([]string{"td", "th"}, []string{"tr", "table", "template"})
+	case "thead", "tbody", "tfoot":
+		state.closeInScope([]string{"thead", "tbody", "tfoot"}, []string{"table", "template"})
+	case "option", "optgroup":
+		state.closeInScope([]string{"option"}, []string{"select", "datalist", "template"})
+		if tag == "optgroup" {
+			state.closeInScope([]string{"optgroup"}, []string{"select", "template"})
+		}
+	}
+}
+
+var paragraphScope = []string{"applet", "button", "caption", "html", "table", "td", "th", "marquee", "object", "template"}
+
+func (state *renderer) closeInScope(tags, boundaries []string) {
+	for index, current := range slices.Backward(state.stack) {
+		if slices.Contains(tags, current.tag) {
+			for len(state.stack) > index {
+				state.pop()
+			}
+			return
+		}
+		if slices.Contains(boundaries, current.tag) {
+			return
+		}
+	}
 }
 
 func (state *renderer) capture() {
@@ -390,18 +479,32 @@ func (state *renderer) pop() {
 		case current.href == "" || strings.HasPrefix(strings.ToLower(current.href), "javascript:"):
 			state.emit(content)
 		default:
-			state.emit("[" + content + "](" + current.href + ")")
+			state.emit("[" + content + "](" + escapeDestination(current.href) + ")")
 		}
 	case frameStrong:
 		state.wrap("**", "**")
 	case frameEmphasis:
 		state.wrap("_", "_")
+	case frameStrike:
+		state.wrap("~~", "~~")
 	case frameCode:
-		state.wrap("`", "`")
+		state.code--
+		content := collapse(state.release())
+		if content != "" {
+			fence := codeFence(content, 1)
+			padding := ""
+			if strings.HasPrefix(content, "`") || strings.HasSuffix(content, "`") {
+				padding = " "
+			}
+			state.emit(fence + padding + content + padding + fence)
+		}
 	case frameQuote:
 		lines := strings.Split(strings.TrimSpace(state.release()), "\n")
 		for index, line := range lines {
-			lines[index] = strings.TrimRight("> "+line, " ")
+			lines[index] = ">"
+			if line != "" {
+				lines[index] += " " + line
+			}
 		}
 		state.emit(strings.Join(lines, "\n"))
 		state.breakLines(2)
@@ -410,10 +513,9 @@ func (state *renderer) pop() {
 		state.breakLines(2 - min(len(state.lists), 1))
 	case framePre:
 		state.pre--
-		if state.current().last != '\n' {
-			state.current().write("\n")
-		}
-		state.current().write("```")
+		content := strings.TrimSuffix(state.release(), "\n")
+		fence := codeFence(content, 3)
+		state.emit(fence + current.language + "\n" + content + "\n" + fence)
 		state.breakLines(2)
 	case frameTable:
 		state.tables = state.tables[:len(state.tables)-1]
@@ -459,3 +561,33 @@ func (state *renderer) endRow() {
 }
 
 func collapse(value string) string { return strings.Join(strings.Fields(value), " ") }
+
+var (
+	codeLanguage        = regexp.MustCompile(`\blanguage-(\S+)`)
+	backticks           = regexp.MustCompile("`+")
+	markdownLiteral     = strings.NewReplacer(`\`, `\\`, "*", `\*`, "_", `\_`, "`", "\\`", "[", `\[`, "]", `\]`)
+	markdownLineStart   = regexp.MustCompile(`(?m)^(#{1,6} |[-+] |>|-{3,}|=+|~~~)`)
+	markdownNumber      = regexp.MustCompile(`(?m)^(\s*\d+)\. `)
+	markdownDestination = strings.NewReplacer("(", `\(`, ")", `\)`, "<", `\<`, ">", `\>`)
+)
+
+func escapeMarkdown(text string) string {
+	text = markdownLiteral.Replace(text)
+	text = markdownLineStart.ReplaceAllString(text, `\$1`)
+	return markdownNumber.ReplaceAllString(text, `$1\. `)
+}
+
+func escapeDestination(destination string) string {
+	text := markdownDestination.Replace(destination)
+	if strings.Contains(text, " ") {
+		return "<" + text + ">"
+	}
+	return text
+}
+
+func codeFence(content string, minimum int) string {
+	for _, run := range backticks.FindAllString(content, -1) {
+		minimum = max(minimum, len(run)+1)
+	}
+	return strings.Repeat("`", minimum)
+}
