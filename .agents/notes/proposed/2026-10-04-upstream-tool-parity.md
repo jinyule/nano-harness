@@ -105,6 +105,7 @@ ADR 编号预先分配，避免并行分支冲突；某个 WP 不需要 ADR 时�
 - 依赖少的 WP 在独立 worktree 并行开发，合并回集成分支后再启动依赖它的 WP。
 - 全部合并后执行一次整体 code review、`make check` 和 `make tui-e2e`。
 - 每次合入后更新本 Note 的状态与决策记录，不等到最后统一整理。
+- 2026-10-06 起，维护者要求新启动的子任务改由 Codex（`gpt-6.1-sol`，`xhigh`）在独立 worktree 中执行，评审由 Codex 与既有 Opus 审查者共同进行；已在进行的 Opus 子任务继续由原 agent 完成。
 
 ## Consequences
 
