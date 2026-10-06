@@ -5,7 +5,7 @@
 
 ## Context
 
-这是 [WP12 实施计划](../proposed/2026-10-06-structured-tool-results-plan.md)的 H（goal）与 I（question）批，基于集成分支 `fc0022f`，[基础批](2026-10-07-structured-tool-results-base.md)已提供 `tool.Failure` 与 tool/result 的 `error` 字段。goal 的领域错误和工具错误已有 Code，提问接缝只有普通哨兵与 `RequestError`，分类在 runtime 渲染文本时丢失。映射由 [ADR-0019](../../../docs/decisions/0019-structured-tool-results.md) 拥有。
+这是 [WP12 实施记录](2026-10-06-structured-tool-results.md)的 H（goal）与 I（question）批，基于集成分支 `fc0022f`，[基础批](2026-10-07-structured-tool-results-base.md)已提供 `tool.Failure` 与 tool/result 的 `error` 字段。goal 的领域错误和工具错误已有 Code，提问接缝只有普通哨兵与 `RequestError`，分类在 runtime 渲染文本时丢失。映射由 [ADR-0019](../../../docs/decisions/0019-structured-tool-results.md) 拥有。
 
 上游对照（参考提交 `5badb15009ae`）：`GoalError` 子类携带 `GOAL_*`；tool-goal 直接 `new HarnessError(message, 'GOAL_TOOL_*')`，name 为 `HarnessError`；`interaction/user-questions` 的 `UserQuestionError` 码为 `ASK_ABORTED`、`DELEGATED_CALLER`、`EMPTY_QUESTIONS`、`BAD_INTENT`、`NO_PROVIDER`，`ui-user-questions` 的取消为 `ASK_CANCELLED`，答案校验为 `BAD_ANSWER`；题数、id、选项等检查是本仓额外限制，上游没有对应码。
 

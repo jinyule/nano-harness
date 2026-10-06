@@ -5,7 +5,7 @@
 
 ## Context
 
-[ADR-0019](../../../docs/decisions/0019-structured-tool-results.md) 与 [WP12 计划](../proposed/2026-10-06-structured-tool-results-plan.md)要求 D 搜索批与 S shell 批在模型正文不变的条件下补齐 error/meta。[基础批](2026-10-07-structured-tool-results-base.md)已经提供 `tool.Failure`、类型化 DTO 与 runtime 的硬预算；[WP14](2026-10-06-session-sandbox-modes.md)已经提供三档策略和实际 launch mode 文案。producer 尚只返回普通 error 与正文，磁盘无法得到分类或搜索展示数据。
+[ADR-0019](../../../docs/decisions/0019-structured-tool-results.md) 与 [WP12 实施记录](2026-10-06-structured-tool-results.md)要求 D 搜索批与 S shell 批在模型正文不变的条件下补齐 error/meta。[基础批](2026-10-07-structured-tool-results-base.md)已经提供 `tool.Failure`、类型化 DTO 与 runtime 的硬预算；[WP14](2026-10-06-session-sandbox-modes.md)已经提供三档策略和实际 launch mode 文案。producer 尚只返回普通 error 与正文，磁盘无法得到分类或搜索展示数据。
 
 永久测试先于产品修复执行：search 的四类失败、根失败与成功 metadata 都在真实 JSONL 文件中得到 nil；shell 的 read-only/workspace-write 缺失或失败 backend、前台等待取消和 job 上限回退取消也得到 nil。真实 composition 测试用修复前 producer 的 Go overlay 重演，两个 meta 与两个 error 的独立磁盘断言均失败，而正文相同。
 

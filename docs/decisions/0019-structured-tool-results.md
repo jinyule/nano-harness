@@ -3,7 +3,7 @@
 - 状态：Accepted
 - 日期：2026-10-07
 - 决策者：nano-harness maintainers（先补数据，TUI 卡片暂缓，模型可见文本不变；错误分类与差异取舍由协调者在 2026-10-07 确认，原则是对齐上游）
-- 实施状态：按批次实施，进度与冲突面见[WP12 实施计划](../../.agents/notes/proposed/2026-10-06-structured-tool-results-plan.md)
+- 实施状态：已按批次全部实施，结果与证据见[实施 Note](../../.agents/notes/implemented/2026-10-06-structured-tool-results.md)
 
 ## 背景
 
@@ -32,11 +32,9 @@ K1（`1a3568a`）给 runtime 加了三个取消检查点：轮到调度时和即
 | jobs、todo、skill、bash 的 tool 包 | 有 output definition，但没有 presentationMeta；这些工具自身的错误是普通 Error，不存在 `JOB_*`、`TODO_*`、`SKILL_*` 一类上游码。 |
 | [`spill/spill-policy`](../../third_party/deepseek-harness/packages/spill/spill-policy/src/index.ts)、[`core/session/src/surface.ts`](../../third_party/deepseek-harness/packages/core/session/src/surface.ts) | spill 和 surface 替换只改 content，保留 error 与 meta。 |
 
-非目标：调整工具名称、参数 schema、guidance、模型可见文本、审批或取消语义；TUI 卡片；持久化完整 canonical value；新增插件、存储或部署配置；自动重试；WP13 的裁剪实现；旧会话迁移。实施分批、冲突面和工作量由 [WP12 实施计划](../../.agents/notes/proposed/2026-10-06-structured-tool-results-plan.md)拥有。
+非目标：调整工具名称、参数 schema、guidance、模型可见文本、审批或取消语义；TUI 卡片；持久化完整 canonical value；新增插件、存储或部署配置；自动重试；WP13 的裁剪实现；旧会话迁移。实施分批、验证和证据缺口由[实施 Note](../../.agents/notes/implemented/2026-10-06-structured-tool-results.md)拥有。
 
 ## 决策
-
-本节契约按批次落地；尚未实施的批次不改变对应工具的产品行为。
 
 ### 1. 持久化字段与 Go 所有权
 
@@ -163,19 +161,19 @@ diff 规则：
 
 沿用 nano session v2。新增字段是加法，由 composition 身份识别；meta 内不设版本号，因为 composition 已标识运行时语义，会话格式版本标识编码。模型 schema 和 prompt 不变，插件启动顺序和 Scope cleanup 不变，cmd 继续注入同一批实例。纯 DTO 不增加插件、服务定位器或全局错误注册表。
 
-`52d3715` 的 composition 身份为 `tool-runtime-v2`、`fs-tools-v3`、`search-tools-v3`、`shell-tools-v3`、`job-tools-v2`、`subagent-tools-v4`、`todo-tools-v1`、`web-tools-v2`、`question-tools-v1`、`plan-tools-v1`、`skill-tools-v1`、`goal-tools-v2`、`spill-v1`、`attachments-v1`、`tool-result-prune-v1`、`session-v2`。WP14 已把 fs 与 shell 提升为 v4，并增加 `sandbox-policy-v1`。WP12 之前的取消对齐只改变被取消调用的结果文本，不改变已持久化记录的含义，与 K1 引入该行为时一样不提升 `tool-runtime`。WP12 按批次合入，每批从合入时的实际基线各提升一次：
+WP12 开始时（`52d3715`）的身份为 `tool-runtime-v2`、`fs-tools-v3`、`search-tools-v3`、`shell-tools-v3`、`job-tools-v2`、`subagent-tools-v4`、`todo-tools-v1`、`web-tools-v2`、`question-tools-v1`、`plan-tools-v1`、`skill-tools-v1`、`goal-tools-v2`、`spill-v1`、`attachments-v1`、`tool-result-prune-v1`、`session-v2`。WP12 按批次合入，每批在合入时的实际基线上各提升一次自己负责的 token：
 
-- 基础批把 `tool-runtime` 提升一档：runtime 自有分类、meta 通道和 resume 修复分类都在这一档。
-- 搜索 D 批把 `search-tools-v3` 提升为 v4；shell S 批在 WP14 的 v4 上提升为 v5。
-- goal H 批把 `goal-tools-v2` 提升为 v3；question I 批把 `question-tools-v1` 与 `plan-tools-v1` 提升为 v2。
-- web E 批把 `web-tools-v2` 提升为 v3。
-- 每个 producer 批提升自己的 provider token：fs、search、web、shell、subagent、goal、question。question 批同时提升 plan，因为 exit_plan_mode 的结果会带上传播来的提问分类。
+- 基础批把 `tool-runtime-v2` 提升为 v3：runtime 自有分类、meta 通道和 resume 修复分类都在这一档。WP12 之前的取消对齐只改变被取消调用的结果文本，不改变已持久化记录的含义，与 K1 引入该行为时一样不提升 `tool-runtime`。
+- 文件 C 批在 WP14 的 `fs-tools-v4` 上提升为 v5；搜索 D 批把 `search-tools-v3` 提升为 v4；shell S 批在 WP14 的 `shell-tools-v4` 上提升为 v5。
+- web E 批把 `web-tools-v2` 提升为 v3；subagent G 批把 `subagent-tools-v4` 提升为 v5；goal H 批把 `goal-tools-v2` 提升为 v3；question I 批把 `question-tools-v1` 与 `plan-tools-v1` 提升为 v2，因为 exit_plan_mode 的结果会带上传播来的提问分类。
 - jobs、todo、skill 自身的结果契约不变，token 不变；它们的 runtime 分类随 `tool-runtime` 一起变化。
 - `session-v2`、`spill-v1`、`attachments-v1` 不因这些加法字段改变。
 
+全部批次合入后的身份为 `tool-runtime-v3`、`fs-tools-v5`、`search-tools-v4`、`shell-tools-v5`、`job-tools-v2`、`subagent-tools-v5`、`todo-tools-v1`、`web-tools-v3`、`question-tools-v2`、`plan-tools-v2`、`skill-tools-v1`、`goal-tools-v3`、`spill-v1`、`attachments-v1`、`tool-result-prune-v1`、`sandbox-policy-v2`、`session-v2`；其中 `sandbox-policy` 由 WP14 引入，其后续修复提升为 v2。当前权威值是 `cmd/nano-harness/main.go` 的 `compositionID`。
+
 composition 不匹配的旧会话在 Open 和 Inspect 中都会被拒绝，与以往的身份提升相同；原 JSONL、附件和 spill 保留不动。旧二进制遇到新增字段按未知字段拒绝。新增手写样本 `session-v2-structured-results.jsonl`，现有样本保持原样，避免 writer 和 reader 一起漂移。
 
-当前没有已发布会话的升级承诺，实施前核查发布状态。首次向用户发布会话数据前，必须复审拒绝旧 composition 是否仍可接受；若已有发布数据，先明确离线迁移、备份、回退和校验策略，不能因为 API 尚不稳定就推断数据可以丢弃。WP12 默认不迁移、不截断、不清理旧会话；有效的中断日志仍只追加修复记录。metadata 含源文件片段和 web answer，继承 transcript 的 owner-only 权限、保留期和备份范围，不得出现在诊断日志中；它不是静态加密的。
+实施时没有已发布会话，也没有升级承诺。首次向用户发布会话数据前，必须复审拒绝旧 composition 是否仍可接受；若已有发布数据，先明确离线迁移、备份、回退和校验策略，不能因为 API 尚不稳定就推断数据可以丢弃。WP12 默认不迁移、不截断、不清理旧会话；有效的中断日志仍只追加修复记录。metadata 含源文件片段和 web answer，继承 transcript 的 owner-only 权限、保留期和备份范围，不得出现在诊断日志中；它不是静态加密的。
 
 ## 后果
 

@@ -187,3 +187,45 @@ func TestLog_RepairClassifiesAnUnknownOutcome(t *testing.T) {
 		t.Fatalf("repaired result = %+v", repaired)
 	}
 }
+
+// A fork seed copies classifications and metadata into the child log
+// exactly, and the child reopens with the same structured results.
+func TestOpen_SeedCopiesStructuredResults(t *testing.T) {
+	fixture, err := os.ReadFile(structuredFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, scope := startManager(t)
+	t.Cleanup(func() { _ = scope.Close(context.Background()) })
+	if err := os.WriteFile(filepath.Join(manager.config.Root, "parent.jsonl"), fixture, 0o600); err != nil { //nolint:gosec // fixed fixture name under the test-owned private manager root
+		t.Fatal(err)
+	}
+	_, seed, err := manager.Inspect(t.Context(), "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := manager.Open(t.Context(), OpenOptions{SessionID: "child", Create: true, Cwd: "/synthetic/workspace", ParentSessionID: "parent", DelegationDepth: 1, Seed: seed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	copied, err := os.ReadFile(child.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentLines, childLines := bytes.Split(fixture, []byte("\n")), bytes.Split(copied, []byte("\n"))
+	if len(parentLines) != len(childLines) {
+		t.Fatalf("child has %d lines, parent %d", len(childLines), len(parentLines))
+	}
+	for index := 1; index < len(parentLines); index++ {
+		if !bytes.Equal(parentLines[index], childLines[index]) {
+			t.Fatalf("seed line %d changed:\n%s\n%s", index, parentLines[index], childLines[index])
+		}
+	}
+	_, events, err := manager.Inspect(t.Context(), "child")
+	if err != nil || len(events) != len(seed) || events[15].Record.Result.Meta.Read == nil || events[16].Record.Result.Error.Code != "FS_NOT_FOUND" {
+		t.Fatalf("child replay = %d events, err=%v", len(events), err)
+	}
+}

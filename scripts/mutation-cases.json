@@ -1174,5 +1174,26 @@
     "before": "delete(calls.cancel, key)",
     "after": "_ = key",
     "test": "^TestCalls_ReleaseCancelsUnregistersAndUnblocksWait$"
+  },
+  {
+    "id": "wire-responses-projects-result-fields",
+    "file": "internal/adapter/model/provider/responses.go",
+    "before": "Output: responsesOutput(node.Result, images)})",
+    "after": "Output: node.Result})",
+    "test": "^TestStream_OmitsToolErrorsAndMetadataInEachWireFormat$"
+  },
+  {
+    "id": "wire-anthropic-projects-result-fields",
+    "file": "internal/adapter/model/provider/anthropic.go",
+    "before": "Content: anthropicResultContent(node.Result, images), IsError",
+    "after": "Content: node.Result, IsError",
+    "test": "^TestStream_OmitsToolErrorsAndMetadataInEachWireFormat$"
+  },
+  {
+    "id": "compaction-estimate-counts-output-only",
+    "file": "internal/app/compaction/service.go",
+    "before": "total += max(1, len(node.Result.Output)/4)",
+    "after": "total += max(1, len(fmt.Sprint(*node.Result))/4)",
+    "test": "^TestEstimateSurface_IgnoresToolErrorsAndMetadata$"
   }
 ]

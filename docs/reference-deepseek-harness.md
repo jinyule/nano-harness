@@ -183,3 +183,19 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 参考 `packages/sandbox/sandbox-policy`、`sandbox-local/src/profiles.ts`、`sandbox/roots.ts`、fs/bash sandbox 与 Base 权限预设，采纳三档闭合模式、workspace-write 默认、立即持久化的 `sandbox/mode`、委派时显式 override 捕获及 `sandbox:policy`（上游 order 110 的 runtime-context 段落，在用户输入之后、step 之前；本仓按注册顺序与委派 section 聚合为完整快照，统一比较、提交与添加一次替代声明，早于独立 skill 消息；聚合参考 `packages/core/system-prompt/src/index.ts`，路径渲染对齐 `JSON.stringify`）。read-only→workspace-write 作为一次性窄升级，full access 等同 host。Linux 采纳 `--unshare-pid` 与 root/dev/proc 挂载，放开网络，与 macOS 联网一致。不会修改或复制参考源码，指针保持不变。
 
 本仓继续对每次 write/edit/bash 请求一次性 approval，并固定 delegated `never`，比上游 Base 严格；默认文件读/搜索仍保留 workspace/spill 边界，host 文件修改保留先读后写、原子发布与 symlink 禁写。Web 权限 UI 与平台特有 ACL 后端暂缓。本仓 session v2 与 fingerprint 拒绝旧 composition 的策略、恢复路径与实现证据见 [ADR-0021](decisions/0021-session-sandbox-modes.md) 和[实施 Note](../.agents/notes/implemented/2026-10-06-session-sandbox-modes.md)。
+
+## 2026-10-07：结构化工具结果
+
+参考 `5badb15009ae` 的 `core/tools/src/index.ts`（`ToolErrorInfo`、`errorInfo`、取消替换）、`agent-loop/src/tool-calls.ts`（`appendToolResult`）、`core/session/src/repair.ts` 与各工具包的 `presentationMeta`，采纳把错误分类与结果 metadata 持久化到 `tool/result`、模型请求只取 content/is_error 的分离。契约与映射由 [ADR-0019](decisions/0019-structured-tool-results.md) 拥有，实施与证据见[实施 Note](../.agents/notes/implemented/2026-10-06-structured-tool-results.md)。
+
+| 上游行为 | 本仓取舍 |
+|---|---|
+| `errorInfo` 只从 `HarnessError` 取 `{name, code}`，普通 Error 无分类 | 采纳；分类只来自上游同条件的码和本仓已有 Code，不为普通错误新造码，approval 拒绝、panic、参数超限同样无分类 |
+| `ToolErrorInfo.reason`（只有 experimental auto-review 产生） | 暂缓：本仓没有生产者，以后作为加法字段补上 |
+| 取消只替换成功结果（两处 `!isError` 前提），body 的错误保留原分类 | 采纳；K1 曾连错误一并替换，已在 WP12 之前单独修复 |
+| repair 区分 `TOOL_NOT_STARTED` 与 `TOOL_OUTCOME_UNKNOWN` | 只采纳后者：本仓在执行批次前提交全部 tool/call，无法证明未开始 |
+| 8 个工具的 `presentationMeta`（camelCase，search 用 `shape` 区分） | 采纳字段语义；本仓用 snake_case 和工具名键的闭合 DTO，严格解码与 order 校验成员归属 |
+| read meta 的 `lang` | 暂缓，可从 path 推导；UI 卡片工作开始时复审 |
+| write/edit 用 jsdiff `structuredPatch` 生成最小 hunk，diff 基础 10 MiB | 采纳 LF diff 基础与 10 MiB 上限；edit 按匹配位置生成 hunk，write 至多一个 hunk，只用标准库；UI 卡片工作开始时复审 |
+| search meta 65,536 字节软上限（至少保留一项） | 采纳数值，改为硬上限，列表可裁到空；其他 meta 另设 256 KiB 硬上限，上游无此上限 |
+| canonical value、output schema、render 与 PTC | 不采纳：本仓 Execute 已类型化，当前只需持久化 metadata 与分类 |

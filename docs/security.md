@@ -176,6 +176,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 - append 先写、`fsync`，再更新内存状态；失败尝试 truncate 回已知 durable prefix。回滚失败会和原错误一起返回。
 - resume 只对 schema 与因果均有效的完整记录做追加式 repair：取消未决 approval、补 tool error，并关闭 compaction/step/turn。它不截断 torn line、不删除未知内容、不迁移旧格式。
 - model-visible stream chunk、message、call/result、approval、retry、compaction summary 与工具结果裁剪（只含原结果的首尾片段）、image、skill 目录与注入正文、规划模式切换与切换提示均进入日志；credential、OAuth notice 和内部 provider DTO 不进入。问题与答案只作为 `tool/call` 参数和 `tool/result` 存在。
+- `tool/result` 的 `error`（`{name, code}`）与 `meta` 只供重放与诊断，不进入 provider 请求、token 估算或 compaction 摘要输入。meta 会复制模型已经看到的数据：read 窗口的行、write/edit 的 diff 片段、glob/grep 的路径与匹配行、web_search 的来源与回答、web_fetch 的最终 URL；它们与 transcript 一样只受 `0600` 权限、保留期与备份范围约束，不脱敏、不静态加密，也不得写入诊断日志。meta 中的路径或 URL 不授予读写权限，也不参与 spill 历史文件授权；严格解码拒绝未知成员、错误结果上的 meta、成功结果上的分类和不属于对应 call 的 meta，单个 meta 的编码不超过 256 KiB（glob/grep 为 65,536 字节），见 [ADR-0019](decisions/0019-structured-tool-results.md)。
 - 参数超限时只提交显式 `arguments_omitted:true` 与空 arguments，runtime 在任何工具回调或 approval 之前返回错误；模型可缩小参数后重试。持久化校验拒绝省略调用携带非空参数、approval、todo 副作用或成功结果，原始超限内容不成为可执行事实。预算不预留会话的剩余空间：整个 64 MiB session 写满仍需新会话。
 - `notice/queued` 只由 owner agent 在 job 完成通知入队前写入，内容是之后投递给模型的同一条通知（job ID、种类、标签即命令文本、状态），不含输出正文。decoder 拒绝重复 ID、投递未入队或已投递的 ID，以及与入队内容不同的投递；欠着的通知在恢复后投递一次。
 - `todo/write` 只由调用方 session 中尚未得到 result 的 `todo_write` call 写入，最多 256 项、每项 `content` 2048 字节。decoder 拒绝未知字段、未知状态、未去空白或重复的内容，以及不引用 pending `todo_write` call 的记录。

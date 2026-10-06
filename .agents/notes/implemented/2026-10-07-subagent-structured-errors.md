@@ -5,7 +5,7 @@
 
 ## Context
 
-[ADR-0019](../../../docs/decisions/0019-structured-tool-results.md) 让 tool/result 持久化结构化错误 `{name, code}`，runtime 通过 `tool.Failure` 接口取得分类；[WP12 实施计划](../proposed/2026-10-06-structured-tool-results-plan.md)把 subagent 列为 G 批：`app/subagent.Error` 增加 `ToolError`，subagent token 加一。ADR-0019 的映射表已给出 `SubagentError` 与 `app/subagent` 的全部 Code，包括 K1 的 `ABORTED`、`ABORTED_BEFORE_DISPATCH`、`ACTIVATION_TEARDOWN_FAILED`，以及本仓已有、上游深度错误没有的 `DEPTH_LIMIT`。K2 新增的 `subagent delegation requires a parent request to inherit its route from` 使用已有的 `INVALID_REQUEST`。上游 `SubagentError` 的 name 即 `SubagentError`。
+[ADR-0019](../../../docs/decisions/0019-structured-tool-results.md) 让 tool/result 持久化结构化错误 `{name, code}`，runtime 通过 `tool.Failure` 接口取得分类；[WP12 实施记录](2026-10-06-structured-tool-results.md)把 subagent 列为 G 批：`app/subagent.Error` 增加 `ToolError`，subagent token 加一。ADR-0019 的映射表已给出 `SubagentError` 与 `app/subagent` 的全部 Code，包括 K1 的 `ABORTED`、`ABORTED_BEFORE_DISPATCH`、`ACTIVATION_TEARDOWN_FAILED`，以及本仓已有、上游深度错误没有的 `DEPTH_LIMIT`。K2 新增的 `subagent delegation requires a parent request to inherit its route from` 使用已有的 `INVALID_REQUEST`。上游 `SubagentError` 的 name 即 `SubagentError`。
 
 在本批之前，五个 subagent 工具的失败只有 `Error: <message>` 文本，`error` 为空。
 

@@ -5,7 +5,7 @@
 
 ## Context
 
-[ADR-0019](../../../docs/decisions/0019-structured-tool-results.md) 与 [WP12 计划](../proposed/2026-10-06-structured-tool-results-plan.md) 的 C 批要求文件工具持久化错误分类和展示 metadata，模型可见文本保持不变。F 批已经提供 `tool.Failure`、类型化 DTO 与归一出口，WP14 已提供会话文件策略。文件 producer 仍只返回正文：旧文件摘要没有保留 diff 基础，成功结果没有窗口或 hunk，文件错误没有分类。
+[ADR-0019](../../../docs/decisions/0019-structured-tool-results.md) 与 [WP12 实施记录](2026-10-06-structured-tool-results.md) 的 C 批要求文件工具持久化错误分类和展示 metadata，模型可见文本保持不变。F 批已经提供 `tool.Failure`、类型化 DTO 与归一出口，WP14 已提供会话文件策略。文件 producer 仍只返回正文：旧文件摘要没有保留 diff 基础，成功结果没有窗口或 hunk，文件错误没有分类。
 
 本记录补充 [基础批](2026-10-07-structured-tool-results-base.md)，不替代它的格式、预算、重放与 runtime 分类；[观察策略](2026-10-05-tool-output-spill-and-read-before-write.md) 继续拥有先读后写和 spill，[取消对齐](2026-10-07-tool-cancel-keeps-body-failure.md) 继续拥有 body 失败与取消的优先级。计划仍拥有其他批次安排，旧 Note 不归档。范围只有文件 producer、fs composition token、对应测试、mutation 与文档；不修改参考 submodule，也不实现其他 producer。
 

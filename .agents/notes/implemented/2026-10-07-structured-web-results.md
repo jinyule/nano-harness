@@ -5,7 +5,7 @@
 
 ## Context
 
-[ADR-0019](../../../docs/decisions/0019-structured-tool-results.md) 与 [WP12 计划](../proposed/2026-10-06-structured-tool-results-plan.md)要求 E 批在模型正文不变的条件下补齐 web 的 error/meta。[基础批](2026-10-07-structured-tool-results-base.md)已经提供 `tool.Failure`、`WebSearchMeta`/`WebFetchMeta` 与 runtime 的裁剪和校验；`app/web.Error` 已有 12 个稳定代码，但 runtime 拿不到分类，web_search 和 web_fetch 也只返回正文。`formatFetch` 内部已经算出 provider、转换输入和完整输出三种截断，但只体现在 footer 中。
+[ADR-0019](../../../docs/decisions/0019-structured-tool-results.md) 与 [WP12 实施记录](2026-10-06-structured-tool-results.md)要求 E 批在模型正文不变的条件下补齐 web 的 error/meta。[基础批](2026-10-07-structured-tool-results-base.md)已经提供 `tool.Failure`、`WebSearchMeta`/`WebFetchMeta` 与 runtime 的裁剪和校验；`app/web.Error` 已有 12 个稳定代码，但 runtime 拿不到分类，web_search 和 web_fetch 也只返回正文。`formatFetch` 内部已经算出 provider、转换输入和完整输出三种截断，但只体现在 footer 中。
 
 永久测试先于产品修改执行：工具层的分类、检索 metadata 与抓取 metadata 三个测试在原 producer 上都得到 nil 字段；真实组装测试在原 producer 的 Go overlay 上以 `search metadata = <nil>` 失败。
 
