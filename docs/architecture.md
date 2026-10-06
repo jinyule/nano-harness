@@ -262,11 +262,11 @@ list_agents                → parent 自己的 subagent/catalog；descendants �
 
 `internal/app/question.Service`（插件 `user-questions`）是用户提问接缝。所选前端用 `RegisterBroker` 发布唯一回答面；调用方用 `Ask(ctx, question.Request) ([]question.Answer, error)` 提问。服务在调用 broker 前校验请求（非空、数量与 id 上限、标签、`plan-review` intent），拒绝 delegated 调用方，并对答案逐题校验后按请求顺序返回；broker 返回后优先检查 context 取消，即使返回合法答案也失败关闭；broker 缺失或失败、非法答案同样失败关闭。错误文本沿用上游，规则与上限见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)。问题与答案不另写记录：问题是 `tool/call` 参数，答案是 `tool/result`。
 
-`internal/app/plan.Service`（插件 `plan-mode`）拥有规划模式。持久化状态是最后一条 `plan/mode`，由 `session.ProjectPlan` 折叠：
+`internal/app/plan.Service`（插件 `plan-mode`）拥有规划模式。持久化状态是会话自己提交的最后一条 `plan/mode`，由 `session.ProjectPlan` 折叠；fork 子代理继承的父规划记录不属于它，所以子代理总是从非规划模式开始。服务按会话加锁，不同会话的边界读写互不等待：
 
 - `Registry.SetPlanMode` 是用户选择入口，只接受 live root agent，并在 worker 状态锁内调用 `Select`：没有打开的 turn 时立即追加 `turn:0` 记录，turn 进行中则保留到下一个 step 边界。
 - engine 在每个 step 的 `step/start` 前调用 `Step`：提交待生效选择；若是用户切换且最近一次 `request/header` 描述的是另一种模式，追加 `source.kind = "plan-mode"` 的切换提示；规划模式生效时返回 Base `section` 原文，prompt assembler 把它放在角色段落之后、工具段落之前。
-- `exit_plan_mode` 在本 step 处于规划模式时通过提问接缝提交计划审查；获批后用 `Exit(ctx, sessionID)` 在状态锁内检查取消，再安排在下一个边界静默退出，其余答案保持规划模式并把反馈作为错误结果返回。
+- `exit_plan_mode` 在本 step 处于规划模式时通过提问接缝提交计划审查；获批后用 `Exit(ctx, sessionID)` 在该会话的状态锁内检查取消，再安排在下一个边界静默退出，其余答案保持规划模式并把反馈作为错误结果返回。
 
 待生效选择只在进程内。规划模式不改变工具目录、approval、sandbox 或 allowlist，写类工具仍在执行点请求一次性 approval，评估见 ADR-0014。
 

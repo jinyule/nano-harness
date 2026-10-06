@@ -20,7 +20,7 @@
 长期契约记录在 [ADR-0014](../../../docs/decisions/0014-user-questions-and-plan-mode.md)，当前事实归[架构](../../../docs/architecture.md#用户提问与规划模式)、[安全](../../../docs/security.md#用户提问与规划模式)和[测试](../../../docs/testing.md)文档。本次实施：
 
 - `internal/app/question`（插件 `user-questions`）：`Service.Ask(ctx, Request) ([]Answer, error)` 与 `RegisterBroker(Broker, *plugin.Scope)`。请求在 broker 之前校验（上游文案加本仓上限），delegated 调用方被拒绝，答案逐题校验后按请求顺序返回并与 broker 切片解耦；取消、broker 缺失或失败、非法答案都失败关闭。broker 注册用指针 token 标识身份，因为函数类型的 broker 值不可比较，直接比较会在 cleanup 时 panic。
-- `internal/app/plan`（插件 `plan-mode`）：`Select`（用户选择）、`Step`（engine 边界提交、切换提示和规划段落）、`Active` 与 `Exit`（供 `exit_plan_mode` 使用）。`Section` 是 Base YAML 的解析值，含结尾换行。进程内只保留处于规划模式、有待生效选择或待提示的会话。
+- `internal/app/plan`（插件 `plan-mode`）：`Select`（用户选择）、`Step`（engine 边界提交、切换提示和规划段落）、`Active` 与 `Exit`（供 `exit_plan_mode` 使用）。`Section` 是 Base YAML 的解析值，含结尾换行。服务按会话加锁：会话表项在第一次选择或边界时创建并保留到服务停止，每个会话的日志读取与追加只持有自己的锁。
 - `internal/core/session`：新增 `plan/mode` 记录、`PlanMode`、`ProjectPlan` 折叠和形状校验；`jsonl/order.go` 只允许它在 step 之外、turn 0 或当前 turn，且必须改变模式。
 - `internal/app/agent`：`NewEngine` 显式注入 `*plan.Service`；engine 在每个 step 的主动 compaction 之后、`step/start` 之前调用 `Step`，把返回的段落交给 prompt assembler（位于角色段落之后、工具段落之前）。`Registry.SetPlanMode` 只接受 live root，并通过 `Agent.selectPlan` 在 worker 状态锁内调用 `Select`，使立即提交不会与 `turn/start` 交错。
 - `internal/adapter/tool/question`（`question-tools`）与 `internal/adapter/tool/plan`（`plan-tools`）：定义与上游逐字节一致；`exit_plan_mode` 通过提问接缝发出 `plan-review` 问题，结果文本沿用上游。上游的句子带结尾标点，用 `reviewError` 类型原样承载，避免 Go 错误字符串风格检查改写模型可见文本。
@@ -29,6 +29,11 @@
 - mutation 新增 `question-delegated` 与 `plan-mode-boundary`。PTY 脚本在根任务中加入两题提问，并加入 `/plan` → `exit_plan_mode` → TUI 批准的流程；fixture 在切换提示跟在用户消息之后时仍按用户任务路由。
 
 规划模式不在执行点阻止写类工具；评估和理由在 ADR-0014。
+
+整体审查后的修复：
+
+- fork 子代理曾继承 parent 的规划模式。WP7 的 fork 种子复制 parent 最后一个 `turn/end` 之前的全部记录，`ProjectPlan` 又折叠整份日志，所以种子里的 `plan/mode {active:true}` 让 child 每一步都带规划段落；child 不能选择模式，审查也以 delegated 被拒绝，于是无法离开。最常见的触发是本 turn 刚批准计划就 fork 去实施：退出要到下一个边界才记录，不在种子中。现在 `ProjectPlan` 只折叠 `session.OwnEvents`，与 `session.Children` 和 WP10 的目标投影一致；种子中的记录仍按顺序规则原位校验，消息与工具结果照常进入 child 的 surface，parent 不受影响。上游 fork 继承规划状态，这一差异写入 ADR-0014，ADR-0013 的“自有事件”一节补充了会话自有状态的规则。
+- 服务原先在全局锁内执行每个会话的日志读取和 `fsync` 追加，并发子代理的每个边界都要排队。现在按会话加锁，服务锁只保护生命周期与会话表；锁顺序为 agent worker 状态锁 → 会话锁，没有反向获取。`Exit(ctx, sessionID)` 的取消检查随之移到该会话的锁内，`TestService_CancelledExitKeepsPlanMode` 改为持有会话锁来构造等待点。
 
 ## Consequences
 
@@ -57,4 +62,5 @@
 - 持久化固定样本 `session-v2-plan.jsonl`：读取、投影、只读恢复不改字节，独立构造的 writer 输出逐字节相同；六个篡改反例全部被拒绝；中断尾部修复不改动已提交模式。
 - 门禁反例：把 `upstream-base-tools.json` 中 `ask_user_question` 描述改一个词，`TestComposition_MatchesUpstreamBaseTools` 失败；把 fixture 规划段落改一个词，规划模式 assembled 测试失败；恢复后通过。
 - Base 段落由一次性程序用 `gopkg.in/yaml.v3` 解析 submodule 的 `packages/bundle/base/cordis.patch.yml` 得到，未参考 Go 实现。
+- 审查修复的证据：`TestService_ForkChildStartsOutsidePlanMode`（`internal/app/subagent`）走真实 engine、registry、JSONL 和 fork 种子：root 进入规划模式并完成一个 turn，在第二个 turn 中 fork；修复前 child 的请求 system 含 Base 规划段落而失败，修复后不含，同时断言 child surface 仍含 parent 的消息、种子仍携带 parent 的 `plan/mode`，以及 parent 的请求与折叠保持规划模式。`TestProjectPlan_SkipsRecordsAForkInherited` 在 core 层覆盖继承前缀、child 自己的请求头和 parent 视图。`TestService_SessionsDoNotWaitForEachOther` 让一个会话的日志读取停住，另一个会话的选择与边界必须完成；换回全局锁实现时它在 10 s 后失败。修复基于集成分支 `7ffe646`，`GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check` 退出码 0（lint 0 issues，逐文件 100.0%，36 个 mutation 全部 killed）。
 - 未验证：没有 live provider 调用；Linux `bwrap` 下的 PTY 流程未在本机运行。

@@ -50,13 +50,15 @@ TUI 是唯一 broker，与 approval 共用同一交互锁逐题提问：输入�
 ```
 
 - `step` 必须缺省。`turn` 为 0 表示在 turn 之间记录；否则必须等于当前打开的 turn，且该 turn 没有打开的 step。记录必须改变当前模式，所以第一条只能是 `active:true`。它可以出现在 compaction 事务之间，不生成 surface 节点。
-- `session.ProjectPlan(events)` 是唯一折叠规则：最后一条 `plan/mode` 决定当前模式，没有记录即非规划模式；同时给出最近一个 `request/header` 写入时的模式。
+- `session.ProjectPlan(events)` 是唯一折叠规则：只看会话自己提交的事件（`session.OwnEvents`），其中最后一条 `plan/mode` 决定当前模式，没有记录即非规划模式；同时给出其中最近一个 `request/header` 写入时的模式。
+- 规划模式属于选择它的会话。fork 子代理的种子复制了 parent 已完成 turn 中的 `plan/mode` 与 `request/header`，这些记录在 child 日志中仍按顺序规则原位校验，但不进入 child 的折叠，所以 child 总是从非规划模式开始，也不会因继承的请求头收到切换提示。上游的 fork 会继承规划状态；本仓不继承，因为 child 既不能选择模式（`SetPlanMode` 只接受 root），也不能通过审查（提问接缝拒绝 delegated 调用方），继承的规划模式永远无法离开；而且种子截止到 parent 最后一个 `turn/end`，本 turn 刚获批、尚未在边界记录的退出不在种子中，"批准后 fork 去实施"的 child 会收到“不要修改文件”的规划段落。parent 的模式与折叠不受影响，种子带入的消息和工具结果照常进入 child 的模型 surface。
 
 读写方式：
 
 - `Registry.SetPlanMode(ctx, sessionID, active) (plan.Change, error)` 是用户选择入口，只接受 live root agent。它在 agent worker 的状态锁内调用 `Service.Select`；worker 在追加 `turn/start` 前于同一把锁内标记忙碌，因此立即提交永远不会与 turn 开始交错。没有打开的 turn 时立即追加 `turn:0` 记录（`Committed`）；turn 进行中保留到下一个 step 边界（`Queued`）；撤回尚未生效的相反选择返回 `Cancelled`，重复选择返回 `Unchanged`。追加失败返回错误，状态不变。
 - engine 在每个 step 的主动 compaction 之后、`step/start` 之前调用 `Service.Step(ctx, journal, turn)`：提交待生效选择，在需要时追加用户切换提示，并返回本 step 请求使用的规划段落。任一追加失败使 turn 以 error 结束，选择保留到后续边界重试。
-- `Service.Active(sessionID)` 报告最近一次边界或提交后的模式，供本 step 内的工具使用；`Service.Exit(ctx, sessionID)` 在状态锁内检查 context；已取消时用 `%w` 保留取消原因且不改变待生效选择，否则记录一次获批退出。接受退出选择之后的取消不撤销已经接受的选择。
+- `Service.Active(sessionID)` 报告最近一次边界或提交后的模式，供本 step 内的工具使用；`Service.Exit(ctx, sessionID)` 在该会话的状态锁内检查 context；已取消时用 `%w` 保留取消原因且不改变待生效选择，否则记录一次获批退出。接受退出选择之后的取消不撤销已经接受的选择。
+- 服务按会话加锁：每个会话的选择、边界和退出（包括其中的日志读取与 `fsync` 追加）由该会话自己的锁串行化，服务锁只保护生命周期和会话表，因此并发子代理的边界互不等待。锁顺序为 agent worker 状态锁 → 会话锁。会话表项在第一次选择或边界时创建，保留到服务停止，每项只有一把锁和几个布尔值；不在运行中删除表项，避免持锁调用方与新表项各自持有不同的锁。
 
 用户切换提示是 `source.kind = "plan-mode"` 的 `user/message`，文本沿用上游：`The user switched this session to plan mode.` 或 `The user switched this session back to the default mode.`。只有用户选择会请求提示，而且只在最近一次 `request/header` 描述的是另一种模式时追加；首个请求之前或往返切换后净变化为零时不追加。它位于 turn 的用户输入之后、`step/start` 之前；上游把它放在同一 step 的消息里，位置不同但模型同样在下一请求看到它。
 

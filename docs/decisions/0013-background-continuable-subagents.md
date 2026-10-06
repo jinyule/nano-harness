@@ -62,7 +62,7 @@ session format 仍为 v2，变化都在记录层：
 1. **`subagent/descriptor` v2**：`{"version":2,"provider":"spawn"|"fork","mode":"one-shot"|"continuable","label":...,"inherited":N}`，`persona`/`tools` 字段保留。v1 与 `in-process` provider 被拒绝。descriptor 是 child 自己写的第一条记录，必须位于 `inherited + 1` 号序列且不在 turn 内；spawn 的 `inherited` 必须为 0（省略）。
 2. **fork 种子**：fork child 创建时复制 parent 最后一个 `turn/end` 为止的事件（不含调用方进行中的 turn），序号保持不变，因此 compaction 的 shadowed 序号仍然有效。`transcript.OpenOptions.Seed` 让 JSONL 管理器把 header 与种子一次写入、一次 `fsync`，先整体校验连续序号、记录 schema 和闭合因果顺序。之后追加 descriptor 与 `never` 策略。child 的模型 surface 因此直接包含 parent 已完成的会话，provider/model 由当前 route 决定，与 parent 相同。
 3. **`subagent/catalog`**：parent 在创建 child 的工具 step 内写 `{"type":"subagent/catalog","turn":T,"step":S,"catalog":{"session_id":...,"mode":...,"label":...}}`。记录必须位于活动 step，同一日志内 `session_id` 唯一。它不进入 surface。
-4. **自有事件**：`session.OwnEvents` 以最后一个 descriptor 的 `inherited` 为界区分继承前缀；`session.Children` 只读取自有事件中的目录，fork 继承的 parent 目录不属于 child。
+4. **自有事件**：`session.OwnEvents` 以最后一个 descriptor 的 `inherited` 为界区分继承前缀；`session.Children` 只读取自有事件中的目录，fork 继承的 parent 目录不属于 child。会话自有的状态同样只从自有事件折叠：规划模式（`session.ProjectPlan`，见 [ADR-0014](0014-user-questions-and-plan-mode.md)）与目标（见 [ADR-0016](0016-long-running-goals.md)）。种子中的这些记录仍按顺序规则原位校验，只作为 parent 的历史存在；种子带入 child 模型 surface 的只有消息、工具调用与结果和 compaction 摘要。
 5. **消息来源**：`agent-message` 与 `subagent-settled` 是新的 source kind，不改变 `user/message` 结构。
 
 旧二进制遇到新记录或 descriptor v2 时按未知记录或非法字段拒绝；composition token 升为 `subagent-tools-v3`，旧组合创建的会话按 composition mismatch 拒绝恢复，不迁移。本仓尚无发布 tag，没有需要迁移的会话。新记录与其他事实同存于 `0600`、写后 `fsync` 的只追加日志，受单 record 6 MiB、单 session 64 MiB 限制；fork 种子计入 child 的 64 MiB，parent 接近上限时 fork 失败。

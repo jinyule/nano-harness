@@ -1,7 +1,8 @@
 package session
 
 // PlanMode is the whole-value plan-mode state committed by one plan/mode
-// record. The last record wins; a log without one is not in plan mode.
+// record. The last record a session wrote itself wins; a session without one
+// is not in plan mode.
 type PlanMode struct {
 	Active bool `json:"active"`
 }
@@ -17,13 +18,15 @@ type PlanView struct {
 	Told      bool
 }
 
-// ProjectPlan folds plan/mode and request/header records into the current
-// plan mode and the mode the latest request described. Events must be
-// validated: only plan/mode carries Plan and only request/header carries
-// Header.
+// ProjectPlan folds the session's own plan/mode and request/header records
+// into the current plan mode and the mode the latest request described.
+// Records a forked child inherited from its parent are skipped: plan mode
+// belongs to the session that selected it, and a child can neither select a
+// mode nor pass a plan review. Events must be validated: only plan/mode
+// carries Plan and only request/header carries Header.
 func ProjectPlan(events []Event) PlanView {
 	var view PlanView
-	for _, event := range events {
+	for _, event := range OwnEvents(events) {
 		if event.Record.Plan != nil {
 			view.Active = event.Record.Plan.Active
 		}

@@ -74,8 +74,11 @@ type Journal interface {
 	Append(context.Context, session.Record) (session.Event, error)
 }
 
-// state is the process-local part of one session's plan mode.
+// state is the process-local part of one session's plan mode. Its mutex
+// serializes that session's selections, boundaries, and exits, including
+// their journal reads and appends, so sessions never wait for each other.
 type state struct {
+	mu sync.Mutex
 	// active is the recorded mode as of the latest boundary or commit.
 	active bool
 	// pending holds a selection awaiting the next step boundary.
@@ -85,7 +88,10 @@ type state struct {
 	notify bool
 }
 
-// Service owns pending selections and the boundary commit.
+// Service owns pending selections and the boundary commit. Its mutex
+// guards only the lifecycle and the session map; an entry, once created,
+// lives until the service stops, so a session's lock is never replaced
+// while a caller holds it.
 type Service struct {
 	mu       sync.Mutex
 	started  bool
@@ -125,19 +131,15 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 // interleave with a turn starting. The commit is the only effect: a failed
 // append returns its error and leaves the session unchanged.
 func (service *Service) Select(ctx context.Context, journal Journal, active, inTurn bool) (Change, error) {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	if !service.running {
+	current := service.session(journal.Header().SessionID, true)
+	if current == nil {
 		return "", ErrNotRunning
 	}
+	current.mu.Lock()
+	defer current.mu.Unlock()
 	events, err := journal.Events(ctx)
 	if err != nil {
 		return "", err
-	}
-	id := journal.Header().SessionID
-	current := service.sessions[id]
-	if current == nil {
-		current = &state{}
 	}
 	current.active = session.ProjectPlan(events).Active
 	target := current.active
@@ -161,7 +163,6 @@ func (service *Service) Select(ctx context.Context, journal Journal, active, inT
 		current.active, current.pending, current.notify = active, false, true
 		change = Committed
 	}
-	service.keep(id, current)
 	return change, nil
 }
 
@@ -171,21 +172,17 @@ func (service *Service) Select(ctx context.Context, journal Journal, active, inT
 // force for the step's request, or "" outside plan mode. A failed append
 // returns its error and keeps the selection pending for a later boundary.
 func (service *Service) Step(ctx context.Context, journal Journal, turn uint64) (string, error) {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	if !service.running {
+	current := service.session(journal.Header().SessionID, true)
+	if current == nil {
 		return "", ErrNotRunning
 	}
+	current.mu.Lock()
+	defer current.mu.Unlock()
 	events, err := journal.Events(ctx)
 	if err != nil {
 		return "", err
 	}
 	view := session.ProjectPlan(events)
-	id := journal.Header().SessionID
-	current := service.sessions[id]
-	if current == nil {
-		current = &state{}
-	}
 	current.active = view.Active
 	if current.pending && current.target != current.active {
 		if _, err := journal.Append(ctx, session.Record{Type: session.RecordPlanMode, Turn: turn, Plan: &session.PlanMode{Active: current.target}}); err != nil {
@@ -201,12 +198,10 @@ func (service *Service) Step(ctx context.Context, journal Journal, turn uint64) 
 		}
 		notice := &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: NoticeSource}, Content: []session.ContentBlock{{Type: session.ContentText, Text: text}}}
 		if _, err := journal.Append(ctx, session.Record{Type: session.RecordUserMessage, Turn: turn, Message: notice}); err != nil {
-			service.keep(id, current)
 			return "", err
 		}
 	}
 	current.notify = false
-	service.keep(id, current)
 	if current.active {
 		return Section, nil
 	}
@@ -216,38 +211,56 @@ func (service *Service) Step(ctx context.Context, journal Journal, turn uint64) 
 // Active reports whether the session's latest step boundary or commit left
 // it in plan mode. Tools call it while their step runs.
 func (service *Service) Active(sessionID string) bool {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	current := service.sessions[sessionID]
-	return service.running && current != nil && current.active
+	current := service.session(sessionID, false)
+	if current == nil {
+		return false
+	}
+	current.mu.Lock()
+	defer current.mu.Unlock()
+	return current.active
 }
 
 // Exit records an approved plan review: the session leaves plan mode at the
 // next step boundary, and no user-switch notice is added because the tool
-// result already tells the model. Cancellation before the selection rejects
-// it without changing pending state.
+// result already tells the model. The context is checked under the
+// session's lock, so cancellation before the selection rejects it without
+// changing pending state; cancellation after it does not undo it.
 func (service *Service) Exit(ctx context.Context, sessionID string) error {
 	service.mu.Lock()
-	defer service.mu.Unlock()
+	running := service.running
+	service.mu.Unlock()
+	if !running {
+		return ErrNotRunning
+	}
+	current := service.session(sessionID, false)
+	if current == nil {
+		return ErrInactive
+	}
+	current.mu.Lock()
+	defer current.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("exit plan mode: %w", err)
 	}
-	if !service.running {
-		return ErrNotRunning
-	}
-	current := service.sessions[sessionID]
-	if current == nil || !current.active {
+	if !current.active {
 		return ErrInactive
 	}
 	current.pending, current.target, current.notify = true, false, false
 	return nil
 }
 
-// keep retains only sessions with process-local state worth remembering.
-func (service *Service) keep(id string, current *state) {
-	if current.active || current.pending || current.notify {
-		service.sessions[id] = current
-		return
+// session returns the state of id, creating it when create is set. It
+// returns nil when the service is not running or, without create, when the
+// session never reached a selection or boundary.
+func (service *Service) session(id string, create bool) *state {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if !service.running {
+		return nil
 	}
-	delete(service.sessions, id)
+	current := service.sessions[id]
+	if current == nil && create {
+		current = &state{}
+		service.sessions[id] = current
+	}
+	return current
 }

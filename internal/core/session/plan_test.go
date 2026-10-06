@@ -47,6 +47,25 @@ func TestProjectPlan_FoldsModeAndLatestHeader(t *testing.T) {
 	}
 }
 
+func TestProjectPlan_SkipsRecordsAForkInherited(t *testing.T) {
+	inherited := []Event{
+		{Sequence: 1, Record: Record{Type: RecordPlanMode, Plan: &PlanMode{Active: true}}},
+		{Sequence: 2, Record: Record{Type: RecordRequestHeader, Turn: 1, Step: 1, Header: &RequestHeader{Provider: "p", Model: "m"}}},
+	}
+	descriptor := Event{Sequence: 3, Record: Record{Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: SubagentDescriptorVersion, Provider: SubagentFork, Mode: SubagentOneShot, Label: "fork", Inherited: 2}}}
+	child := append(append([]Event(nil), inherited...), descriptor)
+	if view := ProjectPlan(child); view != (PlanView{}) {
+		t.Fatalf("forked child inherited plan mode: %+v", view)
+	}
+	if view := ProjectPlan(inherited); view != (PlanView{Active: true, Requested: true, Told: true}) {
+		t.Fatalf("parent view = %+v", view)
+	}
+	own := append(append([]Event(nil), child...), Event{Sequence: 4, Record: Record{Type: RecordRequestHeader, Turn: 2, Step: 1, Header: &RequestHeader{Provider: "p", Model: "m"}}})
+	if view := ProjectPlan(own); view != (PlanView{Requested: true}) {
+		t.Fatalf("child's own header view = %+v", view)
+	}
+}
+
 func TestPlanMode_SurfaceSkipsAndCloneDetaches(t *testing.T) {
 	event := Event{Sequence: 1, Record: Record{Type: RecordPlanMode, Plan: &PlanMode{Active: true}}}
 	surface, err := Surface([]Event{event})

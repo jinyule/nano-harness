@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
@@ -17,11 +18,18 @@ type memoryJournal struct {
 	// failAt fails the append whose 1-based position among appends matches.
 	failAt  int
 	appends int
+	// entered and release, when set, hold every Events call open.
+	entered chan struct{}
+	release chan struct{}
 }
 
 func (journal *memoryJournal) Header() session.Header { return session.Header{SessionID: journal.id} }
 
 func (journal *memoryJournal) Events(context.Context) ([]session.Event, error) {
+	if journal.entered != nil {
+		journal.entered <- struct{}{}
+		<-journal.release
+	}
 	return append([]session.Event(nil), journal.events...), journal.eventsErr
 }
 
@@ -190,8 +198,8 @@ func TestService_SelectDuringTurnWaitsForTheBoundary(t *testing.T) {
 	if got := journal.tail(4); !equal(got, []string{"plan/mode=off", "user/message:" + leftNotice}) {
 		t.Fatalf("exit records = %v", got)
 	}
-	if service.Active("s") || len(service.sessions) != 0 {
-		t.Fatalf("inactive session retained state: %+v", service.sessions)
+	if service.Active("s") {
+		t.Fatal("the session is still in plan mode after the exit boundary")
 	}
 }
 
@@ -220,6 +228,12 @@ func TestService_SelectCancelsAPendingIdleOpposite(t *testing.T) {
 func TestService_ExitAppliesAtTheNextBoundaryWithoutNotice(t *testing.T) {
 	service, _ := startPlan(t)
 	journal := &memoryJournal{id: "s"}
+	if err := service.Exit(t.Context(), "s"); !errors.Is(err, ErrInactive) {
+		t.Fatalf("exit for an unseen session = %v", err)
+	}
+	if section, err := service.Step(t.Context(), journal, 1); err != nil || section != "" {
+		t.Fatalf("default boundary = %q, %v", section, err)
+	}
 	if err := service.Exit(t.Context(), "s"); !errors.Is(err, ErrInactive) {
 		t.Fatalf("exit outside plan mode = %v", err)
 	}
@@ -256,14 +270,16 @@ func TestService_CancelledExitKeepsPlanMode(t *testing.T) {
 	defer cancel()
 	entered := make(chan struct{})
 	done := make(chan error, 1)
-	service.mu.Lock()
+	// Hold the session's lock so Exit waits where it checks the context.
+	locked := service.session("s", false)
+	locked.mu.Lock()
 	go func() {
 		close(entered)
 		done <- service.Exit(ctx, "s")
 	}()
 	<-entered
 	cancel()
-	service.mu.Unlock()
+	locked.mu.Unlock()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled exit = %v", err)
 	}
@@ -313,5 +329,38 @@ func TestService_FailuresKeepTheSelection(t *testing.T) {
 	}
 	if got := journal.tail(1); !equal(got, []string{"plan/mode=on", "user/message:" + enteredNotice}) {
 		t.Fatalf("records after retry = %v", got)
+	}
+}
+
+func TestService_SessionsDoNotWaitForEachOther(t *testing.T) {
+	service, _ := startPlan(t)
+	slow := &memoryJournal{id: "slow", entered: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.Step(context.Background(), slow, 1)
+		done <- err
+	}()
+	<-slow.entered
+	t.Cleanup(func() { close(slow.release) })
+	fast := &memoryJournal{id: "fast"}
+	finished := make(chan error, 1)
+	go func() {
+		_, err := service.Select(context.Background(), fast, true, false)
+		if err == nil {
+			_, err = service.Step(context.Background(), fast, 1)
+		}
+		finished <- err
+	}()
+	select {
+	case err := <-finished:
+		if err != nil || !service.Active("fast") {
+			t.Fatalf("fast session = %v, active %t", err, service.Active("fast"))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a session waited for another session's journal read")
+	}
+	slow.release <- struct{}{}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
