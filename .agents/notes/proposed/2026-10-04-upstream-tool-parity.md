@@ -91,9 +91,9 @@
 | 会话被内联图片写满 | Suggestion | WP9 | 已合入 `fe565ad`，后续 WP11 |
 | `TestComposition_SubagentsEndToEnd`、web 关闭测试偶发失败 | 测试缺陷 | WP7、WP5 | 已合入 `d9ad07b`、`87316d1` |
 | spill 会话目录可被预置 symlink 引出存储分区（Codex 审查） | Blocker | Codex-B | 已合入（Codex-B，另修 `approval/decided` 多余 `call_id`） |
-| 目标轮次开场持久化失败后 driver 无限重排同一轮（Codex 审查） | Blocker | Codex-A | 修复中 |
-| 输出 token 上限截断被记为正常完成，目标继续自动推进（Codex 审查；上游在 max-tokens 时 disarm） | Blocker | Codex-A | 修复中 |
-| 目标结算无 revision 条件，可能撤销后来的人类授权（Codex 审查） | Suggestion | Codex-A | 修复中 |
+| 目标轮次开场持久化失败后 driver 无限重排同一轮（Codex 审查） | Blocker | Codex-A | 已合入（Codex-A） |
+| 输出 token 上限截断被记为正常完成，目标继续自动推进（Codex 审查；上游在 max-tokens 时 disarm） | Blocker | Codex-A | 已合入（Codex-A） |
+| 目标结算无 revision 条件，可能撤销后来的人类授权（Codex 审查） | Suggestion | Codex-A | 已合入（Codex-A） |
 | 提问 context 已取消时有效答案仍通过，可能安排退出规划模式（Codex 审查） | Suggestion | Codex-B | 已合入（Codex-B，另修 `approval/decided` 多余 `call_id`） |
 | `todo/write` 未校验所引用调用是否为 `todo_write`（Codex 审查） | Suggestion | Codex-B | 已合入（Codex-B，另修 `approval/decided` 多余 `call_id`） |
 | mutation 计数、README、ADR 互相引用等文档不一致 | 文档 | Codex-D | 修复中：会变化的计数只保留一个权威位置 |
