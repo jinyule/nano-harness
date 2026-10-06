@@ -44,6 +44,14 @@ job 名额测试的结算屏障证据见[边界修复 Note](2026-10-06-spill-que
 - mutation 新增 `job-owner-fence`：去掉 owner 比较后 `TestService_FencesOwnersAndUnknownJobs` 必须失败。
 - `scripts/tui-e2e.py` 增加一个在第一个 turn 结束后才完成的后台 job，验证终端 `job>` 通知和通知开启的 turn。
 
+### 整体审查后的取消修复
+
+整体审查发现：工具 step 结束后，engine 先取出 steer 和通知，再用已取消的 ctx 追加。JSONL `Append` 首先检查 `ctx.Err()`，所以 interrupt 落在工具执行期间时，追加失败，已取出的输入丢失，turn 记为 `error`，下游目标轮次被解除 armed 而不是暂停，子代理结算显示 failed 而不是 stopped。agent 包的内存日志原先忽略 ctx，因此测试没有暴露它。另一处不一致：有工具调用的最后一步会提交通知，随后 turn 以 `step_limit` 结束，通知没有得到回应。
+
+修复后，三个取出队列输入的边界（turn 开始、工具 step 结束、无工具调用的回答之后）先检查取消，取消时以 `canceled` 返回、不取出任何输入；取出后的 `user/message` 提交和无工具调用路径的 `step/end`、完成 `turn/end` 使用不继承取消的 context，竞态时输入已提交，下一个边界观察取消。turn 打开前的 `Events` 与 admission 失败也按 `outcomeFor` 区分取消。最后一个允许的 step 无论有无工具调用都不取通知，turn 结束后的唤醒回应它；steer 仍在最后一个边界提交。与集成分支的 `max_tokens` 结局合并后，被截断的 step 同样不取通知，它的 `step/end` 也改为不继承取消地提交，取消与截断竞态时记为 `canceled`（`truncated step` 用例）。内存日志的 `Append` 与 `Events` 改为先拒绝已取消的 context；唯一依赖旧行为的用例（预先取消的 turn）现在在首次 `Events` 处得到 `canceled`。
+
+目标服务的 `Settle` 和子代理的结算文案只读取 `turn/end` 的 outcome，取消映射已有各自的测试；修复保证 interrupt 落在工具 step 时记录的是 `canceled`。
+
 ## Consequences
 
 模型看到的 `bash` 与 `job_*` 定义与上游 Base 一致；长命令不再因超时被杀；job 完成后无需轮询。job 运行时与种类无关，WP7 可以直接复用。
@@ -69,4 +77,5 @@ job 名额测试的结算屏障证据见[边界修复 Note](2026-10-06-spill-que
 - `TestBash_RealBackgroundAndPromotedProcesses`：真实 host 进程的双流后台输出；提升后的命令被 `job_kill` 后，其后台子进程在进程组终止后不再存在。
 - 门禁反例：把 `job_output` 的 `wait` 描述改一个词，或把 `run_in_background` 移到 `workdir` 之前，`TestComposition_ToolCatalogGolden` 与 `TestComposition_MatchesUpstreamBaseTools` 均失败；恢复后通过。
 - `upstream-base-tools.json` 的新条目由一次性脚本从 submodule 的 `docs/tool-catalog.md` 抽取原文，`bash` 在目录的后台变体后追加已审查的升级字段；未参考 Go 实现，随后与真实 composition 比对一致。
+- 取消修复：`TestAgent_InterruptDuringToolKeepsNoticesAndSteers`（审查者的场景：工具阻塞到取消，期间 Notify、Steer、Interrupt，再 Submit）、`TestAgent_LastToolStepLeavesNoticesForNextTurn`、`TestEngine_LastToolStepTakesNoNotices` 和 `TestEngine_CancellationAtBoundariesKeepsQueuedInput`（turn 开始、工具边界、回答之后和提交竞态四个场景）。在保留新内存日志语义的前提下换回修复前的 `engine.go`，这些测试全部失败（`Outcome:error`、通知提交到 step_limit 的 turn、取出后丢失）；恢复修复后通过。
 - 未验证：Linux `bwrap` 下的后台命令只经过单元与 host 模式测试；没有进行 live provider 调用；Windows 不提供 workspace sandbox。

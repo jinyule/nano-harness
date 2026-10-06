@@ -26,7 +26,12 @@ type memoryLog struct {
 
 func (log *memoryLog) Header() session.Header { return log.header }
 func (log *memoryLog) Path() string           { return log.path }
-func (log *memoryLog) Append(_ context.Context, record session.Record) (session.Event, error) {
+
+// Append and Events refuse a cancelled context first, like the JSONL log.
+func (log *memoryLog) Append(ctx context.Context, record session.Record) (session.Event, error) {
+	if err := ctx.Err(); err != nil {
+		return session.Event{}, err
+	}
 	log.mu.Lock()
 	defer log.mu.Unlock()
 	if log.appendErr != nil {
@@ -41,7 +46,10 @@ func (log *memoryLog) Append(_ context.Context, record session.Record) (session.
 	log.events = append(log.events, event)
 	return session.CloneEvent(event), nil
 }
-func (log *memoryLog) Events(context.Context) ([]session.Event, error) {
+func (log *memoryLog) Events(ctx context.Context) ([]session.Event, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	log.mu.Lock()
 	defer log.mu.Unlock()
 	log.eventCalls++

@@ -159,11 +159,13 @@ func (agent *Agent) claimWake() (session.Message, bool) {
 // Notify delivers a model-facing notice, such as a background job
 // completion. A busy agent appends it as a user message at the next step
 // boundary of its active turn, which then cannot close before answering
-// it; an idle agent opens a new turn for it. Notices left by a cancelled
-// turn wait for the next turn. Pending notices are in memory and are lost
-// when the agent stops. A one-shot agent runs exactly one turn, so it
-// accepts notices only while that turn runs and never opens another for
-// them; notices that arrive too late for it are refused or discarded.
+// it; the last allowed step takes none, so a new turn answers it. An idle
+// agent opens a new turn for it. A cancelled turn takes no notices, and
+// the ones it leaves wait for the next turn. Pending notices are in memory
+// and are lost when the agent stops. A one-shot agent runs exactly one
+// turn, so it accepts notices only while that turn runs and never opens
+// another for them; notices that arrive too late for it are refused or
+// discarded.
 func (agent *Agent) Notify(message session.Message) error {
 	if !validUserMessage(message) {
 		return ErrInvalidConfig

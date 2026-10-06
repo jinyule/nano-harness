@@ -85,6 +85,7 @@ type runInput struct {
 	drain func() []session.Message
 	// notices takes queued notices at turn start, at tool-step boundaries,
 	// and before a turn would complete, which then continues to answer them.
+	// The last allowed step takes none, so they wait for the next turn.
 	notices func() []session.Message
 }
 
@@ -99,7 +100,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 	}
 	events, err := input.journal.Events(ctx)
 	if err != nil {
-		result.Err, result.Outcome = err, session.OutcomeError
+		result.Err, result.Outcome = err, outcomeFor(err)
 		return result
 	}
 	turn := nextTurn(events)
@@ -118,7 +119,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		return result
 	}
 	if err != nil {
-		result.Err, result.Outcome = err, session.OutcomeError
+		result.Err, result.Outcome = err, outcomeFor(err)
 		return result
 	}
 	turnOpen := true
@@ -138,6 +139,12 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			result.Err = errors.Join(result.Err, closeErr)
 		}
 	}()
+	// Every boundary that takes queued input checks cancellation first, so
+	// a cancelled turn leaves notices queued and steers pending.
+	if err := ctx.Err(); err != nil {
+		result.Err, result.Outcome = err, session.OutcomeCanceled
+		return result
+	}
 	if err := appendUserMessages(ctx, input.journal, turn, input.notices()); err != nil {
 		result.Err, result.Outcome = err, session.OutcomeError
 		return result
@@ -252,11 +259,16 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		}
 		if completion.Stop == llm.StopMaxTokens {
 			result.Text, result.Outcome = session.Text(message), session.OutcomeMaxTokens
-			if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordStepEnd, Turn: turn, Step: step, Usage: completion.Usage}); err != nil {
+			if _, err := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordStepEnd, Turn: turn, Step: step, Usage: completion.Usage}); err != nil {
 				result.Err, result.Outcome = err, session.OutcomeError
 				return result
 			}
 			stepOpen, openStep = false, 0
+			// Like every turn that stops before answering, a truncated one
+			// takes no notices; a cancellation that raced it wins.
+			if err := ctx.Err(); err != nil {
+				result.Err, result.Outcome = err, session.OutcomeCanceled
+			}
 			return result
 		}
 		for index := range completion.Calls {
@@ -268,12 +280,16 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		}
 		result.Text = session.Text(message)
 		if len(completion.Calls) == 0 {
-			if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordStepEnd, Turn: turn, Step: step, Usage: completion.Usage}); err != nil {
+			if _, err := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordStepEnd, Turn: turn, Step: step, Usage: completion.Usage}); err != nil {
 				result.Err, result.Outcome = err, session.OutcomeError
 				return result
 			}
 			stepOpen = false
 			openStep = 0
+			if err := ctx.Err(); err != nil {
+				result.Err, result.Outcome = err, session.OutcomeCanceled
+				return result
+			}
 			if step < maxSteps {
 				notices := input.notices()
 				if err := appendUserMessages(ctx, input.journal, turn, notices); err != nil {
@@ -284,7 +300,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 					continue
 				}
 			}
-			if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordTurnEnd, Turn: turn, Outcome: session.OutcomeCompleted}); err != nil {
+			if _, err := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordTurnEnd, Turn: turn, Outcome: session.OutcomeCompleted}); err != nil {
 				result.Err, result.Outcome = err, session.OutcomeError
 				return result
 			}
@@ -309,7 +325,15 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		}
 		stepOpen = false
 		openStep = 0
-		if err := appendUserMessages(ctx, input.journal, turn, append(input.drain(), input.notices()...)); err != nil {
+		if err := ctx.Err(); err != nil {
+			result.Err, result.Outcome = err, session.OutcomeCanceled
+			return result
+		}
+		arrived := input.drain()
+		if step < maxSteps {
+			arrived = append(arrived, input.notices()...)
+		}
+		if err := appendUserMessages(ctx, input.journal, turn, arrived); err != nil {
 			result.Err, result.Outcome = err, session.OutcomeError
 			return result
 		}
@@ -319,9 +343,12 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 }
 
 // appendUserMessages commits input that arrived during a turn, in order.
+// The input has already left its queue, so a cancellation racing the
+// commit must not drop it: the append ignores cancellation and a later
+// boundary observes it.
 func appendUserMessages(ctx context.Context, log *journal, turn uint64, messages []session.Message) error {
 	for index := range messages {
-		if _, err := log.Append(ctx, session.Record{Type: session.RecordUserMessage, Turn: turn, Message: &messages[index]}); err != nil {
+		if _, err := log.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordUserMessage, Turn: turn, Message: &messages[index]}); err != nil {
 			return err
 		}
 	}
