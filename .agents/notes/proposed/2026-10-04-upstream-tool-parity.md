@@ -135,7 +135,19 @@
 - agent：A1 唤醒 turn 开场时被打断会留下未闭合的 `turn/start`，之后每个 turn 都被拒绝直到重启；A2 `claimWake` 已取出的通知在开场被取消时不再投递（非持久化消息永久丢失）。两者都是 Blocker，交 opus 修复。A3 one-shot 的 `QueueNotice` 提交后入队被拒（Suggestion），一并处理。
 - tools：无 Blocker。S1 单层压缩响应的网络输入没有上限，N1 审计记录未核对检索词与调用参数，N2 空白判断重复实现，交 Codex。
 - wiring：B1“运行时把已执行的成功结果改成 aborted”**驳回**：上游 `packages/core/tools/src/index.ts:1581-1584` 同样在 body 执行后发现取消时返回 `toolAbortedResult`，agent 审查者也核对为一致。B2 后台命令超过约 256 KiB 时完成通知被拒且 job 服务吞掉错误（726a95f 的参数上限与 WP16 的跨提交冲突），交 opus。S1 ADR-0022 的 query 上限与代码不一致、S2 省略参数的 web_search 审计条件无测试保护、S3 fetch/file 附加 mutation 清单不进门禁、N3 composition token 注释口径，交 Codex。
-- 集成分支另有偶发失败 `TestService_SendMessageRoundTripAndColdResume`（`release` 先关闭 done 再投递结算通知），多次打断合入门禁，交 opus 写确定性测试修复。
+- 集成分支另有偶发失败 `TestService_SendMessageRoundTripAndColdResume`（`release` 先关闭 done 再投递结算通知），多次打断合入门禁，已修复合入 `1f2aa37`（先投递通知再关闭 done，对齐上游 finishDisposal 顺序）。
+- 处理进度：W-B2 已合入 `3966344`（按上游 `fitCompletionNotice` 截断整条通知，投递失败写入 job detail）。A1/A2/A3 修复进行中。
+
+### 第四轮增量审查（`d7d199d..005a3a8`，opus）
+
+- core：C1 Blocker，B1 修复（`27ad50b`）引入回归：同一结算窗口里，被取消的目标轮次之后又有 turn 被取消，暂停会被覆盖，目标停在 active+disarmed。上游“取消后再取消”仍会暂停。已交 opus 修复。N1 `Maybe` 返回值与 ADR-0020 定义不符、N2 fork surface 的措辞，一并修。pruner、B3、plan cleanup、release 顺序均核对为与上游一致。
+- tools：无 Blocker。S1 sandbox 不可用文案与上游不同；S2 管道排空 1 s 而上游为 3 s；N1、N2 job 文案和顺序细节与上游不同；N3 sandbox 故障误判与上游相同，记为已知限制。按“对齐上游”交 opus 修复。
+
+### 本轮其他合入与决定
+
+- shell 审计 3 `cd6912b` 与 B5 `2d519a0`、plan cleanup `005a3a8`、K2 `576547a`（descriptor v3、`subagent-tools-v4`、委派说明改为 runtime context、`sender_session_id`）、K2 后续 `d79501d` 已合入。K2 后续让 child compaction 使用继承 route，并顺带修复已合入 compaction 的缺陷：同一会话第二次摘要的 ShadowedSeqs 无序导致必然失败。
+- plan cleanup 排查发现 approval、retry、compaction 有同类关闭窗口，已修复（`wp/cleanup-quiescence`），rebase 冲突中。五个服务各有约 20 行相同的在途调用登记代码，收尾时评估是否抽象。
+- 2026-10-06 23:1x Codex 再次撞上 429。维护者要求撞到即停、不重试，`codex-lane.sh` 已改为首个 429 即退出。维护者告知 Codex 限额 2026-10-07 02:29 解除，WP14、r3tools、mutgate 届时续接。
 
 ### 后续项（不在本次范围）
 
