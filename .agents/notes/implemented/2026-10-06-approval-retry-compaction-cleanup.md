@@ -28,7 +28,7 @@
 - retry：只登记“重试决定”这一段，即读取策略、追加 `llm/retry`、退避等待、追加 `llm/retry-started`。模型尝试由调用方的闭包使用调用方的 context 发起，属于调用方，cleanup 不能取消也不等待；尝试在 cleanup 之后失败时，`Do` 返回 `ErrNotRunning`。退避中被取消的重试只留下 `llm/retry`，与 turn 取消时相同。
 - compaction：`Maybe` 整体登记，摘要模型请求由服务自己发起，所以同样被取消。事务开始后的失败沿用不可取消的错误收尾；本变更把摘要提交后的成功 `compaction/end` 也改为不继承取消，这样摘要落盘之后被取消的请求仍关闭事务并返回成功，cleanup 返回前不会留下打开的事务。这一改动同样适用于调用方取消，此前该窗口要靠 resume repair 关闭。
 
-没有引入跨包的共享 tracker：五个服务各自持有约 20 行相同结构，抽象到 `core/plugin` 会扩展插件运行时 API，留给有更多调用方时再评估。
+当时没有引入跨包的共享 tracker；后来五份相同结构由 `plugin.Calls` 统一，取舍见[在途调用登记统一](2026-10-07-plugin-calls.md)。
 
 ## Consequences
 

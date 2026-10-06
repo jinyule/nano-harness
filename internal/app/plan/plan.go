@@ -97,15 +97,15 @@ type Service struct {
 	started  bool
 	running  bool
 	sessions map[string]*state
-	// calls cancels each Select, Step, or Exit in flight; group joins them.
-	nextCall uint64
-	calls    map[uint64]context.CancelFunc
-	group    sync.WaitGroup
+	// calls cancels and joins each Select, Step, or Exit in flight.
+	calls *plugin.Calls
 }
 
 // New constructs an inactive service.
 func New() *Service {
-	return &Service{sessions: map[string]*state{}, calls: map[uint64]context.CancelFunc{}}
+	service := &Service{sessions: map[string]*state{}}
+	service.calls = plugin.NewCalls(&service.mu)
+	return service
 }
 
 // ID returns the stable plugin identity.
@@ -125,13 +125,11 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 		service.mu.Lock()
 		service.running = false
 		service.sessions = map[string]*state{}
-		for _, cancel := range service.calls {
-			cancel()
-		}
+		service.calls.Cancel(nil)
 		service.mu.Unlock()
 		// A call holding a session's lock may be inside a journal read or
 		// append; the wait is bounded by the journal's cancellation latency.
-		service.group.Wait()
+		service.calls.Wait()
 		return nil
 	}); err != nil {
 		return err
@@ -282,16 +280,6 @@ func (service *Service) begin(ctx context.Context, id string, create bool) (cont
 		current = &state{}
 		service.sessions[id] = current
 	}
-	call, cancel := context.WithCancel(ctx)
-	service.nextCall++
-	key := service.nextCall
-	service.calls[key] = cancel
-	service.group.Add(1)
-	return call, current, func() {
-		cancel()
-		service.mu.Lock()
-		delete(service.calls, key)
-		service.mu.Unlock()
-		service.group.Done()
-	}, nil
+	call, done := service.calls.Admit(ctx)
+	return call, current, done, nil
 }

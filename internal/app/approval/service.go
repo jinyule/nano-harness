@@ -45,15 +45,15 @@ type Service struct {
 	broker   Broker
 	policies map[string]session.ApprovalPolicy
 	nextID   atomic.Uint64
-	// calls cancels each SetPolicy or Decide in flight; group joins them.
-	nextCall uint64
-	calls    map[uint64]context.CancelFunc
-	group    sync.WaitGroup
+	// calls cancels and joins each SetPolicy or Decide in flight.
+	calls *plugin.Calls
 }
 
 // New constructs an inactive approval service.
 func New() *Service {
-	return &Service{policies: map[string]session.ApprovalPolicy{}, calls: map[uint64]context.CancelFunc{}}
+	service := &Service{policies: map[string]session.ApprovalPolicy{}}
+	service.calls = plugin.NewCalls(&service.mu)
+	return service
 }
 
 // ID returns the stable plugin identity.
@@ -72,14 +72,12 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	if err := scope.Defer(func(context.Context) error {
 		service.mu.Lock()
 		service.active = false
-		for _, cancel := range service.calls {
-			cancel()
-		}
+		service.calls.Cancel(errStopped)
 		service.mu.Unlock()
 		// A cancelled decision still pairs its question within its bounded
 		// commit, and a policy change may be inside its append; the wait is
 		// bounded by the broker's and journal's cancellation latency.
-		service.group.Wait()
+		service.calls.Wait()
 		service.mu.Lock()
 		service.broker = nil
 		service.policies = map[string]session.ApprovalPolicy{}
@@ -228,16 +226,6 @@ func (service *Service) begin(ctx context.Context) (context.Context, func(), err
 	if !service.active {
 		return nil, nil, ErrNotRunning
 	}
-	call, cancel := context.WithCancelCause(ctx)
-	service.nextCall++
-	key := service.nextCall
-	service.calls[key] = func() { cancel(errStopped) }
-	service.group.Add(1)
-	return call, func() {
-		cancel(nil)
-		service.mu.Lock()
-		delete(service.calls, key)
-		service.mu.Unlock()
-		service.group.Done()
-	}, nil
+	call, done := service.calls.Admit(ctx)
+	return call, done, nil
 }

@@ -39,10 +39,8 @@ type Service struct {
 	mu      sync.Mutex
 	started bool
 	active  bool
-	// waits cancels each retry decision in flight; group joins them.
-	nextWait uint64
-	waits    map[uint64]context.CancelFunc
-	group    sync.WaitGroup
+	// waits cancels and joins each retry decision in flight.
+	waits *plugin.Calls
 }
 
 // New constructs an inactive retry service.
@@ -50,7 +48,9 @@ func New(configuration *settings.Service) (*Service, error) {
 	if configuration == nil {
 		return nil, ErrInvalidConfig
 	}
-	return &Service{settings: configuration, sleep: sleep, jitter: rand.Float64, waits: map[uint64]context.CancelFunc{}}, nil
+	service := &Service{settings: configuration, sleep: sleep, jitter: rand.Float64}
+	service.waits = plugin.NewCalls(&service.mu)
+	return service, nil
 }
 
 // ID returns the stable plugin identity.
@@ -70,13 +70,11 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	if err := scope.Defer(func(context.Context) error {
 		service.mu.Lock()
 		service.active = false
-		for _, cancel := range service.waits {
-			cancel()
-		}
+		service.waits.Cancel(nil)
 		service.mu.Unlock()
 		// A decision may be inside a journal append; the wait is bounded by
 		// the journal's cancellation latency.
-		service.group.Wait()
+		service.waits.Wait()
 		return nil
 	}); err != nil {
 		return err
@@ -145,18 +143,8 @@ func (service *Service) begin(ctx context.Context) (context.Context, func(), err
 	if !service.active {
 		return nil, nil, ErrNotRunning
 	}
-	call, cancel := context.WithCancel(ctx)
-	service.nextWait++
-	key := service.nextWait
-	service.waits[key] = cancel
-	service.group.Add(1)
-	return call, func() {
-		cancel()
-		service.mu.Lock()
-		delete(service.waits, key)
-		service.mu.Unlock()
-		service.group.Done()
-	}, nil
+	call, done := service.waits.Admit(ctx)
+	return call, done, nil
 }
 
 func classify(err error, mode string) (llm.ErrorCode, int64, bool) {

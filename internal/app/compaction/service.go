@@ -59,10 +59,8 @@ type Service struct {
 	started bool
 	active  bool
 	nextID  atomic.Uint64
-	// calls cancels each Maybe in flight; group joins them.
-	nextCall uint64
-	calls    map[uint64]context.CancelFunc
-	group    sync.WaitGroup
+	// calls cancels and joins each Maybe in flight.
+	calls *plugin.Calls
 }
 
 // New constructs an inactive service.
@@ -70,7 +68,9 @@ func New(runtime *llm.Runtime, configuration *settings.Service) (*Service, error
 	if runtime == nil || configuration == nil {
 		return nil, ErrInvalidRequest
 	}
-	return &Service{llm: runtime, settings: configuration, calls: map[uint64]context.CancelFunc{}}, nil
+	service := &Service{llm: runtime, settings: configuration}
+	service.calls = plugin.NewCalls(&service.mu)
+	return service, nil
 }
 
 // ID returns the stable plugin identity.
@@ -89,13 +89,11 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	if err := scope.Defer(func(context.Context) error {
 		service.mu.Lock()
 		service.active = false
-		for _, cancel := range service.calls {
-			cancel()
-		}
+		service.calls.Cancel(nil)
 		service.mu.Unlock()
 		// The wait is bounded by the provider's and journal's cancellation
 		// latency plus the uncancellable append that closes a transaction.
-		service.group.Wait()
+		service.calls.Wait()
 		return nil
 	}); err != nil {
 		return err
@@ -236,18 +234,8 @@ func (service *Service) begin(ctx context.Context) (context.Context, func(), err
 	if !service.active {
 		return nil, nil, ErrNotRunning
 	}
-	call, cancel := context.WithCancel(ctx)
-	service.nextCall++
-	key := service.nextCall
-	service.calls[key] = cancel
-	service.group.Add(1)
-	return call, func() {
-		cancel()
-		service.mu.Lock()
-		delete(service.calls, key)
-		service.mu.Unlock()
-		service.group.Done()
-	}, nil
+	call, done := service.calls.Admit(ctx)
+	return call, done, nil
 }
 
 // prune records the bounded replacement of every visible tool result over

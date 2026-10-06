@@ -129,9 +129,7 @@ type Service struct {
 	mu         sync.Mutex
 	started    bool
 	active     bool
-	nextID     uint64
-	operations map[uint64]context.CancelFunc
-	group      sync.WaitGroup
+	operations *plugin.Calls
 }
 
 // New constructs an inactive web service.
@@ -139,7 +137,9 @@ func New(models *llm.Runtime, configuration *settings.Service, fetcher Fetcher) 
 	if models == nil || configuration == nil || fetcher == nil {
 		return nil, ErrInvalidConfig
 	}
-	return &Service{models: models, settings: configuration, fetcher: fetcher, searchTimeout: SearchTimeout, operations: map[uint64]context.CancelFunc{}}, nil
+	service := &Service{models: models, settings: configuration, fetcher: fetcher, searchTimeout: SearchTimeout}
+	service.operations = plugin.NewCalls(&service.mu)
+	return service, nil
 }
 
 // ID returns the stable plugin identity.
@@ -155,13 +155,11 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	if err := scope.Defer(func(context.Context) error {
 		service.mu.Lock()
 		service.active = false
-		for _, cancel := range service.operations {
-			cancel()
-		}
+		service.operations.Cancel(nil)
 		service.mu.Unlock()
 		// Every operation observes its cancelled context, so the wait is bounded
 		// by the providers' cancellation latency.
-		service.group.Wait()
+		service.operations.Wait()
 		return nil
 	}); err != nil {
 		return err
@@ -177,18 +175,8 @@ func (service *Service) begin(ctx context.Context) (context.Context, func(), err
 	if !service.active {
 		return nil, nil, ErrNotRunning
 	}
-	operation, cancel := context.WithCancel(ctx)
-	service.nextID++
-	id := service.nextID
-	service.operations[id] = cancel
-	service.group.Add(1)
-	return operation, func() {
-		cancel()
-		service.mu.Lock()
-		delete(service.operations, id)
-		service.mu.Unlock()
-		service.group.Done()
-	}, nil
+	operation, done := service.operations.Admit(ctx)
+	return operation, done, nil
 }
 
 // Journal commits facts to the session that owns a search call.

@@ -264,12 +264,6 @@ func TestService_ShutdownCancelsAndWaitsForInFlightOperations(t *testing.T) {
 			t.Fatalf("shutdown returned before the %s provider call returned", name)
 		}
 	}
-	current.service.mu.Lock()
-	registered := len(current.service.operations)
-	current.service.mu.Unlock()
-	if registered != 0 {
-		t.Fatalf("operation registry retained %d cancelled operations", registered)
-	}
 	expectCode(t, <-searchDone, CodeAborted)
 	if err := <-fetchDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("fetch after shutdown=%v", err)

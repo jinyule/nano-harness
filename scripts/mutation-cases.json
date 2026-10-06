@@ -282,15 +282,15 @@
   {
     "id": "plan-cleanup-cancels-calls",
     "file": "internal/app/plan/plan.go",
-    "before": "for _, cancel := range service.calls {\n\t\t\tcancel()\n\t\t}",
-    "after": "for range service.calls {\n\t\t}",
+    "before": "service.calls.Cancel(nil)",
+    "after": "// cleanup no longer cancels in-flight calls",
     "test": "^TestService_CleanupWaitsForInFlightCalls$"
   },
   {
     "id": "approval-cleanup-cancels-calls",
     "file": "internal/app/approval/service.go",
-    "before": "for _, cancel := range service.calls {\n\t\t\tcancel()\n\t\t}",
-    "after": "for range service.calls {\n\t\t}",
+    "before": "service.calls.Cancel(errStopped)",
+    "after": "// cleanup no longer cancels in-flight calls",
     "test": "^TestService_CleanupWaitsForInFlightPolicyChange$"
   },
   {
@@ -303,15 +303,15 @@
   {
     "id": "retry-cleanup-cancels-waits",
     "file": "internal/app/retry/service.go",
-    "before": "for _, cancel := range service.waits {\n\t\t\tcancel()\n\t\t}",
-    "after": "for range service.waits {\n\t\t}",
+    "before": "service.waits.Cancel(nil)",
+    "after": "// cleanup no longer cancels in-flight calls",
     "test": "^TestService_CleanupWaitsForRetryRecords$"
   },
   {
     "id": "compaction-cleanup-cancels-calls",
     "file": "internal/app/compaction/service.go",
-    "before": "for _, cancel := range service.calls {\n\t\t\tcancel()\n\t\t}",
-    "after": "for range service.calls {\n\t\t}",
+    "before": "service.calls.Cancel(nil)",
+    "after": "// cleanup no longer cancels in-flight calls",
     "test": "^TestService_CleanupWaitsForCompactionCommit$"
   },
   {
@@ -1167,5 +1167,12 @@
     "before": "\treturn text + fetchFooter, true\n",
     "after": "\treturn text + fetchFooter, result.Truncated\n",
     "test": "^TestProvider_PersistsFetchMetadata$"
+  },
+  {
+    "id": "plugin-calls-release-unregisters",
+    "file": "internal/core/plugin/calls.go",
+    "before": "delete(calls.cancel, key)",
+    "after": "_ = key",
+    "test": "^TestCalls_ReleaseCancelsUnregistersAndUnblocksWait$"
   }
 ]

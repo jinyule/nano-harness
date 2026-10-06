@@ -74,7 +74,7 @@ type Plugin interface {
 - ID 在一个 composition 内唯一稳定；依赖仍由构造函数显式注入，Runtime 不是 service locator。
 - 注册、goroutine、进程、listener、writer lock、临时目录、callback 和缓存贡献成功创建后立即通过 `Scope.Defer` 登记 cleanup。
 - Scope 逆序运行全部 cleanup 并聚合错误。启动失败回滚本插件的部分 effect 和所有已启动插件。
-- cleanup 先停止新工作，再取消活动工作并等待 goroutine、进程和 callback 静止；一个 cleanup 失败不能阻止其他清理。
+- cleanup 先停止新工作，再取消活动工作并等待 goroutine、进程和 callback 静止；一个 cleanup 失败不能阻止其他清理。服务按调用登记可取消 context 时使用 `plugin.Calls`：服务在自己的锁内检查运行状态后 `Admit`，cleanup 在同一把锁内清除运行状态并 `Cancel`，释放锁后 `Wait`。
 - Runtime 单次启动、幂等 shutdown。动态 agent 使用 registry 创建的子 Scope，但仍服从同一 ownership 规则。
 - 每个组件必须测试启动贡献、部分启动失败、逆序 cleanup、cleanup error 和 shutdown 后静止。
 
