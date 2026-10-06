@@ -49,7 +49,7 @@
 | WP9 | `read_image` 与多模态工具结果 | WP2 | 0015 | 已合入 `05e4012` |
 | WP10 | 长期目标 `create_goal`/`get_goal`/`update_goal` 与 round driver | WP3、WP8 | 0016 | 已合入 `d8ba519` |
 | WP11 | 图片移入会话日志之外的内容寻址附件存储（对齐上游 `attachment`/`attachment-local`），`/attach` 与 `read_image` 共用 | WP9 | 0017 | 已合入 `4e9d97e`（含透明缩放修复与转换并发上限 2） |
-| WP12 | 结构化工具结果：所有工具产出上游的错误分类 `{name, code}` 与结果 `meta` 并持久化到 `tool/result`；模型可见文本不变，TUI 卡片暂缓 | 小修合入后 | 0019 | 进行中：设计、R、F、C、D、S、G、H、I 已合入；E web 与 K 收尾批进行中 |
+| WP12 | 结构化工具结果：所有工具产出上游的错误分类 `{name, code}` 与结果 `meta` 并持久化到 `tool/result`；模型可见文本不变，TUI 卡片暂缓 | 小修合入后 | 0019 | 已合入：设计 `52a9a35`、R `7c60a92`、F `802fc42`、C `fc0022f`、D+S `8dde776`、G `69c8a5c`、H+I `c3be702`、E `dc7aa31`、K `289e970` |
 | WP13 | compaction 先做上游 tool-result-pruner 的无模型裁剪（首 4096、尾 1024 码点，持久化裁剪事实），再决定是否摘要 | — | 0020 | 已合入 `57b56a9`（与 B3 截断摘要修复合为一个提交；opus 实现，B3 因每周限额由 Codex 接手完成） |
 | WP14 | 会话级 sandbox 模式：read-only、workspace-write、danger-full-access 三档，持久化 `sandbox/mode` 与策略上下文；Linux sandbox 与上游一致放开网络 | WP11 后的路径与 runner 修复 | 0021 | 已合入 `3e1d726` |
 | WP15 | web_search 发送前持久化检索请求（route、endpoint、预算），写入失败不发送 | — | 0022 | 已合入 `0eb3586`，见[实施证据](../implemented/2026-10-06-web-search-request-audit.md) |
@@ -157,8 +157,12 @@
 - WP12：设计 `52a9a35`（Accepted）、R `7c60a92`、F `802fc42`（`tool-runtime-v3`）已合入。web、goal、question、subagent 批交 opus，文件、搜索、shell 批交 Codex，最后是 K 收尾批。
 - WP14 已合入 `3e1d726`（ADR-0021）：sandbox 三档模式、`sandbox/mode` 记录、Linux 改用 PID namespace 并允许联网；`sandbox:policy` 与委派说明共用 scoped context 扩展点。原生 Linux 联网仍无实测证据。
 - Codex 第五轮只读审查覆盖 `005a3a8..3e1d726`，与 opus 第三、四轮审查一起构成联合评审。发现 B1：approval 决定落盘期间关闭仍授权执行，已修复合入 `287e199`，decided 提交与关闭判定在同一把锁内串行。S1 sandbox 与 delegation 两条局部快照都声明取代旧快照，S2 策略文本的 JSON 转义与上游不一致，已合入 `91aef9e`：engine 聚合完整快照只声明一次，路径改用 `core/text.Quote`，`sandbox-policy-v2`。
-- WP12 producer 批：C 文件 `fc0022f`、D 搜索 + S shell `8dde776`、G subagent `69c8a5c`、H goal + I question `c3be702` 已合入；E web 待合入；最后是 K 收尾批。question 中本仓额外拒绝的未知 intent kind 归为 `BAD_INTENT`，不新造码。
+- WP12 producer 批：C 文件 `fc0022f`、D 搜索 + S shell `8dde776`、G subagent `69c8a5c`、H goal + I question `c3be702` 已合入；E web `dc7aa31`、K 收尾 `289e970` 已合入，WP12 全部完成；WP12 计划 Note 已移到 implemented/。另合入 `db2a467`：新增 `internal/core/plugin.Calls`，统一 web/plan/approval/retry/compaction 的在途调用登记，行为不变。question 中本仓额外拒绝的未知 intent kind 归为 `BAD_INTENT`，不新造码。
 - 2026-10-07 02:49 opus 撞上 session limit（04:30 重置），之后续接原 agent。维护者要求 opus 上限为 3。
+
+### 最终联合评审
+
+范围是 `3e1d726..289e970`，由 Codex 和 opus（wiring 视角）各自独立评审，结论汇总后处理。
 
 ### 后续项（不在本次范围）
 
