@@ -62,6 +62,10 @@ subagent 工具名称不变；它们的 schema 改用共享子集表达，去掉
 
 > 后续决定：workspace 之外的只读 spill 分区由 [ADR-0008](0008-tool-output-spill-and-observation-policy.md#读回与安全边界) 开放给 `read`/`grep`，[ADR-0015](0015-multimodal-tool-results.md#read_image) 将同一读取边界扩展到 `read_image`；其他文件路径约束保留。
 
+父目录遍历采用上游 POSIX 的物理语义：逐段解析 symlink，`..` 从已解析且存在的目录取父目录，不先 Clean/Join 掉父目录段。穿过不存在组件或普通文件的遍历拒绝；write 只允许创建不含后续 `..` 的缺失后缀。workspace 的词法预检仍保留，解析每一步也必须在授权根内，不能通过“先逃逸再返回”或 `..` 抹去 symlink 绕过约束。spill 的只读授权使用相同规则。威胁分析与允许/拒绝矩阵由[安全规则](../security.md#workspace-文件边界)拥有。
+
+含 `..` 的成功路径显示解析后的物理绝对路径，供现有搜索 consumer 安全生成相对搜索根；上游 POSIX 显示保留原始父目录段。这是显示拼写的有意差异，目标身份一致。没有 `..` 时仍保留根内链接的显示拼写。Windows 也使用逐段规则，本仓不静默采用上游 Windows 的提前归一化行为；原生平台证据单独记录。
+
 ### 搜索实现
 
 维护者决定搜索与上游一致、依赖 ripgrep。`glob` 和 `grep` 按 `packages/fs/tool-fs-search` 的参数调用 `rg`：
@@ -77,8 +81,10 @@ ripgrep 以 argv 直接运行，不经过 shell，也不进入 workspace sandbox
 ### 行为差异
 
 - `read` 按 rune 计算行长，上游按 UTF-16 code unit 计算；两者只在 BMP 以外字符上不同。
+- `read.offset` 支持正安全整数 `1…9007199254740991`；超出范围在工具语义校验时明确拒绝，错误为 `offset must be less than or equal to 9007199254740991`，不夹到其他行号。上游接受更大的整数并用该值报告越界；本仓选择显式范围以保证 JSON 数值和行算术精确，范围内仍按原值诊断越界。
 - `edit` 保留 BOM（上游会丢弃），并把可编辑文件限制为 10 MiB。目标不存在时的提示随观察策略与上游一致，见 [ADR-0008](0008-tool-output-spill-and-observation-policy.md)。
 - `write` 新建文件为 `0600`（与上游一致）、新建目录为 `0700`（上游受 umask 约束的 `0777`）。
+- `write` 与 `edit` 的 staging 路径接受调用 context，创建 staging 前与 link/rename 前检查取消。取消不发布、不改变目标或观察摘要，删除 staging；成功发布后不回滚。当前内核文件 I/O 返回后才能响应取消，细节见安全规则。
 - `glob`/`grep` 的搜索根必须在 workspace 内（上游不限制；`grep` 与 `read` 另可读取本 workspace 的 spill 分区，见 ADR-0008），并以规范化的 workspace 相对路径交给 ripgrep，所以输出不保留 `./` 之类的原始拼写，绝对路径参数也显示为相对路径。不传 `HOME`，用户的全局 git excludes 不生效；上游的 subprocess 环境保留 `HOME`。`grep` 拒绝把 FIFO 等特殊文件作为显式路径。结果顺序与上游一样取决于 ripgrep：`glob` 按修改时间排序，`grep` 的跨文件顺序不固定。
 - `bash` 默认超时 60 s、上限 10 min，与 Base 配置一致；stdout 与 stderr 各保留最后 64,000 字节，截断时给出 ADR-0008 的完整输出文件位置，没有文件时显示上游的 `(unavailable)`；只提供 `DSH_SHELL` 与 `DSH_SESSION_ID`，不暴露 harness home 或 profile。
 

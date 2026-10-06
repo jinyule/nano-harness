@@ -31,8 +31,8 @@ const (
 	// lineBufferBytes always holds readMaxLineLength+1 complete runes, so a
 	// capped line still proves it needs truncation.
 	lineBufferBytes = (readMaxLineLength + 1) * utf8.UTFMax
-	// maxOffset keeps line arithmetic exact for absurd offsets.
-	maxOffset = 1 << 53
+	// maxOffset is the largest exact JSON safe integer supported for line arithmetic.
+	maxOffset = 1<<53 - 1
 )
 
 var (
@@ -74,6 +74,9 @@ func checkRead(_ appTool.Invocation, arguments readArgs) error {
 	if arguments.Offset != nil && !positiveInteger(*arguments.Offset) {
 		return errors.New("offset must be a positive integer")
 	}
+	if arguments.Offset != nil && *arguments.Offset > maxOffset {
+		return fmt.Errorf("offset must be less than or equal to %d", maxOffset)
+	}
 	if arguments.Limit != nil && !positiveInteger(*arguments.Limit) {
 		return errors.New("limit must be a positive integer")
 	}
@@ -105,7 +108,7 @@ func (provider *Provider) read(ctx context.Context, invocation appTool.Invocatio
 	}
 	offset, limit := int64(1), readLimit
 	if arguments.Offset != nil {
-		offset = int64(min(*arguments.Offset, maxOffset))
+		offset = int64(*arguments.Offset)
 	}
 	if arguments.Limit != nil {
 		limit = int(*arguments.Limit)

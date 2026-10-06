@@ -128,6 +128,10 @@ TUI 回归测试还覆盖 v2 粘贴、按键释放、secret 遮罩、小窗口�
 
 ## 并发、取消与清理
 
+文件工具的 `TestWrite_CancellationDuringSyncDoesNotPublish`（创建、替换）与 `TestEdit_CancellationDuringSyncDoesNotPublish` 用真实临时文件和 Sync channel 屏障确定取消发生在发布前；断言取消原因、link/rename 未调用、目标字节与观察摘要不变、staging 无残留。`TestFileTools_PhysicalParentTraversalMatrix` 通过真实 tool runtime 和 ripgrep 覆盖 read、write、edit、glob/grep 的 path 与 read_image，比较实际文件、搜索结果、交给附件存储的源字节、返回的图片引用及物理路径观察。workspace 的相对/绝对路径和只读分区矩阵补充边界，approval 期间替换被遍历的目录与直接执行测试证明写入执行点不能绕过拒绝。offset 测试逐字比较范围错误与最大合法值的越界诊断。
+
+新增文件回归的定向变异保存在 `internal/adapter/tool/file/testdata/mutation-cases.json`；运行 `python3 scripts/mutation-check.py --manifest internal/adapter/tool/file/testdata/mutation-cases.json --report .cache/mutation/file-report.json`，在私有源码副本中分别移除发布前取消、提前清理父目录段、接受缺失目录遍历、去掉 offset 上界。默认 `make mutation` 的既有用例仍独立必需。
+
 测试必须拥有自己创建的 server、listener、临时目录、进程和 goroutine，并用 `t.Cleanup` 或显式 shutdown 回收。关闭测试证明返回后已静止，不只发出 cancel。
 
 异步顺序使用 channel/barrier 构造；除测试真实 deadline、polling 或 backoff 外，不用 `time.Sleep` 猜时序。分别覆盖取消发生在首个输出前、部分输出后、事实提交后和 shutdown publication race。

@@ -247,7 +247,7 @@ func TestWriteAtomic_PublishesOrRemovesStagedFile(t *testing.T) {
 	restoreHooks(t)
 	directory := t.TempDir()
 	target := filepath.Join(directory, "out.txt")
-	if err := writeAtomic(target, []byte("first"), 0o640, false); err != nil {
+	if err := writeAtomic(context.Background(), target, []byte("first"), 0o640, false); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(target)
@@ -286,13 +286,13 @@ func TestWriteAtomic_PublishesOrRemovesStagedFile(t *testing.T) {
 				removed = name
 				return nil
 			}
-			if err := writeAtomic(target, []byte("second"), 0o600, false); !errors.Is(err, failure) || removed != test.staged.name {
+			if err := writeAtomic(context.Background(), target, []byte("second"), 0o600, false); !errors.Is(err, failure) || removed != test.staged.name {
 				t.Fatalf("error = %v, removed = %q", err, removed)
 			}
 		})
 	}
 	createTemp = func(string, string) (stagedFile, error) { return nil, failure }
-	if err := writeAtomic(target, nil, 0o600, false); !errors.Is(err, failure) {
+	if err := writeAtomic(context.Background(), target, nil, 0o600, false); !errors.Is(err, failure) {
 		t.Fatalf("create error = %v", err)
 	}
 	if readFixture(t, target) != "first" {
@@ -304,15 +304,42 @@ func TestWriteAtomic_ExclusivePublicationNeverClobbers(t *testing.T) {
 	restoreHooks(t)
 	directory := t.TempDir()
 	target := filepath.Join(directory, "new.txt")
-	if err := writeAtomic(target, []byte("mine"), 0o600, true); err != nil {
+	if err := writeAtomic(context.Background(), target, []byte("mine"), 0o600, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeAtomic(target, []byte("theirs"), 0o600, true); !errors.Is(err, fs.ErrExist) {
+	if err := writeAtomic(context.Background(), target, []byte("theirs"), 0o600, true); !errors.Is(err, fs.ErrExist) {
 		t.Fatalf("second exclusive publication = %v", err)
 	}
 	entries, _ := os.ReadDir(directory)
 	if readFixture(t, target) != "mine" || len(entries) != 1 {
 		t.Fatalf("content = %q, entries = %v", readFixture(t, target), entries)
+	}
+}
+
+func TestWriteAtomic_CancellationBeforeStagingAndAfterCommit(t *testing.T) {
+	restoreHooks(t)
+	directory := t.TempDir()
+	target := filepath.Join(directory, "file.txt")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := writeAtomic(ctx, target, []byte("before"), 0o600, false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("before staging = %v", err)
+	}
+	if entries, err := os.ReadDir(directory); err != nil || len(entries) != 0 {
+		t.Fatalf("cancellation created staging: %v, %v", entries, err)
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	renameFile = func(from, to string) error {
+		err := os.Rename(from, to)
+		cancel()
+		return err
+	}
+	if err := writeAtomic(ctx, target, []byte("committed"), 0o600, false); err != nil {
+		t.Fatalf("after commit = %v", err)
+	}
+	if readFixture(t, target) != "committed" {
+		t.Fatal("cancellation undid the committed write")
 	}
 }
 

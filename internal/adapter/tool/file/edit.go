@@ -93,7 +93,7 @@ func (provider *Provider) edit(ctx context.Context, invocation appTool.Invocatio
 	if err != nil {
 		return appTool.Result{}, err
 	}
-	if err := writeAtomic(target, edited, info.Mode().Perm(), false); err != nil {
+	if err := writeAtomic(ctx, target, edited, info.Mode().Perm(), false); err != nil {
 		return appTool.Result{}, fmt.Errorf("cannot edit %q: %w", target, err)
 	}
 	provider.observed.record(invocation.SessionID, target, observed(edited))

@@ -68,6 +68,7 @@
 所有模型路径由 `internal/adapter/tool/workspace.Root` 统一约束。root 在启动时解析 symlink 并固定：
 
 - 相对路径按 workspace 解析。绝对路径只有在词法上位于已解析 root 内时才接受，必须使用提示词显示的 root 拼写。`..` 逃逸和 root 外的绝对路径一律拒绝；上游描述中的 “resolved by the filesystem backend” 在本仓即指这一约束。
+- 路径逐段解析，词法清理只用于边界预检，不用于选择目标。遇到 `..` 时先确认当前物理路径是存在的目录，再取其物理父目录；任何一步离开当前授权根都拒绝，即使后续段能返回根内。不存在目录或普通文件不能被后续 `..` 消去。写入允许创建没有 `..` 的缺失后缀，但已经走过的 symlink 不会因 `..` 被消去。含 `..` 的路径在物理身份已确定时以物理绝对路径显示，搜索也从该身份生成相对路径；不存在目标的观察使用已解析前缀加缺失后缀，后续 edit 不会因拼写不同误判为未读。
 - `read`、`glob`/`grep` 的显式 `path` 和 `bash` 的 `workdir` 可以经过 symlink，但解析后必须仍在 root 内。
 - `write` 和 `edit` 拒绝 root 与目标之间任何已存在的 symlink 组件，包括目标本身；审批前检查一次，执行点再检查一次。
 - `read`、`read_image` 与 `grep` 另可读取本 workspace 的 spill 分区：绝对路径须在词法上位于分区内，解析链接后仍须位于分区的解析结果内。`glob`、`write`、`edit` 与 `bash` 的 `workdir` 不能进入该分区。见 [Spill 文件](#spill-文件)。
@@ -81,6 +82,23 @@
 | `edit` | 必须先由本会话读取且内容未变；文件最多 10 MiB；拒绝 NUL 与非法 UTF-8；以同样方式原子写回 |
 | `glob` | ripgrep 的完整 stdout 最多 20,000,000 字节，超出即失败；每次调用 30 s；内联最多 100 个路径 |
 | `grep` | ripgrep 正则；`--json` 完整输出最多 20,000,000 字节，超出即失败；每次调用 30 s；内联最多 250 个匹配，每行预览 2000 字节 |
+
+路径威胁包括目标身份混淆与拒绝规则绕过：假设 `alias → a/nested`，在解析链接前清理 `alias/../picked.txt` 会选中 workspace 根的文件，而不是 `a/picked.txt`；同样的清理还会抹去写入必须拒绝的 symlink。`missing/../picked.txt` 与 `file.txt/../picked.txt` 可能把不能遍历的路径变成可读写目标。逐段检查在审批前和写入执行点拒绝这些输入；搜索接收已确认的物理身份，不能再次把原始路径清理成另一个搜索根。只读 spill 分区使用同一解析规则，以分区的解析根为边界，不能先离开分区再返回。
+
+以下矩阵假设 `a/nested` 是目录、`file.txt` 是普通文件、`missing` 不存在，写入现有文件已满足观察与审批策略；glob 的最后一段取对应目录，其他工具取文件：
+
+| 路径形态 | read / read_image / glob.path / grep.path | write / edit |
+|---|---|---|
+| `a/nested/../picked` | 允许，目标为 `a/picked` | 允许，目标为 `a/picked` |
+| `alias/../picked`，alias 指向 `a/nested` | 允许，目标为 `a/picked` | 拒绝 symlink |
+| `missing/../picked` | 拒绝不存在的目录 | 拒绝不存在的目录，不创建缺失组件 |
+| `file.txt/../picked` | 拒绝非目录组件 | 拒绝非目录组件 |
+| `rootlink/../…`，rootlink 指向授权根 | 拒绝物理逃逸 | 拒绝 symlink |
+| `escape/../…`，escape 指向根外 | 拒绝根外链接 | 拒绝 symlink |
+| `../<root>/picked`，先离开再返回 | 拒绝物理逃逸 | 拒绝物理逃逸 |
+| `a/new/child`，没有父目录遍历 | 不存在时报错 | write 可创建；edit 仍要求已读的现有文件 |
+
+`write`/`edit` 在创建 staging 前和关闭 staging 后、调用 link/rename 前检查调用 context。检查发现已取消时返回可识别的取消错误，关闭并删除 staging，不更新目标或观察摘要。成功 link/rename 是提交点，之后的取消不回滚文件；当前同步文件 I/O 本身不可中断，取消在它返回后生效。写入创建的新父目录可能保留，取消清理只拥有私有 staging 文件。
 
 先读后写保护按会话记录 `read` 与 `read_image` 观察到的内容摘要，`write`/`edit` 在审批前无副作用地比较一次当前内容，并在执行点、按目标路径划分的进程内锁下再比较一次（大小变化直接判定为已变化，大文件的摘要可取消）；未读、已删除或已变化的目标按上游文案拒绝。它防止模型覆盖自己没看过的内容，不是授权机制：观察状态不持久化，delegated child 是独立会话，规则见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md)。
 

@@ -6,6 +6,7 @@ package file
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -90,7 +91,12 @@ func (provider *Provider) Start(_ context.Context, scope *plugin.Scope) error {
 // file, so readers observe either the old or the new content. A replacement
 // renames over the target; an exclusive publication hard-links instead, which
 // fails rather than clobbering a file created concurrently.
-func writeAtomic(target string, data []byte, mode fs.FileMode, exclusive bool) (err error) {
+// Cancellation before publication removes staging without changing the target;
+// a successful link or rename is the commit point and is never undone.
+func writeAtomic(ctx context.Context, target string, data []byte, mode fs.FileMode, exclusive bool) (err error) {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("write aborted: %w", err)
+	}
 	staged, err := createTemp(filepath.Dir(target), "."+filepath.Base(target)+".*.tmp")
 	if err != nil {
 		return err
@@ -109,6 +115,9 @@ func writeAtomic(target string, data []byte, mode fs.FileMode, exclusive bool) (
 	}
 	if err = errors.Join(err, staged.Close()); err != nil {
 		return err
+	}
+	if err = ctx.Err(); err != nil {
+		return fmt.Errorf("write aborted: %w", err)
 	}
 	if !exclusive {
 		return renameFile(staged.Name(), target)

@@ -93,7 +93,7 @@ func (provider *Provider) write(ctx context.Context, invocation appTool.Invocati
 		return appTool.Result{}, fmt.Errorf("cannot write %q: %w", target, err)
 	}
 	content := []byte(arguments.Content)
-	if err := writeAtomic(target, content, mode, !exists); err != nil {
+	if err := writeAtomic(ctx, target, content, mode, !exists); err != nil {
 		if _, statErr := lstatFile(target); !exists && statErr == nil {
 			return appTool.Result{}, errNotRead(target)
 		}

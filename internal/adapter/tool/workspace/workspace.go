@@ -9,7 +9,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 )
 
 var (
@@ -59,63 +61,115 @@ func Resolve(path string) (Root, error) {
 func (root Root) Path() string { return root.path }
 
 // Lexical maps a relative path (resolved against the root) or an absolute
-// path to a cleaned absolute path that must lie lexically inside the root.
+// path to an absolute spelling that must lie lexically inside the root.
 // It does not touch the filesystem; absolute paths must use the resolved
-// root spelling shown to the model.
+// root spelling shown to the model. Parent segments remain intact for physical
+// resolution; the cleaned spelling is used only for the containment check.
 func (root Root) Lexical(path string) (string, error) {
-	target := filepath.Clean(path)
+	target := filepath.FromSlash(path)
 	if !filepath.IsAbs(target) {
-		target = filepath.Join(root.path, target)
+		target = root.path + string(filepath.Separator) + target
 	}
-	if !root.contains(target) {
+	if !root.contains(filepath.Clean(target)) || !rootedAt(root.path, target) {
 		return "", fmt.Errorf("%w: %s", ErrOutsideRoot, path)
+	}
+	if !hasParent(target) {
+		target = filepath.Clean(target)
 	}
 	return target, nil
 }
 
 // Existing resolves an existing path. It returns the lexical absolute path
 // for display, set whenever the lexical check passed, and the
-// symlink-resolved path for I/O, which must also lie inside the root.
-// Missing paths report an error matching fs.ErrNotExist.
+// symlink-resolved path for I/O, which must also lie inside the root. A path
+// containing parent segments uses the physical result for display as well,
+// so discovery callers cannot reinterpret it by cleaning the display path.
+// Missing paths report an error matching fs.ErrNotExist; when their existing
+// physical prefix is known, display and resolved retain that target identity.
 func (root Root) Existing(path string) (lexical, resolved string, err error) {
 	lexical, err = root.Lexical(path)
 	if err != nil {
 		return "", "", err
 	}
-	resolved, err = resolveLinks(lexical)
-	if err != nil {
-		return lexical, "", err
+	resolved, err = walk(root.path, lexical, false)
+	if resolved != "" && hasParent(lexical) {
+		lexical = resolved
 	}
-	if !root.contains(resolved) {
-		return lexical, "", fmt.Errorf("%w: %s", ErrOutsideRoot, path)
-	}
-	return lexical, resolved, nil
+	return lexical, resolved, err
 }
 
 // Writable returns the lexical absolute target for a mutation after proving
 // that no existing component between the root and the target, including the
 // target itself, is a symbolic link. Missing components are allowed so the
-// caller can create them.
+// caller can create them, but a parent traversal across a missing directory is
+// rejected. Every traversed component is checked before processing its parent.
 func (root Root) Writable(path string) (string, error) {
 	target, err := root.Lexical(path)
 	if err != nil {
 		return "", err
 	}
-	// The filesystem-root stop keeps the walk finite even if containment
-	// were ever wrong.
-	for current := target; current != root.path && current != filepath.Dir(current); current = filepath.Dir(current) {
-		info, err := lstatPath(current)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
+	return walk(root.path, target, true)
+}
+
+// walk resolves explicit segments in order, never discarding a component
+// before proving it can be traversed. Writable missing suffixes may be created
+// only when they contain no parent traversal.
+func walk(directory, target string, writable bool) (string, error) {
+	parts := strings.Split(strings.TrimPrefix(target, directory), string(filepath.Separator))
+	resolved := directory
+	for index, part := range parts {
+		info, err := statPath(resolved)
 		if err != nil {
-			return target, err
+			return "", err
 		}
-		if info.Mode()&fs.ModeSymlink != 0 {
-			return target, fmt.Errorf("%w: %s", ErrSymlink, path)
+		if !info.IsDir() {
+			return "", fmt.Errorf("cannot traverse %q: parent path segment is not a directory: %w", resolved, syscall.ENOTDIR)
+		}
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			resolved = filepath.Dir(resolved)
+		default:
+			next := filepath.Join(resolved, part)
+			info, err := lstatPath(next)
+			if errors.Is(err, fs.ErrNotExist) {
+				suffix := strings.Join(parts[index:], string(filepath.Separator))
+				if hasParent(suffix) {
+					return "", fmt.Errorf("parent traversal crosses a missing directory %q: %w", next, err)
+				}
+				if writable {
+					err = nil
+				}
+				return filepath.Join(resolved, suffix), err
+			}
+			if err != nil {
+				return "", err
+			}
+			resolved = next
+			if info.Mode()&fs.ModeSymlink != 0 {
+				if writable {
+					return "", fmt.Errorf("%w: %s", ErrSymlink, target)
+				}
+				resolved, err = resolveLinks(next)
+				if err != nil {
+					return "", err
+				}
+			}
+		}
+		if !within(directory, resolved) {
+			return "", fmt.Errorf("%w: %s", ErrOutsideRoot, target)
 		}
 	}
-	return target, nil
+	return resolved, nil
+}
+
+func hasParent(path string) bool {
+	return slices.Contains(strings.Split(path, string(filepath.Separator)), "..")
+}
+
+func rootedAt(directory, target string) bool {
+	return target == directory || strings.HasPrefix(target, strings.TrimSuffix(directory, string(filepath.Separator))+string(filepath.Separator))
 }
 
 // WithReadOnly returns a copy of root that also lets Readable open paths
@@ -134,22 +188,20 @@ func (root Root) WithReadOnly(dir string) Root {
 // resolved form stays inside that directory's resolved form, so links planted
 // there cannot redirect a read elsewhere.
 func (root Root) Readable(path string) (lexical, resolved string, err error) {
-	target := filepath.Clean(path)
-	if root.readOnly == "" || !filepath.IsAbs(target) || root.contains(target) || !within(root.readOnly, target) {
+	target := filepath.FromSlash(path)
+	if root.readOnly == "" || !filepath.IsAbs(target) || root.contains(filepath.Clean(target)) || !within(root.readOnly, filepath.Clean(target)) || !rootedAt(root.readOnly, target) {
 		return root.Existing(path)
 	}
 	directory, err := resolveLinks(root.readOnly)
 	if err != nil {
 		return target, "", err
 	}
-	resolved, err = resolveLinks(target)
-	if err != nil {
-		return target, "", err
+	physicalTarget := directory + strings.TrimPrefix(target, root.readOnly)
+	resolved, err = walk(directory, physicalTarget, false)
+	if resolved != "" && hasParent(target) {
+		target = resolved
 	}
-	if !within(directory, resolved) {
-		return target, "", fmt.Errorf("%w: %s", ErrOutsideRoot, path)
-	}
-	return target, resolved, nil
+	return target, resolved, err
 }
 
 // Relative returns target relative to the root with forward slashes, the

@@ -184,6 +184,8 @@ Submit user message
 
 `internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。`cmd` 用 `WithReadOnly` 把 spill 分区只读地交给 `read`、`read_image` 与 `grep`；`shell-tools` 收到不含该分区的 root。
 
+路径 resolver 逐段确定物理身份，父目录遍历不先做词法清理；含 `..` 的成功路径返回物理显示路径，避免搜索 consumer 再次清理后改变目标。文件发布接受调用 context，在 staging 关闭后、link/rename 前检查取消，发布成功后才更新读取观察。路径边界与提交点由[安全规则](security.md#workspace-文件边界)定义，采纳与差异由 ADR-0007 记录。
+
 `internal/adapter/spill` 是 `spill-local` 插件：在 `--spill-root` 下按 workspace 分区、按会话分组保存 owner-only 文件，启动时清理 30 天前的文件，关闭时等待已打开的文件。`fs-tools` 持有按会话记录的读取观察（`read` 与 `read_image` 都会记录），`write` 只覆盖读过且内容未变的文件，`edit` 必须先读；观察状态只在内存中。存储布局、读回边界、观察语义和降级见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md)。
 
 `search-tools` 与 `shell-tools` 共用 `cmd` 构造的同一个 platform process runner。search provider 在构造时从 PATH 解析 `rg`，找不到时组装失败；`Start` 运行 `rg --version`，低于 15.0.0 时启动失败，不注册降级工具。`glob` 与 `grep` 按上游参数调用 ripgrep，并解析它的路径列表或 `--json` 输出；进程边界见[安全工程规则](security.md#approvalshell-与进程)，版本前提见[开发规范](development.md#ripgrep)。

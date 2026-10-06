@@ -18,6 +18,23 @@ func envelope(path, body string) string {
 	return "<path>" + path + "</path>\n<type>file</type>\n<content>\n" + body + "\n</content>"
 }
 
+func TestRead_RejectsOffsetBeyondSupportedRange(t *testing.T) {
+	h := newHarness(t)
+	writeFixture(t, h.path("file.txt"), "line")
+	for _, offset := range []float64{1 << 53, 18014398509481984, 1e300} {
+		result := h.call(t, "read", map[string]any{"file_path": "file.txt", "offset": offset})
+		want := "Error: offset must be less than or equal to 9007199254740991"
+		if !result.IsError || result.Output != want {
+			t.Errorf("offset %g = %q, want %q", offset, result.Output, want)
+		}
+	}
+	result := h.call(t, "read", map[string]any{"file_path": "file.txt", "offset": 9007199254740991})
+	want := fmt.Sprintf("Error: offset 9007199254740991 is out of range for %q (1 lines)", h.path("file.txt"))
+	if result.Output != want {
+		t.Errorf("largest supported offset = %q, want %q", result.Output, want)
+	}
+}
+
 func TestRead_ReturnsUpstreamWindowEnvelope(t *testing.T) {
 	h := newHarness(t)
 	writeFixture(t, h.path("text.txt"), "alpha\r\nbeta\ngamma\n")
@@ -74,7 +91,7 @@ func TestRead_RejectsInvalidArgumentsAndUnsafePaths(t *testing.T) {
 		{map[string]any{"file_path": "file.txt", "limit": 2001}, "limit must be less than or equal to 2000"},
 		{map[string]any{"file_path": "file.txt", "limit": "2"}, `"limit" must be a number`},
 		{map[string]any{"file_path": "file.txt", "offset": 4}, fmt.Sprintf("offset 4 is out of range for %q (2 lines)", h.path("file.txt"))},
-		{map[string]any{"file_path": "file.txt", "offset": 1e300}, "is out of range"},
+		{map[string]any{"file_path": "file.txt", "offset": 1e300}, "offset must be less than or equal to"},
 		{map[string]any{"file_path": "missing.txt"}, fmt.Sprintf("cannot read %q: not found", h.path("missing.txt"))},
 		{map[string]any{"file_path": "dir"}, "not a regular file"},
 		{map[string]any{"file_path": "escape"}, "path is outside the workspace"},

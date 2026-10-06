@@ -15,6 +15,8 @@
 
 长期契约记录在 [ADR-0007](../../../docs/decisions/0007-upstream-base-tool-definitions.md)，当前事实分别归[架构](../../../docs/architecture.md#工具approval-与调度)、[安全](../../../docs/security.md#workspace-文件边界)和[测试](../../../docs/testing.md#模型可见工具目录)文档。本次实施：
 
+文件发布取消与共享路径的物理父目录解析由[文件修复 Note](2026-10-06-file-upstream-alignment-fixes.md)补充；本 Note 保留定义抽象、组合与原始验证证据。
+
 - `internal/app/tool` 改为 `Spec[A]` + `Define` 的定义抽象。`schema.go` 负责有序子集、序列化、校验和 Go 类型检查；`define.go` 负责类型化准备、guidance 和结果类型；`runtime.go` 在批次开始前按 schema 校验并分类所有调用，每个调用轮到时再依次运行 `Check`、approval 和执行，最后统一收尾结果（UTF-8 修复、按 rune 截断、approval 原因截断到 1 KiB）。`Check` 推迟到调用轮次，是为了让它观察同一批次前序调用的效果，例如前一条命令刚创建的 `workdir`。`Invocation` 带有 call ID、turn、step 和调用方 journal，供 todo、jobs、subagent、规划模式等需要写会话事实的工具使用。失败结果统一为上游的 `Error: <message>`，包括 jsonl resume 补写的中断结果。注册清理通过 `*Tool` 指针判断身份，不会因工具值含 func 字段而 panic；工具输出与错误文本都在 rune 边界截断。`Runtime.Catalog` 取代 `Definitions`，同一快照返回 schema 与 guidance；engine 把 guidance 交给 prompt assembler。无效 spec 由 `Register` 拒绝，所以 provider 的启动失败路径保持单一。
 - 原 `internal/adapter/tool/workspace` 插件拆为纯值包 `workspace`（root、路径矩阵、sandbox 词汇）和三个插件：`file`（`fs-tools`：read/write/edit）、`search`（`search-tools`：glob/grep）、`shell`（`shell-tools`：bash，拥有 workspace 内的临时目录）。WP2、WP3、WP9 可以分别修改这些包。`cmd` 解析一次 `workspace.Root` 并注入三个 provider。
 - subagent 工具迁移到同一抽象；名称和描述不变，schema 去掉根 `additionalProperties:false` 和 `maxItems`。
@@ -23,7 +25,7 @@
 - `glob`/`grep` 按维护者决定依赖 ripgrep，参数、退出码语义、`--json` 解析、上限和错误文案与 `packages/fs/tool-fs-search` 一致。provider 构造时从 PATH 解析 `rg`，`Start` 用 `rg --version` 拒绝低于 15.0.0（上游打包版本）的 ripgrep。ripgrep 以 argv、`--no-config`、allowlist 环境、空 stdin 在 host 模式运行，stdout 上限 20,000,000 字节。为此 `platform/process` 增加 `StdoutLimit`，host 模式可以省略 `TempDir`。纯 Go 的 walker 与 glob 编译代码已删除。CI 的 test、coverage、mutation 和 release build 用 `scripts/install-ripgrep.sh` 安装校验过 SHA-256 的 15.2.0；`make tui-e2e` 把当前 `rg` 所在目录加入被测进程的 PATH。
 - composition ID 改为 `fs-tools-v1`、`search-tools-v2`、`shell-tools-v1`、`subagent-tools-v2`。
 - prompt 的安全段落改为说明路径按 workspace 解析并拒绝 workspace 外路径；delegation 段落改为不能请求 sandbox 升级。`bash`、`read`、`glob`、`grep` 贡献上游 guidance；`write`/`edit` 的 guidance 依赖观察策略，留给 WP2。
-- mutation 用例 `workspace-size` 改为 `read-byte-cap`，`workspace-escape` 指向新的 containment，新增 `workspace-symlink` 保护写入不跨 symlink。`Writable` 的祖先遍历也在文件系统根停止；缺少这个条件时，`workspace-escape` 变异会让遍历在 `/` 无限循环并超时。
+- mutation 用例 `workspace-size` 改为 `read-byte-cap`，`workspace-escape` 指向 containment，`workspace-symlink` 保护写入不跨 symlink。当前路径 resolver 按有限的显式组件序列前进，具体实现见文件修复 Note。
 
 ## Consequences
 
