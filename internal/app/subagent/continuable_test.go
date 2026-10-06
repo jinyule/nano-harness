@@ -12,6 +12,7 @@ import (
 	jsonl "github.com/jinyule/nano-harness/internal/adapter/session/jsonl"
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/job"
+	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
@@ -335,12 +336,18 @@ func TestService_DeliveryWaitsForReleaseThenResumes(t *testing.T) {
 		t.Fatal(err)
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
+	abandoned := newWaitSignal(cancelled)
+	failed := make(chan error, 1)
+	go func() { failed <- h.service.SendMessage(abandoned, "root", id, "RESUMED") }()
+	receive(t, abandoned.waiting)
 	cancel()
-	if err := h.service.SendMessage(cancelled, "root", id, "RESUMED"); !errors.Is(err, context.Canceled) {
+	if err := receive(t, failed); code(err) != CodeAborted || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled wait = %v", err)
 	}
+	waiting := newWaitSignal(context.Background())
 	delivered := make(chan error, 1)
-	go func() { delivered <- h.service.SendMessage(context.Background(), "root", id, "RESUMED") }()
+	go func() { delivered <- h.service.SendMessage(waiting, "root", id, "RESUMED") }()
+	receive(t, waiting.waiting)
 	close(gate)
 	if err := receive(t, delivered); err != nil {
 		t.Fatal(err)
@@ -351,6 +358,49 @@ func TestService_DeliveryWaitsForReleaseThenResumes(t *testing.T) {
 	}
 	rootCall.release <- "released"
 	receive(t, results)
+}
+
+// dropTurns refuses every turn its kind would open.
+type dropTurns struct{}
+
+func (dropTurns) Admit(context.Context, agent.Journal, session.Message, func(context.Context) error) error {
+	return agent.ErrNotAdmitted
+}
+
+func TestService_ResidencyWithoutTurnSettlesAsFinished(t *testing.T) {
+	h := startHarness(t,
+		rule{match: "ROOT_HOLD", first: reply{hold: true}, then: reply{text: "root done"}},
+		rule{match: "CHILD_TASK", first: reply{text: "first answer"}},
+		rule{match: "Background subagent", first: reply{text: "noted"}},
+	)
+	rootCall, results := h.submit("ROOT_HOLD")
+	id, err := h.service.StartContinuable(context.Background(), start(rootCall, "worker", "CHILD_TASK", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receive(t, h.done(id))
+	rootCall.release <- "released"
+	receive(t, results)
+	h.idle(h.root)
+	// The resumed child accepts the message, but the turn it would open is
+	// dropped, so this residency commits no turn/end to take an outcome from.
+	admissions := &plugin.Scope{}
+	t.Cleanup(func() { _ = admissions.Close(context.Background()) })
+	if err := h.engine.RegisterAdmission(SourceAgentMessage, dropTurns{}, admissions); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.SendMessage(context.Background(), "root", id, "DROPPED"); err != nil {
+		t.Fatal(err)
+	}
+	receive(t, h.done(id))
+	h.idle(h.root)
+	notices := messages(h.events("root"), SourceSettled)
+	if want := settlementSummary(id, session.OutcomeCompleted) + "It left no closing message."; len(notices) != 2 || notices[1] != want {
+		t.Fatalf("root notices = %q", notices)
+	}
+	if relayed := messages(h.events(id), SourceAgentMessage); len(relayed) != 0 {
+		t.Fatalf("dropped message committed: %q", relayed)
+	}
 }
 
 func TestService_ColdResumeFailures(t *testing.T) {
@@ -604,8 +654,9 @@ func (ctx *lateCancel) Err() error {
 }
 
 func TestService_ReleaseEndsChildJobsAndStopClosesDeepestFirst(t *testing.T) {
-	previous := closeAgent
-	t.Cleanup(func() { closeAgent = previous })
+	previous, previousParked := closeAgent, parked
+	t.Cleanup(func() { closeAgent, parked = previous, previousParked })
+	parkedChild := observeParked()
 	h := startHarness(t,
 		rule{match: "ROOT_HOLD", first: reply{hold: true}, then: reply{text: "root done"}},
 		rule{match: "HOLD_TASK", first: reply{hold: true}, then: reply{text: "done"}},
@@ -646,8 +697,8 @@ func TestService_ReleaseEndsChildJobsAndStopClosesDeepestFirst(t *testing.T) {
 	}
 	receive(t, h.held)
 	parentCall.release <- "done"
-	parentAgent, _ := h.registry.Find(parent)
-	h.idle(parentAgent)
+	// Stop finds the parent's watcher parked, so only its cancellation ends it.
+	awaitParked(t, parkedChild, parent)
 	var order []string
 	failure := errors.New("close failed")
 	closeAgent = func(registry *agent.Registry, ctx context.Context, id string) error {
@@ -680,6 +731,9 @@ func TestService_ReleaseEndsChildJobsAndStopClosesDeepestFirst(t *testing.T) {
 }
 
 func TestService_OneShotParentReleasesItsContinuableTree(t *testing.T) {
+	previousParked := parked
+	t.Cleanup(func() { parked = previousParked })
+	parkedChild := observeParked()
 	h := startHarness(t,
 		rule{match: "ROOT_HOLD", first: reply{hold: true}, then: reply{text: "root done"}},
 		rule{match: "ONCE_TASK", first: reply{hold: true}, then: reply{text: "once done"}},
@@ -707,10 +761,10 @@ func TestService_OneShotParentReleasesItsContinuableTree(t *testing.T) {
 	if err := h.service.SendMessage(context.Background(), middle, onceCall.invocation.SessionID, "UP"); err != nil {
 		t.Fatal(err)
 	}
-	// The middle child goes idle and parks on its working child.
+	// The middle child goes idle and parks on its working child; the release
+	// below wakes its watcher, which then finds it closing.
 	middleCall.release <- "done"
-	middleAgent, _ := h.registry.Find(middle)
-	h.idle(middleAgent)
+	awaitParked(t, parkedChild, middle)
 	// Collecting the one-shot run releases the parked child and its child.
 	onceCall.release <- "done"
 	if result := receive(t, report); result.Outcome != session.OutcomeCompleted {

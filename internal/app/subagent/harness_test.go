@@ -349,6 +349,50 @@ func messages(events []session.Event, kind string) []string {
 	return texts
 }
 
+// observeParked reports each child whose settlement watcher parks, after
+// the observation point it wraps. The caller restores parked in a cleanup
+// registered before the harness starts.
+func observeParked() <-chan string {
+	parkedChild := make(chan string, 16)
+	previous := parked
+	parked = func(id string) {
+		previous(id)
+		select {
+		case parkedChild <- id:
+		default:
+		}
+	}
+	return parkedChild
+}
+
+// awaitParked waits until the watcher of id has parked: it is about to wait
+// for a wake or the service's cancellation.
+func awaitParked(t *testing.T, parkedChild <-chan string, id string) {
+	t.Helper()
+	parkedID := receive(t, parkedChild)
+	for parkedID != id {
+		parkedID = receive(t, parkedChild)
+	}
+}
+
+// waitSignal closes waiting the first time a caller selects on Done. Before
+// a delivery to a closing child waits for its release, nothing on its path
+// calls Done, so waiting marks that wait.
+type waitSignal struct {
+	context.Context
+	once    sync.Once
+	waiting chan struct{}
+}
+
+func newWaitSignal(ctx context.Context) *waitSignal {
+	return &waitSignal{Context: ctx, waiting: make(chan struct{})}
+}
+
+func (signal *waitSignal) Done() <-chan struct{} {
+	signal.once.Do(func() { close(signal.waiting) })
+	return signal.Context.Done()
+}
+
 func (h *harness) idle(current *agent.Agent) {
 	h.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), waitLimit)
