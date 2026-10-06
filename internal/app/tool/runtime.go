@@ -18,6 +18,9 @@ import (
 // durable approval record limit.
 const maxReasonBytes = 1024
 
+// maxConcurrentCalls bounds in-flight calls in one agent's parallel group.
+const maxConcurrentCalls = 10
+
 var (
 	// ErrInvalidTool identifies an invalid tool definition, registration, or runtime request.
 	ErrInvalidTool = errors.New("invalid tool")
@@ -190,9 +193,9 @@ type prepared struct {
 }
 
 // ExecuteBatch validates every call against its schema and classifies it,
-// then runs adjacent concurrent calls together and every other call as an
-// exclusive barrier. Each call's Check, approval, and execution happen at
-// its turn. Results keep the original call order.
+// then runs at most ten adjacent concurrent calls at once. Every other call
+// is an exclusive barrier. Each call's Check, approval, and execution happen
+// at its turn. Results keep the original call order.
 func (runtime *Runtime) ExecuteBatch(ctx context.Context, request BatchRequest) []session.ToolResult {
 	calls := make([]prepared, len(request.Calls))
 	for index, candidate := range request.Calls {
@@ -207,8 +210,11 @@ func (runtime *Runtime) ExecuteBatch(ctx context.Context, request BatchRequest) 
 			}
 		}
 		var group sync.WaitGroup
+		slots := make(chan struct{}, maxConcurrentCalls)
 		for current := index; current < end; current++ {
+			slots <- struct{}{}
 			group.Go(func() {
+				defer func() { <-slots }()
 				results[current] = runtime.execute(ctx, request, request.Calls[current], calls[current])
 			})
 		}
@@ -220,6 +226,11 @@ func (runtime *Runtime) ExecuteBatch(ctx context.Context, request BatchRequest) 
 
 func (runtime *Runtime) prepare(candidate session.ToolCall) (result prepared) {
 	result.result.CallID = candidate.ID
+	if candidate.LimitArguments().ArgumentsOmitted {
+		result.result.Output = fmt.Sprintf("Error: tool arguments exceed %d bytes; submit a smaller call", session.MaxArgumentsBytes)
+		result.result.IsError = true
+		return result
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			result.call = nil

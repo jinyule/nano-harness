@@ -46,6 +46,8 @@ subagent 工具名称不变；它们的 schema 改用共享子集表达，去掉
 
 > 已被取代：`tool.Result` 只含文本的限制由 [ADR-0015](0015-multimodal-tool-results.md) 取代，结果可携带一张规范化图片；此处保留原决定。
 
+相邻并发安全调用对齐上游 `agent-loop/constants.ts` 的每个 agent 最多 10 个在途调用；槽位包含 Check、approval 与执行，完成后立即补位，组间 barrier 与原始结果顺序不变。采用固定安全常量，不新增部署配置或共享全局 semaphore；每个 agent 的 turn 串行，独立 agent 各有自己的预算。参数预算与可恢复超限不同于上游不设文件参数限制的行为，理由及持久化归属 [ADR-0002](0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败)。
+
 ### Prompt guidance
 
 上游工具包通过 `ctx.systemPrompt.section` 贡献段落，并按 section order 排列。本仓在定义上附加可选 `Guidance`，`Runtime.Catalog` 只为请求中可见的工具渲染，并按上游顺序追加在工具列表之后；段落随 system prompt 写入 `request/header`。本次逐字采用 `bash`、`read`、`glob`、`grep` 的段落，`grep` 仍按 `read` 是否可见决定第二句。`write` 和 `edit` 的上游段落声明 “the default fs-observation-policy requires it”，随先读后写保护一起由 [ADR-0008](0008-tool-output-spill-and-observation-policy.md) 贡献。
@@ -65,6 +67,8 @@ subagent 工具名称不变；它们的 schema 改用共享子集表达，去掉
 父目录遍历采用上游 POSIX 的物理语义：逐段解析 symlink，`..` 从已解析且存在的目录取父目录，不先 Clean/Join 掉父目录段。穿过不存在组件或普通文件的遍历拒绝；write 只允许创建不含后续 `..` 的缺失后缀。workspace 的词法预检仍保留，解析每一步也必须在授权根内，不能通过“先逃逸再返回”或 `..` 抹去 symlink 绕过约束。spill 的只读授权使用相同规则。威胁分析与允许/拒绝矩阵由[安全规则](../security.md#workspace-文件边界)拥有。
 
 含 `..` 的成功路径显示解析后的物理绝对路径，供现有搜索 consumer 安全生成相对搜索根；上游 POSIX 显示保留原始父目录段。这是显示拼写的有意差异，目标身份一致。没有 `..` 时仍保留根内链接的显示拼写。Windows 也使用逐段规则，本仓不静默采用上游 Windows 的提前归一化行为；原生平台证据单独记录。
+
+system prompt 的 Safety 段落同时说明 [ADR-0008](0008-tool-output-spill-and-observation-policy.md#读回与安全边界) 的本 workspace spill 分区只读例外：`read`、`grep`、`read_image` 可读该分区的绝对路径，其他 workspace 分区不可见；更换 spill root 后，本会话已提交工具结果中的精确历史定位符仍可只读访问，历史存储内的目录与文件必须私有且不能是链接；`glob`、`write`、`edit` 与 `bash` workdir 仍在 workspace 内。模型提示不改变执行点策略；`bash` 离开 workspace-write sandbox 仍需一次性批准的 `danger-full-access`。
 
 ### 搜索实现
 

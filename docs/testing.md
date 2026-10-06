@@ -61,7 +61,7 @@ loopback HTTP 证明协议实现，不声称证明远端服务部署。真实 pr
 
 - user/step/request header 在 provider call 前提交，stream chunk 顺序保持；
 - assistant message 与全部 tool call 在工具执行前提交，每个 call 恰有一个 result；
-- 相邻 parallel tool 可以并发，exclusive tool 形成 barrier，返回顺序稳定；
+- 相邻 parallel tool 可以并发，Check、approval 与执行合计最多 10 个在途调用；屏障固定至少 10 个同时执行，峰值计数拒绝过量 dispatch，单个槽位释放即可启动下一调用；exclusive tool 形成 barrier，返回顺序稳定；
 - approval asked/decided 成对，UI 缺失、取消、policy never 和 delegated request 均失败关闭；
 - retry 只发生在没有已提交 stream 内容的可重试失败，并记录 sleep 前/后事实；
 - proactive 与 context-window compaction 保留 raw log，只替换 replay surface；
@@ -88,6 +88,8 @@ web 工具在 `app/web` 用真实 LLM runtime 与 settings 只替换远端模型
 spill 与先读后写另有专门证据：预览算法用上游 retention 的 Python 逐行移植得到的摘要比较（含 UTF-16 代理对截断），runtime 测试覆盖无 store、无会话、保存失败、说明超预算、错误结果和 `KeepInline`；`spill-local` 用真实临时目录验证权限、随机命名、`O_EXCL`、大小上限、重试、提交/丢弃、关闭等待已打开文件，以及启动清理的过期/新鲜/链接/无关条目/他人 workspace 矩阵和取消后的 join。`bash` 的完整输出经真实 tool runtime 与 job service 覆盖前台截断、后台与超时转后台读取（运行中即声明文件）、job 上限回退，以及无 store、创建失败、超过大小上限和提交失败时退回 `(unavailable)`。`Readable` 有分区允许/拒绝矩阵（链接拼写、预置链接、`..`、相对拼写、未授权）。观察策略测试覆盖审批前拒绝与 approval 期间变化的执行点拒绝、盲覆盖、读后覆盖、自身写入、跨会话、内容变化、删除、确认不存在后的创建、并发创建者、批次内顺序、经由链接的读取和无会话调用。
 
 `TestComposition_OutputLimitStopsGoalRoundsForEveryProvider` 使用真实 `composeApplication`、三个 loopback SSE provider、engine、goal driver 与 JSONL，只在 driver 的已完成结算点设置观察屏障：每次输出截断只发出一次请求，目标保持 active/disarmed；人类 resume 才发出下一轮请求，磁盘 `turn/end` 均为 `max_tokens`。provider 测试另覆盖 reasoning-only、半截工具 JSON、usage 与非 token 上限的 Responses incomplete 拒绝；engine 测试证明工具不执行、通知不消费、提交失败保留根因。`TestService_SettlePreservesLaterHumanAuthorization` 在读取旧取消结局之后、应用 Pause 之前用 channel 阻塞，让人类 pause/resume 或 clear/create，再要求新授权仍为 armed。
+
+`TestComposition_LargeWriteAndEditArgumentsEndToEnd` 经真实配置、composition、loopback Responses 与放行审批的前端，证明内容为 128 KiB、序列化后超出旧上限的 write/edit 从测试进程独立重读文件得到全部内容。`TestComposition_OversizedArgumentsRecoverEndToEnd` 让模型先提议超过参数预算的 write，再缩小参数成功写入：磁盘没有拒绝目标，call 保存显式省略标记且无审批，下一请求携带错误结果，turn 为 completed。三个 provider 的协议测试覆盖 131,111 字节、恰好上限、越界、完整参数与分片累积，engine 测试另覆盖绕过网络 adapter 的提案。`TestLog_ArgumentLimitFitsEscapedRecords` 验证最坏 HTML 转义的 chunk 和可接受 call 追加后仍可重读。
 
 ## Session、设置、账户与图片
 
@@ -203,6 +205,8 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 `testdata/session-v2-image.jsonl` 固定带图片引用的 user message 与 `read_image` call/result。`TestSessionV2Image_FrozenContract` 用同样的读取、投影和独立 writer 比较；`TestSessionV2Image_RejectsChangedContract` 拒绝旧的内联 `data` 与 `sha256` 字段、未知字段、旧式或大写或过短的 ID、不支持的 media type、字节数为 0 或超过 4 MiB、宽度为 0 或超过 4096、空名称和携带图片的错误结果。
 
 修改持久化字段、枚举、顺序、版本或恢复语义时，PR 明确选择同版本兼容、严格拒绝旧版或迁移，给出样本与因果/事务证据并更新架构和 ADR。固定样本不是全部记录类型的 schema catalog，也不代替现有图片、compaction、subagent、错误恢复和 I/O rollback 测试。CI 不重写样本，nano v2 严格拒绝旧格式的承诺不变。
+
+`testdata/session-v2-arguments.jsonl` 冻结 `tool/call.arguments_omitted:true` 与空 arguments、唯一错误结果和 completed turn。`TestSessionV2Arguments_FrozenContract` 比较独立 writer 字节、真实 Inspect/Open 及 surface；负例截成合法中断尾部，证明非法标记类型、保留参数、approval、todo 副作用和成功结果由各自目标规则拒绝。`TestComposition_ArgumentRuntimeRejectsOldSessionsWithoutChangingThem` 验证 `tool-runtime-v2` 身份拒绝旧 composition，原文件字节不变。
 
 ## 模型可见工具目录
 

@@ -133,8 +133,9 @@ func parseRetryAfter(value string) int64 {
 	return 0
 }
 
-func validToolCall(call session.ToolCall) error {
-	return (session.Record{Type: session.RecordToolCall, Turn: 1, Step: 1, Call: &call}).Validate()
+func validToolCall(call *session.ToolCall) error {
+	*call = call.LimitArguments()
+	return (session.Record{Type: session.RecordToolCall, Turn: 1, Step: 1, Call: call}).Validate()
 }
 
 func appendBounded(builder *strings.Builder, value string, limit int, subject, providerID string) error {

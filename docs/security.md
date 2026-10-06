@@ -23,6 +23,7 @@
 - provider base URL 与 OAuth endpoint 必须使用 HTTPS；只有 localhost 或 loopback IP 可使用 HTTP，供确定性协议测试。
 - URL 禁止 userinfo、query 与 fragment；provider 在已校验 base 上拼接固定 wire path。
 - 请求 body、响应 body、SSE 单行、OAuth response、streamed text/reasoning、tool call 数量和 arguments 都有完整上限。
+- provider 请求与完整响应各最多 16 MiB，SSE 单行最多 2 MiB，每次响应最多 64 个工具调用。各调用原始流式参数和持久化 JSON 参数各最多 768 KiB；后者包含 JSON 转义开销。参数越界只废止该调用，停止保存后续参数 delta，继续消费响应并返回可恢复工具错误；网络总量、单行、结构或终止协议无效仍是 provider failure。参数预算与记录大小的关系见 [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败)。
 - provider 对非成功 HTTP、malformed SSE、未知/缺失终止、非法 tool call 和不匹配的模型能力失败；不把部分 protocol failure 当作成功 completion。
 - OAuth loopback listener 只绑定固定 loopback 地址，校验 state，并在成功、失败、取消和 scope cleanup 时关闭。
 - provider 请求（对话、web 检索，以及 OAuth 的 device code、授权码交换、refresh 和 OpenRouter key 交换）都携带凭据或 OAuth 秘密，HTTP client 拒绝跟随任何重定向，不把凭据、账户头或请求体转发到另一个 URL；307/308 因而不会把 refresh token、code verifier 或交换参数重发到 Location。被拒绝的重定向是不可重试的 protocol 错误。
@@ -79,7 +80,7 @@
 |---|---|
 | `read` | 只读 UTF-8 普通文件；前 8 KiB 含 NUL 视为二进制，任何非法 UTF-8 都拒绝。流式读取不设文件大小上限，单次最多 2000 行、每行 2000 字符、所选行合计 50 KiB |
 | `read_image` | 只读普通文件，最多 20 MiB；签名须为 PNG/JPEG/WebP/GIF 且与扩展名一致，规范化规则见[图片](#图片) |
-| `write` | 内容受参数上限 128 KiB 约束。写入同目录随机命名的 `0600` 临时文件，`fsync` 后发布：替换本会话读过且内容未变的文件时 rename，创建时硬链接，目标已存在则拒绝；新文件为 `0600`，新目录为 `0700`，替换文件保留原权限位 |
+| `write` | 整个参数对象受[网络边界](#网络边界)的预算约束，含路径、JSON 框架和转义；超限不执行并返回工具错误。写入同目录随机命名的 `0600` 临时文件，`fsync` 后发布：替换本会话读过且内容未变的文件时 rename，创建时硬链接，目标已存在则拒绝；新文件为 `0600`，新目录为 `0700`，替换文件保留原权限位 |
 | `edit` | 必须先由本会话读取且内容未变；文件最多 10 MiB；拒绝 NUL 与非法 UTF-8；以同样方式原子写回 |
 | `glob` | ripgrep 的完整 stdout 最多 20,000,000 字节，超出即失败；每次调用 30 s；内联最多 100 个路径 |
 | `grep` | ripgrep 正则；`--json` 完整输出最多 20,000,000 字节，超出即失败；每次调用 30 s；内联最多 250 个匹配，每行预览 2000 字节 |
@@ -148,7 +149,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 
 ## 用户提问与规划模式
 
-- `ask_user_question` 与 `exit_plan_mode` 的问题来自模型参数，属于不可信输入。提问服务在呈现前限制为最多 16 题、每题最多 32 个选项，id 为无换行的 1–128 字节且唯一，问题与标签不能为空白，标签在题内唯一；文本总量受 128 KiB 参数上限约束。
+- `ask_user_question` 与 `exit_plan_mode` 的问题来自模型参数，属于不可信输入。提问服务在呈现前限制为最多 16 题、每题最多 32 个选项，id 为无换行的 1–128 字节且唯一，问题与标签不能为空白，标签在题内唯一；文本总量受[网络边界](#网络边界)的参数预算约束。
 - 答案在进入模型前逐题校验：每题恰好一条，只能选择该题提供的标签，单选至多一个，自由回答不超过 16 KiB 且为合法 UTF-8。broker 返回后先检查调用 context，已取消时无论是否返回合法答案或错误都按 aborted 处理；broker 缺失、取消、失败或非法答案都失败关闭为错误结果，不会被当作默认选择或批准。delegated agent 不能提问。
 - 答案是用户提供的数据，不是授权：它不改变 approval policy、sandbox 或工具 allowlist，写类工具仍在执行点请求一次性 approval。
 - 规划模式是提示词约束，不是授权边界：它不过滤工具，也不读取或改变 approval、sandbox 与 allowlist。需要强制只读时使用 `never` policy。评估与理由见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)。
@@ -168,6 +169,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 - append 先写、`fsync`，再更新内存状态；失败尝试 truncate 回已知 durable prefix。回滚失败会和原错误一起返回。
 - resume 只对 schema 与因果均有效的完整记录做追加式 repair：取消未决 approval、补 tool error，并关闭 compaction/step/turn。它不截断 torn line、不删除未知内容、不迁移旧格式。
 - model-visible stream chunk、message、call/result、approval、retry、compaction summary、image、skill 目录与注入正文、规划模式切换与切换提示均进入日志；credential、OAuth notice 和内部 provider DTO 不进入。问题与答案只作为 `tool/call` 参数和 `tool/result` 存在。
+- 参数超限时只提交显式 `arguments_omitted:true` 与空 arguments，runtime 在任何工具回调或 approval 之前返回错误；模型可缩小参数后重试。持久化校验拒绝省略调用携带非空参数、approval、todo 副作用或成功结果，原始超限内容不成为可执行事实。预算不预留会话的剩余空间：整个 64 MiB session 写满仍需新会话。
 - `todo/write` 只由调用方 session 中尚未得到 result 的 `todo_write` call 写入，最多 256 项、每项 `content` 2048 字节。decoder 拒绝未知字段、未知状态、未去空白或重复的内容，以及不引用 pending `todo_write` call 的记录。
 - `subagent/descriptor` 只接受 v2、`spawn`/`fork` provider 与已知 mode，且必须紧跟继承前缀、位于 turn 之外；`subagent/catalog` 必须位于活动 step，同一日志内 child id 唯一。fork 种子必须是从 1 开始连续、schema 有效且 turn 闭合的前缀，与 header 一次写入，校验失败时不创建文件。
 

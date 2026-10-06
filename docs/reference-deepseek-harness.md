@@ -36,6 +36,10 @@
 
 ## 架构深入对照
 
+### 工具运行时限值与文件策略提示
+
+固定参考提交的 `packages/core/agent-loop/src/constants.ts` 和 `tool-calls.ts` 对每个 agent 的并发安全调用设 10 个在途上限；本仓在 tool runtime 采纳这一固定上限，组间 barrier、调用轮次和结果顺序保持既有契约。上游文件工具没有本仓的序列化参数预算；本仓保留有界准入并提高到 768 KiB，越界以显式省略调用和错误结果让模型重试，限值理由、字段和旧会话策略见 [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败)。system prompt 说明本 workspace spill 分区的只读例外，沿用 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md#路径) 的收紧文件策略。本项不修改参考指针，也不采纳共享图片转换限额或新的会话权限预设。
+
 ### 插件、能力与应用启动
 
 上游继续把 agent loop、session、模型、工具、策略和 UI 都作为 Cordis 插件，注册通过 effect 回收。Definition/Provider/Consumer 三角色与 dispose 到静止的要求没有放宽。本仓的消费方小接口、adapter、`cmd` 显式注入及 `Plugin/Scope/Runtime` 已表达这些约束，不需要引入 Cordis 容器、service locator 或 Go 动态库。

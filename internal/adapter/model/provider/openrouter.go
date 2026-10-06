@@ -238,10 +238,9 @@ func (provider *Provider) consumeChat(body io.Reader, emit llm.Emit) (llm.Comple
 				if delta.Function.Name != "" {
 					call.Name = delta.Function.Name
 				}
-				if len(call.Arguments)+len(delta.Function.Arguments) > session.MaxArgumentsBytes {
-					return &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("tool arguments exceed size limit")}
+				if !call.AppendArguments(delta.Function.Arguments) {
+					continue
 				}
-				call.Arguments = append(call.Arguments, delta.Function.Arguments...)
 				if err := emit(session.AssistantChunk{Kind: session.ChunkTool, Index: delta.Index, CallID: delta.ID, Name: delta.Function.Name, Arguments: delta.Function.Arguments}); err != nil {
 					return err
 				}
@@ -272,7 +271,7 @@ func (provider *Provider) consumeChat(body io.Reader, emit llm.Emit) (llm.Comple
 		if len(call.Arguments) == 0 {
 			call.Arguments = json.RawMessage(`{}`)
 		}
-		if err := validToolCall(call); err != nil {
+		if err := validToolCall(&call); err != nil {
 			return llm.Completion{}, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
 		}
 		calls = append(calls, call)

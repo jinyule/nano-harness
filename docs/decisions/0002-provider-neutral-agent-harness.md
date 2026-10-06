@@ -44,6 +44,16 @@ settings 文件 provider 每次尝试取得跨进程 writer lock 前、取得锁
 
 composition ID 绑定 workspace 与工具/会话语义，不绑定可热切换 route；每个 request header 单独固定当次 provider、model、system 和 tool schema。
 
+#### 工具参数预算与可恢复失败
+
+工具参数的原始流式字节与最终持久化 JSON 对象各最多 768 KiB。provider 的三个流式协议共用 `session.MaxArgumentsBytes`；完成对象在准入时规范化为日志所用的紧凑、HTML 转义 JSON。单条流片段最多同样的字节数，按 JSON 字符串最坏六倍转义约占 4.5 MiB，给 6 MiB 单记录上限留下信封空间；原先 128 KiB 会拒绝正常的完整文件 write/edit。单条 provider SSE 行仍为 2 MiB、完整请求和响应仍为 16 MiB，网络包络越界属于 protocol/invalid failure，不能无限消费以恢复工具调用。
+
+越过任一参数预算时调用 ID/名称保留，参数换为 `{}`，持久化可选 `arguments_omitted:true`；该标记单向生效，后续 delta 或完成对象不能重新使它可执行。provider 停止累积和提交此调用的后续参数片段，继续解析有界响应；完成后 engine 在提交 call 前执行同一准入，覆盖不经过网络 adapter 的模型实现。runtime 在 schema 分类、Check、approval 与执行之前返回 `Error: tool arguments exceed 786432 bytes; submit a smaller call`，每个 call 仍有唯一 result，模型下一 step 可以缩小参数重试。越界前的 stream 事实保留，surface 只使用省略后的 call 和 error result。
+
+日志严格拒绝标记为省略但仍携带参数的 call，以及其 approval、`todo/write` 或成功 result。格式仍为本仓 v2；composition 新增 `tool-runtime-v2`，拒绝旧 composition，原始日志保留、不迁移、不静默重写。固定样本 `session-v2-arguments.jsonl` 约束新增字段与错误回放，旧合法 v2 样本在相同 composition 下仍可读。首次发布持久化数据前仍需独立评估升级承诺。
+
+预算有意保留：上游文件工具没有对应限值，本仓需要限制持久化、模型请求与内存；768 KiB 能承载审计中的 131,111 字节调用，不能承诺任意大小写入。选择大于 1 MiB 会让最坏转义片段接近或越过 6 MiB 记录上限；仅提高限值会把相同缺陷推迟到下一次超限。整个 session 容量耗尽、网络包络超限、非法调用身份或协议损坏仍可结束 turn。
+
 ### 4. Agent 控制与恢复语义
 
 每个 agent 有一个顺序 worker。turn 提交 user message 后循环执行：可选 compaction、step/request header、流式 provider call、assistant/calls 提交、tool pipeline、step end，直到无 tool call、错误或 step limit。

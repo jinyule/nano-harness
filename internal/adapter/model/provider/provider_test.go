@@ -432,7 +432,7 @@ func TestWireAndConfigFailureHelpers(t *testing.T) {
 	if session.Text(assistantMessage("x")) != "x" || len(assistantMessage("").Content) != 0 {
 		t.Fatal("assistant message")
 	}
-	if err := validToolCall(session.ToolCall{ID: "c", Name: "t", Arguments: json.RawMessage(`{}`)}); err != nil {
+	if err := validToolCall(&session.ToolCall{ID: "c", Name: "t", Arguments: json.RawMessage(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
 	originalRandom := randomRead

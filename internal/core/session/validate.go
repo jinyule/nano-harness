@@ -228,7 +228,11 @@ func (record Record) requireCall() error {
 	if err := validateIdentifier("tool name", record.Call.Name, 64); err != nil {
 		return err
 	}
-	if len(record.Call.Arguments) == 0 || len(record.Call.Arguments) > MaxArgumentsBytes || !json.Valid(record.Call.Arguments) {
+	if record.Call.ArgumentsOmitted && string(record.Call.Arguments) != "{}" {
+		return invalid("omitted tool arguments must be an empty object")
+	}
+	encoded, err := json.Marshal(record.Call.Arguments)
+	if len(record.Call.Arguments) == 0 || len(record.Call.Arguments) > MaxArgumentsBytes || err != nil || len(encoded) > MaxArgumentsBytes {
 		return invalid("tool arguments are invalid")
 	}
 	var object map[string]json.RawMessage

@@ -272,6 +272,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			return result
 		}
 		for index := range completion.Calls {
+			completion.Calls[index] = completion.Calls[index].LimitArguments()
 			call := completion.Calls[index]
 			if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordToolCall, Turn: turn, Step: step, Call: &call}); err != nil {
 				result.Err, result.Outcome = err, session.OutcomeError

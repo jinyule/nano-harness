@@ -29,7 +29,7 @@ func (*Service) Ask(ctx context.Context, request question.Request) ([]question.A
 
 `Ask` 依次拒绝：已取消的 context（`ask_user_question was aborted before the user answered`）、空列表（`ask_user_question requires at least one question`）、delegated 调用方（上游 `DELEGATED_CALLER` 原文），以及本仓的请求上限和 intent 校验。没有 broker 返回 `no user-questions answerer accepted the request`。broker 返回后先检查 context，等待中取消时返回 `question.ErrAborted` 和空答案，无论答案是否合法、错误是否为空；context 仍有效时，broker 返回 `question.ErrCancelled` 得到 `the user cancelled ask_user_question`，其他错误一律视为不可用。broker 的答案必须对每题恰好一条、只选该题提供的标签且不重复、单选至多一个且有 `Custom` 时不选标签、`Custom` 是不超过 16 KiB 的合法 UTF-8；否则以 `the user-questions answerer returned an invalid answer batch` 失败关闭。答案按请求顺序返回，切片与 broker 解耦。
 
-本仓在上游之外增加边界限制，错误文本对模型可见：每次最多 16 题、每题最多 32 个选项；id 为去除首尾空白、无换行的 1–128 字节且在本次调用内唯一（沿用上游 timed 变体的唯一性文案）；问题文本和选项标签不能为空白；同题标签唯一，因为答案用标签回指选项。文本长度由工具参数 128 KiB 上限约束。
+本仓在上游之外增加边界限制，错误文本对模型可见：每次最多 16 题、每题最多 32 个选项；id 为去除首尾空白、无换行的 1–128 字节且在本次调用内唯一（沿用上游 timed 变体的唯一性文案）；问题文本和选项标签不能为空白；同题标签唯一，因为答案用标签回指选项。文本长度受[工具参数预算](0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败)约束。
 
 delegated 判断使用持久化的 delegation（`Invocation.Delegated`）。本仓的 child session 总由 subagent 服务以 child 身份恢复，不能以 root 身份恢复，因此与上游“运行时拥有关系”判断在本仓等价；上游允许以 root 恢复带血缘的会话后提问，本仓没有这条路径。
 

@@ -15,6 +15,8 @@
 
 搜索 Unicode 参数、JSON framing、诊断预算及取消偏离的补充证据见[对齐 Note](2026-10-06-search-spill-query-parity.md)；本 Note 保留工具定义与运行前提的建立证据。
 
+工具并发预算、参数超限恢复与 Safety 文件策略提示的补充实施见[工具运行时修复](2026-10-06-tool-runtime-upstream-alignment.md)；本 Note 保留定义建立、工具映射与原始验证证据。
+
 长期契约记录在 [ADR-0007](../../../docs/decisions/0007-upstream-base-tool-definitions.md)，当前事实分别归[架构](../../../docs/architecture.md#工具approval-与调度)、[安全](../../../docs/security.md#workspace-文件边界)和[测试](../../../docs/testing.md#模型可见工具目录)文档。本次实施：
 
 文件发布取消与共享路径的物理父目录解析由[文件修复 Note](2026-10-06-file-upstream-alignment-fixes.md)补充；本 Note 保留定义抽象、组合与原始验证证据。

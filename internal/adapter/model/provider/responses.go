@@ -228,10 +228,9 @@ func (provider *Provider) consumeResponses(body io.Reader, emit llm.Emit) (llm.C
 				call = &session.ToolCall{}
 				state.calls[event.OutputIndex] = call
 			}
-			if len(call.Arguments)+len(event.Delta) > session.MaxArgumentsBytes {
-				return &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("tool arguments exceed size limit")}
+			if !call.AppendArguments(event.Delta) {
+				return nil
 			}
-			call.Arguments = append(call.Arguments, event.Delta...)
 			return emit(session.AssistantChunk{Kind: session.ChunkTool, Index: event.OutputIndex, Arguments: event.Delta})
 		case "response.output_item.done":
 			if event.Item.Type == "function_call" {
@@ -277,7 +276,7 @@ func (provider *Provider) consumeResponses(body io.Reader, emit llm.Emit) (llm.C
 	calls := make([]session.ToolCall, 0, len(state.calls))
 	for index := 0; index <= maxIndex(state.calls); index++ {
 		if call := state.calls[index]; call != nil {
-			if err := validToolCall(*call); err != nil {
+			if err := validToolCall(call); err != nil {
 				return llm.Completion{}, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
 			}
 			calls = append(calls, *call)

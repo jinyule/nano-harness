@@ -20,7 +20,7 @@ type orderState struct {
 
 func validateOrder(events []coresession.Event, requireClosed bool) (orderState, error) {
 	state := orderState{}
-	callNames := map[string]string{}
+	pendingCalls := map[string]*coresession.ToolCall{}
 	approvalCalls := map[string]string{}
 	seenApprovals := map[string]struct{}{}
 	todoCalls := map[string]struct{}{}
@@ -59,13 +59,14 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 			if record.Turn != state.turn || record.Step != state.step || !state.assistant {
 				return state, orderError("tool/call precedes its assistant message")
 			}
-			if _, exists := callNames[record.Call.ID]; exists {
+			if _, exists := pendingCalls[record.Call.ID]; exists {
 				return state, orderError("duplicate pending call %q", record.Call.ID)
 			}
-			callNames[record.Call.ID] = record.Call.Name
+			pendingCalls[record.Call.ID] = record.Call
 			state.calls = append(state.calls, record.Call.ID)
 		case coresession.RecordApprovalAsked:
-			if record.Turn != state.turn || record.Step != state.step || callNames[record.Approval.CallID] != record.Approval.ToolName {
+			call := pendingCalls[record.Approval.CallID]
+			if record.Turn != state.turn || record.Step != state.step || call == nil || call.Name != record.Approval.ToolName || call.ArgumentsOmitted {
 				return state, orderError("approval/asked does not name a pending call")
 			}
 			if _, exists := seenApprovals[record.Approval.ID]; exists {
@@ -87,22 +88,27 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 			if record.Turn != state.turn || record.Step != state.step {
 				return state, orderError("tool/result outside active step")
 			}
-			if _, exists := callNames[record.Result.CallID]; !exists {
+			call := pendingCalls[record.Result.CallID]
+			if call == nil {
 				return state, orderError("tool/result has no pending call")
+			}
+			if call.ArgumentsOmitted && !record.Result.IsError {
+				return state, orderError("omitted tool arguments require an error result")
 			}
 			for _, callID := range approvalCalls {
 				if callID == record.Result.CallID {
 					return state, orderError("tool/result precedes approval decision")
 				}
 			}
-			delete(callNames, record.Result.CallID)
+			delete(pendingCalls, record.Result.CallID)
 			delete(todoCalls, record.Result.CallID)
 			state.calls = remove(state.calls, record.Result.CallID)
 		case coresession.RecordTodoWrite:
 			if record.Turn != state.turn || record.Step != state.step {
 				return state, orderError("todo/write outside active step")
 			}
-			if callNames[record.Todo.CallID] != "todo_write" {
+			call := pendingCalls[record.Todo.CallID]
+			if call == nil || call.Name != "todo_write" || call.ArgumentsOmitted {
 				return state, orderError("todo/write does not name a pending todo_write call")
 			}
 			if _, exists := todoCalls[record.Todo.CallID]; exists {

@@ -18,8 +18,9 @@ const (
 	FormatVersion = 2
 	// MaxTextBytes bounds one text block or tool result.
 	MaxTextBytes = 256 << 10
-	// MaxArgumentsBytes bounds one serialized tool argument object.
-	MaxArgumentsBytes = 128 << 10
+	// MaxArgumentsBytes bounds one tool argument object in its durable JSON
+	// representation and the raw bytes accumulated by a provider stream.
+	MaxArgumentsBytes = 768 << 10
 	// MaxImageBytes bounds one normalized stored image.
 	MaxImageBytes = 4 << 20
 	// MaxContentBlocks bounds one message or summary.
@@ -159,6 +160,9 @@ type ToolCall struct {
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
+	// ArgumentsOmitted marks an oversized proposal. Arguments is then {},
+	// and the runtime must return an error without checking or executing it.
+	ArgumentsOmitted bool `json:"arguments_omitted,omitempty"`
 }
 
 // ToolResult is the single model-visible outcome of a committed tool call.

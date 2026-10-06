@@ -212,8 +212,8 @@
   {
     "id": "todo-call-kind",
     "file": "internal/adapter/session/jsonl/order.go",
-    "before": "if callNames[record.Todo.CallID] != \"todo_write\" {",
-    "after": "if _, exists := callNames[record.Todo.CallID]; !exists {",
+    "before": "if call == nil || call.Name != \"todo_write\" || call.ArgumentsOmitted {",
+    "after": "if call == nil || call.ArgumentsOmitted {",
     "test": "^TestSessionV2Todo_RejectsChangedContract$"
   },
   {
@@ -341,5 +341,40 @@
     "before": "case <-deadline.C:\n\t\t\tif err := ctx.Err(); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\treturn errors.New(\"settings writer lock timed out\")",
     "after": "case <-deadline.C:\n\t\t\treturn errors.New(\"settings writer lock timed out\")",
     "test": "^TestWithLock_CancellationWinsExpiredWait$"
+  },
+  {
+    "id": "tool-concurrency-cap",
+    "file": "internal/app/tool/runtime.go",
+    "before": "const maxConcurrentCalls = 10",
+    "after": "const maxConcurrentCalls = 64",
+    "test": "^TestRuntime_LimitsConcurrentCallsThroughCheckApprovalAndExecution$"
+  },
+  {
+    "id": "tool-omitted-arguments-denial",
+    "file": "internal/app/tool/runtime.go",
+    "before": "if candidate.LimitArguments().ArgumentsOmitted {",
+    "after": "if false && candidate.LimitArguments().ArgumentsOmitted {",
+    "test": "^TestRuntime_OversizedArgumentsNeverReachToolCallbacks$"
+  },
+  {
+    "id": "agent-arguments-before-journal",
+    "file": "internal/app/agent/engine.go",
+    "before": "completion.Calls[index] = completion.Calls[index].LimitArguments()",
+    "after": "// Oversized proposals bypass normalization.",
+    "test": "^TestEngine_OversizedArgumentsProduceRecoverableResults$"
+  },
+  {
+    "id": "provider-arguments-recovery",
+    "file": "internal/adapter/model/provider/responses.go",
+    "before": "if !call.AppendArguments(event.Delta) {\n\t\t\t\treturn nil",
+    "after": "if !call.AppendArguments(event.Delta) {\n\t\t\t\treturn &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New(\"tool arguments exceed size limit\")}",
+    "test": "^TestProvider_ArgumentLimitsKeepCallsRecoverable$"
+  },
+  {
+    "id": "session-omitted-arguments-result",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": "if call.ArgumentsOmitted && !record.Result.IsError {",
+    "after": "if false && call.ArgumentsOmitted && !record.Result.IsError {",
+    "test": "^TestSessionV2Arguments_RejectsChangedContract$"
   }
 ]

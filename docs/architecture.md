@@ -143,6 +143,7 @@ Submit user message
 - 规划模式边界之后、`step/start` 之前运行 step 上下文扩展点：`Engine.RegisterContext` 注册的 `ContextProvider` 随注册方 Scope 存在，按注册顺序收到该 step 可见的工具名和已提交日志，返回的消息作为本 turn 的 `user/message`（step 为 0）先提交再进入请求。provider 错误结束 turn，取消映射为 `canceled`。当前唯一的 provider 是运行时 skill；后台任务通知仍由 engine 在 turn 开始和工具 step 边界直接提交。
 - 每个 step 从权威 log 重新折叠 model surface。request header 在调用前固定 provider、model、effort、system、tool schema 和 context window；compaction summary 同样记录其冻结的 provider、model 和 effort。
 - streaming chunk 按 provider 顺序持久化。完成的 assistant message 和全部 tool call 先提交，工具才能执行；每个 call 最终得到唯一 tool result。
+- 超出参数预算的提案先转换为保留 ID/名称、`arguments:{}` 和 `arguments_omitted:true` 的调用，再提交日志；runtime 为其产生错误结果，turn 继续。provider 越界后停止累积与提交该调用的参数 delta，继续消费有界响应；普通参数仍按原顺序提交。限值与持久化策略见 [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败)。
 - 没有输出提交的 retryable provider 失败按热策略指数退避；一旦流内容已提交就不自动重试，避免重复事实。
 - 主动 compaction 在估算上下文超过阈值时运行；context-window 错误触发强制 compaction 后重试新 step。raw log 不删除，surface 用持久化 summary 替换旧 prefix。
 - `Followup` 排队新的 turn；`Steer` 只在活动 turn 的工具 step 边界注入；`Interrupt` 只取消活动 turn，保留已排队 followup；`WhenIdle` 等待队列、活动 turn 和已唤醒的通知 turn 都结算。
@@ -157,7 +158,7 @@ Submit user message
 
 - schema 采用上游 `defineTool` 子集中本仓用到的部分：可带 enum 的 string、number、boolean、必须声明 items 的 array，以及显式声明开放性的嵌套 object。序列化键序与上游编译器一致；根对象只输出 `type`、`properties` 和 `required`。
 - 批次开始前，runtime 按 schema 校验并解码每个调用，再用 `Concurrent(A)` 分类。缺少必填、类型不符、null、非有限数、`-0`、重复键和未声明成员（包括根对象）都成为 `invalid arguments: ...` 结果，并按上游遍历顺序列出全部违规。上游根对象对未知成员开放，本仓更严格，模型可见 schema 不变。
-- `Concurrent(A)` 为 true 的相邻调用并行；其余调用、未知工具和无效参数形成独占 barrier。结果顺序始终与原始 call 顺序一致。
+- `Concurrent(A)` 为 true 的相邻调用每个 agent 最多同时运行 10 个，槽位覆盖 Check、approval 与执行，任一调用完成即可补位；其余调用、未知工具和无效参数形成独占 barrier。前一组全部退出后才进入下一组，结果顺序始终与原始 call 顺序一致。
 - 每个调用轮到执行时依次运行 `Check(Invocation, A)`、`Approval(A)` 和 `Execute`。`Check` 因此能观察同一批次前序调用的效果和会话范围的状态，并在提问前拒绝语义错误、不安全路径或未读的写入目标。`Check` 收到的 `Invocation.Approved` 恒为 false，且不得产生副作用：之后可能不执行，approval 期间状态也可能变化，所以 `Execute` 必须重新检查它依赖的条件；`Approval` 返回非空原因时请求一次性 approval，原因截断到 1 KiB。执行函数仍须在执行点确认 `Invocation.Approved`。
 - `tool.Result` 由文本和可选的一张规范化图片引用组成。runtime 统一替换非法 UTF-8，对只含文本的结果（含错误）应用 spill 策略，再把完整文本截断到 256 KiB；附件已提交的图片引用原样进入 `session.ToolResult`。
 - spill 策略与上游 Base 相同：估算超过 12,500 token（`ceil(UTF-16 单元/4)+4`）的结果保存到 spill store，模型看到首尾预览和 `(Omitted N bytes. Full formatted result stored at: <locator>. <hint>)`。携带图片的结果和声明 `KeepInline` 的工具（`read`）不进入策略；错误预览保留 `is_error`；没有 store、没有会话或保存失败时保留原结果。
@@ -165,6 +166,7 @@ Submit user message
 - `Invocation` 携带 session、cwd、delegation、approval 结果、本 step 的 route（provider、model 与模型是否声明图片输入），以及当前 tool/call 的 call ID、turn、step 和调用方 durable journal。需要记录会话事实的工具在 tool/result 之前向该 journal 追加；没有 journal 的调用方必须失败关闭。
 - `Runtime.UseSpill` 在插件 Scope 内发布唯一的 `SpillStore`。`Invocation.CreateSpill`/`SaveText` 按调用方会话打开或保存 spill 文件，没有 store 或会话时返回 `ErrSpillUnavailable`，工具据此使用上游的降级文案。
 - 未知工具、panic、拒绝、执行错误和取消都成为有界 tool result，文本使用上游的 `Error: <message>` 格式；resume 为未决调用补写的结果同样使用这一格式。
+- 参数超限的调用不进入 schema 分类、Check、approval 或执行；错误结果为 `Error: tool arguments exceed 786432 bytes; submit a smaller call`。system prompt 明确 workspace 文件策略、`read`/`grep`/`read_image` 对本 workspace spill 分区的只读例外，以及 `bash` 的一次性批准升级。
 
 内置工具与上游 Base 组合同名同定义（`ask_user_question` 取 Web preset 的默认阻塞定义），映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)，后台任务与 `bash` 后台变体见 [ADR-0009](decisions/0009-background-jobs.md)，提问与规划模式见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)，`read_image` 见 [ADR-0015](decisions/0015-multimodal-tool-results.md)，长期目标见 [ADR-0016](decisions/0016-long-running-goals.md)：
 
@@ -326,13 +328,14 @@ subagent/descriptor, subagent/catalog, todo/write, plan/mode, goal/change, step/
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、goal 停止语义（`goal-tools-v2`）、spill 策略与附件引用格式（`attachments-v1`）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、工具运行时（`tool-runtime-v2`）、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、goal 停止语义（`goal-tools-v2`）、spill 策略与附件引用格式（`attachments-v1`）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。`approval/asked` 的工具名必须等于 pending call 的名称；`approval/decided` 仅通过 approval ID 关联问题，不允许携带 `call_id`。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。
 - resume 会补写未决 approval 的 cancelled、未决 call 的 interrupted error、未结束 compaction/step/turn 的结束事实；不会截断 torn JSON、猜测未知格式或自动接受旧版本。
 - `session.Surface` 从 raw events 折叠消息、tool call/result 与 compaction replacements。TUI subscriber 只是可丢更新提示；磁盘 replay 仍是恢复来源。
 - 图片块（user message content block 与 `tool/result` 的 `image` 字段）只保存附件引用；严格 decoder 拒绝旧的内联 `data`/`sha256` 字段、非 `sha256:<64 位小写十六进制>` 的 ID 和越界的字节数或尺寸。错误结果不能携带图片。引用随结果进入 surface。
+- `tool/call.arguments_omitted` 是可选布尔值；为 true 时 arguments 必须为 `{}`，不得请求 approval、提交 `todo/write` 或取得成功结果。原始超限参数不写入 call；越界前已提交的流片段保留为审计事实，surface 只重放省略调用和错误结果。session v2 保留，旧 composition 拒绝且原文件不改写，见 ADR-0002。
 - `todo/write` 必须位于活动 step，引用尚未得到 result 的 `todo_write` call，且每个 call 最多一条。它不进入 surface；模型只从自己的 tool call 参数和 tool result 看到列表。`session.StandingTodos` 把最新一条之后没有更晚 `turn/start` 的 `todo/write` 投影为当前计划。
 - `goal/change` 的 `turn` 与 `step` 都缺省，可出现在日志任意位置（人类命令可在 turn 进行中提交）。`session.GoalState.Apply` 校验 revision 连续、阶段迁移合法、时间戳不倒退、计数保持和目标 ID 不复用；`source.kind = "goal"` 的 `user/message` 必须携带 `goal_id`/`goal_revision`/`goal_round`，且恰为当前 active 目标当前 revision 的下一轮、不超过上限，其他来源不得携带这些字段。JSONL 在每次追加与读取时执行同一折叠，非法事实被拒绝且不写入。
 - 后台任务完成通知是 source kind 为 `tool-jobs` 的 `user/message`，agent 消息与子代理结算通知分别为 `agent-message` 和 `subagent-settled`，都没有专用记录类型；无工具调用的 step 之后可以出现 `user/message` 并继续 step。

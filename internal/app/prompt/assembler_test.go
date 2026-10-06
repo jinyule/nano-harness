@@ -31,8 +31,18 @@ func TestAssemblerLifecycleAndSections(t *testing.T) {
 		Workspace: "/work", Provider: "openai", Model: "model", Persona: "reviewer", Delegated: true,
 		Tools: []session.ToolDefinition{{Name: "z"}, {Name: "a"}}, Guidance: []string{"first guidance", "second guidance"},
 	})
-	if err != nil || !strings.Contains(prompt, "Delegation:") || !strings.Contains(prompt, "reviewer") || !strings.Contains(prompt, "sandbox escalation") || !strings.Contains(prompt, "reject paths outside it") {
+	if err != nil || !strings.Contains(prompt, "Delegation:") || !strings.Contains(prompt, "reviewer") || !strings.Contains(prompt, "sandbox escalation") {
 		t.Fatalf("prompt=%q err=%v", prompt, err)
+	}
+	for _, policy := range []string{
+		"read, grep, and read_image may also read absolute paths in this workspace's spill partition",
+		"Exact historical spill files named in committed tool results remain readable after a spill-root change",
+		"glob, write, edit, and bash workdir remain confined to the workspace",
+		"bash can leave its workspace-write sandbox only with an approved danger-full-access request",
+	} {
+		if !strings.Contains(prompt, policy) {
+			t.Errorf("Safety section lacks %q", policy)
+		}
 	}
 	if !strings.HasSuffix(prompt, "Available tools: a, z. Follow each JSON schema exactly and use tool results as the only authority for side effects.\n\nfirst guidance\n\nsecond guidance") {
 		t.Fatalf("tool sections out of order: %q", prompt)

@@ -17,6 +17,8 @@
 
 文件发布前取消与 workspace/spill 物理父目录解析由[文件修复 Note](2026-10-06-file-upstream-alignment-fixes.md)补充，观察与 spill 生命周期契约保留。
 
+模型 Safety 中的 spill 只读例外由[工具运行时修复](2026-10-06-tool-runtime-upstream-alignment.md)补充；本 Note 继续拥有 spill 存储与观察能力的实施证据。
+
 长期决定见 [ADR-0008](../../../docs/decisions/0008-tool-output-spill-and-observation-policy.md)，当前事实归[架构](../../../docs/architecture.md#工具approval-与调度)、[安全](../../../docs/security.md#spill-文件)和[测试](../../../docs/testing.md#agent-与工具证据)文档；[ADR-0007](../../../docs/decisions/0007-upstream-base-tool-definitions.md) 的行为差异和 guidance 段落已同步。本次实施：
 
 - `internal/app/tool/spill.go`：消费方接口 `SpillStore`（`Create(ctx, sessionID, name) (SpillFile, error)`）、`SpillFile`（`io.Writer` + `Commit() (SpillRef, error)` + `Discard() error`）、`SpillRef{Locator, Bytes, Hint}`、`ErrSpillUnavailable`。`Runtime.UseSpill(store, scope)` 在调用方 Scope 内发布唯一的 store；`Invocation.CreateSpill`/`SaveText` 由 runtime 绑定调用方会话。runtime 对纯文本结果（含错误）先修复 UTF-8，再按上游 spill-policy 算法保存超预算文本并替换为首尾预览，最后截断到 256 KiB。`Spec.KeepInline` 让 `read` 豁免；新增 `OrderWrite`/`OrderEdit`。

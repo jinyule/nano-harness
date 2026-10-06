@@ -231,10 +231,9 @@ func (provider *Provider) consumeAnthropic(body io.Reader, emit llm.Emit) (llm.C
 				if call == nil {
 					return &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("tool delta arrived before tool start")}
 				}
-				if len(call.Arguments)+len(event.Delta.PartialJSON) > session.MaxArgumentsBytes {
-					return &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("tool arguments exceed size limit")}
+				if !call.AppendArguments(event.Delta.PartialJSON) {
+					return nil
 				}
-				call.Arguments = append(call.Arguments, event.Delta.PartialJSON...)
 				return emit(session.AssistantChunk{Kind: session.ChunkTool, Index: event.Index, Arguments: event.Delta.PartialJSON})
 			}
 		case "message_delta":
@@ -267,7 +266,7 @@ func (provider *Provider) consumeAnthropic(body io.Reader, emit llm.Emit) (llm.C
 		if len(call.Arguments) == 0 {
 			call.Arguments = json.RawMessage(`{}`)
 		}
-		if err := validToolCall(call); err != nil {
+		if err := validToolCall(&call); err != nil {
 			return llm.Completion{}, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
 		}
 		calls = append(calls, call)
