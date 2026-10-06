@@ -48,7 +48,7 @@
 | WP8 | `ask_user_question` 与规划模式 `exit_plan_mode` | WP1 | 0014 | 已合入 `97cae63` |
 | WP9 | `read_image` 与多模态工具结果 | WP2 | 0015 | 已合入 `05e4012` |
 | WP10 | 长期目标 `create_goal`/`get_goal`/`update_goal` 与 round driver | WP3、WP8 | 0016 | 已合入 `d8ba519` |
-| WP11 | 图片移入会话日志之外的内容寻址附件存储（对齐上游 `attachment`/`attachment-local`），`/attach` 与 `read_image` 共用 | WP9 | 0017 | 进行中 |
+| WP11 | 图片移入会话日志之外的内容寻址附件存储（对齐上游 `attachment`/`attachment-local`），`/attach` 与 `read_image` 共用 | WP9 | 0017 | 已合入 `4e9d97e`（含透明缩放修复与转换并发上限 2） |
 | WP12 | 结构化工具结果：所有工具产出上游的错误分类（name/code/info）与结果 `meta` 并持久化到 `tool/result`；模型可见文本不变，TUI 卡片暂缓 | 小修合入后 | 0019 | 待开始 |
 | WP13 | compaction 先做上游 tool-result-pruner 的无模型裁剪（首 4096、尾 1024 码点，持久化裁剪事实），再决定是否摘要 | — | 0020 | 进行中（Codex） |
 | WP14 | 会话级 sandbox 模式：read-only、workspace-write、danger-full-access 三档，持久化 `sandbox/mode` 与策略上下文；Linux sandbox 与上游一致放开网络 | WP11 后的路径与 runner 修复 | 0021 | 待开始 |
@@ -94,7 +94,7 @@
 | `send_message` 后 `interrupt_agent` 丢弃已确认消息；one-shot 子代理被通知唤醒 | Suggestion | WP7 | 已合入 `091cb74`：取消结束且有未提交投递时保持驻留；one-shot 只在唯一 turn 期间接受通知 |
 | fork 子代理 `get_goal` 返回父目标；driver 只等 root 空闲（核实与上游一致） | Suggestion | WP10 | 已合入 `7959206` |
 | spill 清理顺序、`write` 大文件校验、spill root 位置、长工具名 | Suggestion | WP2 | 已合入 `ec3c142` |
-| 会话被内联图片写满 | Suggestion | WP9 | 已合入 `fe565ad`，后续 WP11 |
+| 会话被内联图片写满 | Suggestion | WP9 | 已合入 `fe565ad`；WP11 迁移附件存储后容量检查已删除（`4e9d97e`） |
 | `TestComposition_SubagentsEndToEnd`、web 关闭测试偶发失败 | 测试缺陷 | WP7、WP5 | 已合入 `d9ad07b`、`87316d1` |
 | spill 会话目录可被预置 symlink 引出存储分区（Codex 审查） | Blocker | Codex-B | 已合入（Codex-B，另修 `approval/decided` 多余 `call_id`） |
 | 目标轮次开场持久化失败后 driver 无限重排同一轮（Codex 审查） | Blocker | Codex-A | 已合入（Codex-A） |
