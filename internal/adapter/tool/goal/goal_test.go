@@ -397,8 +397,46 @@ func TestTools_HumansMayStopGoalsAtOnce(t *testing.T) {
 }
 
 func TestRender_ToolErrorsKeepTheirCodes(t *testing.T) {
-	var failure *toolError
-	if !errors.As(invalidUpdate("x"), &failure) || failure.Code() != "GOAL_TOOL_INVALID_UPDATE" {
-		t.Fatalf("code = %v", failure)
+	var failure appTool.Failure
+	if !errors.As(invalidUpdate("x"), &failure) || failure.ToolError() != (session.ToolError{Name: "HarnessError", Code: "GOAL_TOOL_INVALID_UPDATE"}) || failure.Error() != "x" {
+		t.Fatalf("classification = %v", failure)
 	}
+}
+
+// TestTools_PersistUpstreamClassifications checks the classification each
+// failure writes beside its unchanged text: tool policy as HarnessError,
+// domain rejections as GoalError, and nothing for unclassified failures.
+func TestTools_PersistUpstreamClassifications(t *testing.T) {
+	current := start(t)
+	harness := func(code string) *session.ToolError { return &session.ToolError{Name: "HarnessError", Code: code} }
+	domain := func(code string) *session.ToolError { return &session.ToolError{Name: "GoalError", Code: code} }
+	check := func(result session.ToolResult, want string, class *session.ToolError) {
+		t.Helper()
+		expect(t, result, want)
+		if (result.Error == nil) != (class == nil) || class != nil && *result.Error != *class || result.Meta != nil {
+			t.Fatalf("%q classification = %+v, want %+v", want, result.Error, class)
+		}
+	}
+	check(current.call(t, "get_goal", map[string]any{}), "Error: goal tools require a calling agent", harness("GOAL_TOOL_AGENT_REQUIRED"))
+	current.open(t, session.MessageSource{Kind: "tool-jobs"})
+	check(current.call(t, "create_goal", map[string]any{"objective": "ship"}), "Error: this goal operation requires a direct human turn on a top-level agent", harness("GOAL_TOOL_AUTHORITY_REQUIRED"))
+	current.human(t)
+	check(current.call(t, "update_goal", update(1, "complete", nil)), "Error: no current goal", domain("GOAL_NOT_FOUND"))
+	check(current.call(t, "create_goal", map[string]any{"objective": " "}), "Error: goal objective must be a non-empty string", domain("GOAL_INVALID_OBJECTIVE"))
+	check(current.call(t, "create_goal", map[string]any{"objective": "ship"}), `{"goal":{"id":"`+goalID+`","revision":1,"objective":"ship","phase":"active","roundsStarted":0,"maxGoalRounds":256},"activation":"armed"}`, nil)
+	check(current.call(t, "update_goal", update(0, "pause", nil)), "Error: goal_id must be non-empty and revision must be a positive safe integer", harness("GOAL_TOOL_INVALID_UPDATE"))
+	check(current.call(t, "update_goal", update(9, "pause", nil)), `Error: stale goal ref "`+goalID+`" revision 9; current is "`+goalID+`" revision 1`, domain("GOAL_STALE_REVISION"))
+	check(current.call(t, "update_goal", update(1, "resume", nil)), `Error: goal "`+goalID+`" is already active and armed`, domain("GOAL_INVALID_TRANSITION"))
+	check(current.call(t, "update_goal", update(1, "pause", nil)), `{"goal":{"id":"`+goalID+`","revision":2,"objective":"ship","phase":"paused","roundsStarted":0,"maxGoalRounds":256},"activation":"disarmed"}`, nil)
+	check(current.call(t, "update_goal", update(2, "resume", nil)), "Error: the model cannot resume a paused goal; the user must resume it", harness("GOAL_TOOL_RESUME_PAUSED"))
+	current.getErr.err = errors.New("log unreadable")
+	check(current.call(t, "update_goal", update(2, "resume", nil)), "Error: log unreadable", nil)
+	current.getErr.err = nil
+	if _, err := current.goals.Resume(t.Context(), "root", session.GoalRef{ID: goalID, Revision: 2}, appGoal.ActorHost); err != nil {
+		t.Fatal(err)
+	}
+	current.round(t)
+	check(current.call(t, "update_goal", update(3, "blocked", map[string]any{"blocked_reason": "no key"})), "Error: blocked requires at least 3 consecutive goal rounds; current round is 1", harness("GOAL_TOOL_BLOCK_THRESHOLD"))
+	check(current.call(t, "update_goal", update(3, "pause", nil)), "Error: this goal operation requires a direct human turn on a top-level agent", harness("GOAL_TOOL_AUTHORITY_REQUIRED"))
+	check(current.callAs(t, false, "missing_tool", map[string]any{}), `Error: unknown tool "missing_tool"`, &session.ToolError{Name: "ToolNotFoundError", Code: "UNKNOWN_TOOL"})
 }

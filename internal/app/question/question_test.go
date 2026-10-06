@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jinyule/nano-harness/internal/core/plugin"
+	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
 type brokerFunc func(context.Context, Request) ([]Answer, error)
@@ -297,5 +298,47 @@ func TestService_CancellationWinsOverBrokerAnswers(t *testing.T) {
 				t.Fatalf("cancelled review = %+v, %v; want no answers and ErrAborted", answers, err)
 			}
 		})
+	}
+}
+
+// TestError_ClassifiesTheUpstreamFailures pins each mapped failure to its
+// upstream UserQuestionError code while its text and identity stay intact,
+// and leaves the request failures upstream reports as plain errors bare.
+func TestError_ClassifiesTheUpstreamFailures(t *testing.T) {
+	for want, err := range map[string]error{
+		"ASK_ABORTED":      ErrAborted,
+		"ASK_CANCELLED":    ErrCancelled,
+		"DELEGATED_CALLER": ErrDelegated,
+		"NO_PROVIDER":      ErrUnavailable,
+		"BAD_ANSWER":       ErrInvalidAnswer,
+	} {
+		wrapped := fmt.Errorf("ask: %w", err)
+		var failure interface{ ToolError() session.ToolError }
+		if !errors.As(wrapped, &failure) || failure.ToolError() != (session.ToolError{Name: "UserQuestionError", Code: want}) || !errors.Is(wrapped, err) {
+			t.Errorf("%s: classification = %v", want, failure)
+		}
+	}
+	service, _ := startService(t)
+	review := func(intent Intent, detail string) Question {
+		return Question{ID: "mode", Text: "?", Detail: detail, Options: []Option{{Label: "Approve"}}, Intent: &intent}
+	}
+	for name, test := range map[string]struct {
+		questions []Question
+		code      string
+	}{
+		"empty":            {nil, "EMPTY_QUESTIONS"},
+		"unknown intent":   {[]Question{review(Intent{Kind: "other", Approve: "Approve"}, "plan")}, "BAD_INTENT"},
+		"approve missing":  {[]Question{review(Intent{Kind: IntentPlanReview, Approve: "Yes"}, "plan")}, "BAD_INTENT"},
+		"detail missing":   {[]Question{review(Intent{Kind: IntentPlanReview, Approve: "Approve"}, "")}, "BAD_INTENT"},
+		"too many":         {make([]Question, MaxQuestions+1), ""},
+		"duplicate option": {[]Question{{ID: "a", Text: "?", Options: []Option{{Label: "x"}, {Label: "x"}}}}, ""},
+	} {
+		_, err := service.Ask(t.Context(), Request{SessionID: "s", Questions: test.questions})
+		var requestErr *RequestError
+		var failure interface{ ToolError() session.ToolError }
+		classified := errors.As(err, &failure)
+		if !errors.As(err, &requestErr) || requestErr.Error() != err.Error() || classified != (test.code != "") || classified && failure.ToolError() != (session.ToolError{Name: "UserQuestionError", Code: test.code}) {
+			t.Errorf("%s: error = %v, classified %t", name, err, classified)
+		}
 	}
 }

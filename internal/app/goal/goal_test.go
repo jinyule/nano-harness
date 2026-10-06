@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -862,5 +863,20 @@ func TestService_ForkedChildOwnsOnlyItsOwnGoal(t *testing.T) {
 	}
 	if _, err := service.Edit(ctx, "child", parent.Goal.Ref(), new("x"), nil, ActorModel); codeOf(err) != CodeNotFound {
 		t.Fatalf("child edited the parent's goal: %v", err)
+	}
+}
+
+// TestError_ClassifiesAsGoalError pins every domain rejection to the
+// upstream GoalError name with its own code and unchanged text.
+func TestError_ClassifiesAsGoalError(t *testing.T) {
+	for _, code := range []Code{CodeAgentNotLive, CodeNotFound, CodeAlreadyExists, CodeStaleRevision, CodeInvalidObjective, CodeInvalidMaxRounds, CodeInvalidBlockReason, CodeInvalidEdit, CodeInvalidTransition} {
+		err := fmt.Errorf("goal: %w", reject(code, "rejected %s", code))
+		var failure interface {
+			error
+			ToolError() session.ToolError
+		}
+		if !errors.As(err, &failure) || failure.ToolError() != (session.ToolError{Name: "GoalError", Code: string(code)}) || failure.Error() != "rejected "+string(code) {
+			t.Errorf("%s: classification = %v", code, failure)
+		}
 	}
 }

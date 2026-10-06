@@ -49,8 +49,10 @@ type toolError struct {
 
 func (err *toolError) Error() string { return err.message }
 
-// Code returns the stable upstream classification.
-func (err *toolError) Code() string { return err.code }
+// ToolError reports the classification upstream gives a plain HarnessError.
+func (err *toolError) ToolError() session.ToolError {
+	return session.ToolError{Name: "HarnessError", Code: err.code}
+}
 
 func invalidUpdate(message string) error {
 	return &toolError{code: "GOAL_TOOL_INVALID_UPDATE", message: message}

@@ -100,7 +100,7 @@ producer 要在外部提交前完成可能失败的 meta 构造。write/edit 的
 | `SubagentError` / `app/subagent` 的全部 Code | `INVALID_REQUEST`、`DEPTH_LIMIT`、`ACTIVATION_LIMIT_REACHED`、`UNAUTHORIZED`、`NOT_RESUMABLE`、`PARENT_UNAVAILABLE`、`ABORTED`、`ABORTED_BEFORE_DISPATCH`、`ACTIVATION_TEARDOWN_FAILED`。`DEPTH_LIMIT` 是本仓已有码，上游深度错误没有码。`SubagentError/ABORTED` 与 runtime 的 `AbortError/ABORTED` 码相同，靠 name 区分。 |
 | `GoalError` / `app/goal` 的全部 `GOAL_*` | 领域拒绝。 |
 | `HarnessError` / `GOAL_TOOL_*` | goal 工具的 `toolError`。name 与上游 `new HarnessError` 一致，不另起 `GoalToolError`。 |
-| `UserQuestionError` / `ASK_CANCELLED`、`DELEGATED_CALLER`、`EMPTY_QUESTIONS`、`BAD_INTENT`、`NO_PROVIDER`、`BAD_ANSWER`、`ASK_ABORTED` | `ErrCancelled`、`ErrDelegated`、空问题列表、intent 违规、`ErrUnavailable`、`ErrInvalidAnswer`、`ErrAborted`。其余 `RequestError`（题数、id、选项、长度）对应上游的普通 Error，没有分类。exit_plan_mode 原样传播这些提问错误，因此带同样的分类；它自己的关闭、继续规划和未激活错误没有分类。 |
+| `UserQuestionError` / `ASK_CANCELLED`、`DELEGATED_CALLER`、`EMPTY_QUESTIONS`、`BAD_INTENT`、`NO_PROVIDER`、`BAD_ANSWER`、`ASK_ABORTED` | `ErrCancelled`、`ErrDelegated`、空问题列表、intent 违规（含本仓额外拒绝的未知 intent kind，上游由类型约束同一条件）、`ErrUnavailable`、`ErrInvalidAnswer`、`ErrAborted`。哨兵是 `*question.Error` 指针值，`errors.Is` 按身份成立；带分类的请求错误 `Unwrap` 到原 `RequestError`，`errors.As` 继续成立。其余 `RequestError`（题数、id、选项、长度）对应上游的普通 Error，没有分类。exit_plan_mode 原样传播这些提问错误，因此带同样的分类；它自己的关闭、继续规划和未激活错误没有分类。 |
 
 没有分类的失败包括：工具 Check 的语义错误、approval 拒绝或记录失败、执行点未获批准、panic、参数超限、jobs/todo/skill/plan 自身的错误、图片格式/路由/像素错误，以及各服务未运行。它们在上游同样没有分类；runtime 不按文案补分类。
 
@@ -167,6 +167,7 @@ diff 规则：
 
 - 基础批把 `tool-runtime` 提升一档：runtime 自有分类、meta 通道和 resume 修复分类都在这一档。
 - 搜索 D 批把 `search-tools-v3` 提升为 v4；shell S 批在 WP14 的 v4 上提升为 v5。
+- goal H 批把 `goal-tools-v2` 提升为 v3；question I 批把 `question-tools-v1` 与 `plan-tools-v1` 提升为 v2。
 - 每个 producer 批提升自己的 provider token：fs、search、web、shell、subagent、goal、question。question 批同时提升 plan，因为 exit_plan_mode 的结果会带上传播来的提问分类。
 - jobs、todo、skill 自身的结果契约不变，token 不变；它们的 runtime 分类随 `tool-runtime` 一起变化。
 - `session-v2`、`spill-v1`、`attachments-v1` 不因这些加法字段改变。

@@ -1118,5 +1118,33 @@
     "before": "case SandboxWorkspaceWrite:\n\t\treturn \"Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: \" + text.Quote(workspace) + \". Some platform temporary areas may also be writable.\"",
     "after": "case SandboxWorkspaceWrite:\n\t\t_ = text.Quote(workspace)\n\t\tquoted, _ := json.Marshal(workspace)\n\t\treturn \"Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: \" + string(quoted) + \". Some platform temporary areas may also be writable.\"",
     "test": "^TestSandboxPolicyText_JavaScriptWorkspaceVectors$"
+  },
+  {
+    "id": "goal-error-classification",
+    "file": "internal/app/goal/goal.go",
+    "before": "return session.ToolError{Name: \"GoalError\", Code: string(err.Code)}",
+    "after": "return session.ToolError{Name: \"HarnessError\", Code: string(err.Code)}",
+    "test": "^TestError_ClassifiesAsGoalError$"
+  },
+  {
+    "id": "goal-tool-error-classification",
+    "file": "internal/adapter/tool/goal/goal.go",
+    "before": "return session.ToolError{Name: \"HarnessError\", Code: err.code}",
+    "after": "return session.ToolError{Name: \"GoalError\", Code: err.code}",
+    "test": "^TestTools_PersistUpstreamClassifications$"
+  },
+  {
+    "id": "question-cancel-classification",
+    "file": "internal/app/question/question.go",
+    "before": "ErrCancelled = &Error{Code: \"ASK_CANCELLED\"",
+    "after": "ErrCancelled = &Error{Code: \"ASK_ABORTED\"",
+    "test": "^TestError_ClassifiesTheUpstreamFailures$"
+  },
+  {
+    "id": "question-intent-classification",
+    "file": "internal/app/question/question.go",
+    "before": "return classified(\"BAD_INTENT\", \"question %s declares intent %s without the detail it reviews\", question.ID, intent.Kind)",
+    "after": "return invalid(\"question %s declares intent %s without the detail it reviews\", question.ID, intent.Kind)",
+    "test": "^TestError_ClassifiesTheUpstreamFailures$"
   }
 ]

@@ -66,6 +66,12 @@ type Error struct {
 
 func (err *Error) Error() string { return err.Message }
 
+// ToolError reports the upstream GoalError classification persisted with
+// the tool result.
+func (err *Error) ToolError() session.ToolError {
+	return session.ToolError{Name: "GoalError", Code: string(err.Code)}
+}
+
 func reject(code Code, format string, values ...any) error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, values...)}
 }

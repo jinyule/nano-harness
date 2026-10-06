@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jinyule/nano-harness/internal/core/plugin"
+	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
 const (
@@ -35,26 +36,53 @@ var (
 	// ErrInvalidBroker identifies a broker registration that cannot be honored.
 	ErrInvalidBroker = errors.New("invalid user-questions broker registration")
 	// ErrAborted reports that the caller's context ended before accepting an answer.
-	ErrAborted = errors.New("ask_user_question was aborted before the user answered")
+	ErrAborted = &Error{Code: "ASK_ABORTED", Message: "ask_user_question was aborted before the user answered"}
 	// ErrCancelled reports that the user dismissed the questions. Brokers
 	// return it for an explicit cancellation.
-	ErrCancelled = errors.New("the user cancelled ask_user_question")
+	ErrCancelled = &Error{Code: "ASK_CANCELLED", Message: "the user cancelled ask_user_question"}
 	// ErrDelegated reports a question from an agent owned by another agent.
-	ErrDelegated = errors.New("human interaction is unavailable while the calling agent is owned by another live agent; include the unresolved question or decision in the child agent's final result")
+	ErrDelegated = &Error{Code: "DELEGATED_CALLER", Message: "human interaction is unavailable while the calling agent is owned by another live agent; include the unresolved question or decision in the child agent's final result"}
 	// ErrUnavailable reports that no broker accepted the request.
-	ErrUnavailable = errors.New("no user-questions answerer accepted the request")
+	ErrUnavailable = &Error{Code: "NO_PROVIDER", Message: "no user-questions answerer accepted the request"}
 	// ErrInvalidAnswer reports a broker answer that does not fit the request.
-	ErrInvalidAnswer = errors.New("the user-questions answerer returned an invalid answer batch")
+	ErrInvalidAnswer = &Error{Code: "BAD_ANSWER", Message: "the user-questions answerer returned an invalid answer batch"}
 )
 
+// Error is a failure the upstream user-questions seam classifies as a
+// UserQuestionError with Code. Message is model-visible. Sentinels are
+// compared by identity, and a classified request failure unwraps to its
+// RequestError.
+type Error struct {
+	Code    string
+	Message string
+	cause   error
+}
+
+func (err *Error) Error() string { return err.Message }
+
+// Unwrap returns the RequestError of a classified request failure.
+func (err *Error) Unwrap() error { return err.cause }
+
+// ToolError reports the upstream classification persisted with the tool result.
+func (err *Error) ToolError() session.ToolError {
+	return session.ToolError{Name: "UserQuestionError", Code: err.Code}
+}
+
 // RequestError reports a request that cannot be presented. Its text is
-// model-visible.
+// model-visible. Only the failures upstream classifies — an empty request
+// and an inconsistent intent — are wrapped in an Error.
 type RequestError struct{ Reason string }
 
 func (err *RequestError) Error() string { return err.Reason }
 
 func invalid(format string, values ...any) error {
 	return &RequestError{Reason: fmt.Sprintf(format, values...)}
+}
+
+// classified wraps a request failure upstream reports with code.
+func classified(code, format string, values ...any) error {
+	cause := &RequestError{Reason: fmt.Sprintf(format, values...)}
+	return &Error{Code: code, Message: cause.Reason, cause: cause}
 }
 
 // Option is one selectable answer. Label is both the user-facing text and
@@ -191,7 +219,7 @@ func (service *Service) Ask(ctx context.Context, request Request) ([]Answer, err
 		return nil, ErrAborted
 	}
 	if len(request.Questions) == 0 {
-		return nil, invalid("ask_user_question requires at least one question")
+		return nil, classified("EMPTY_QUESTIONS", "ask_user_question requires at least one question")
 	}
 	if request.Delegated {
 		return nil, ErrDelegated
@@ -266,13 +294,13 @@ func validateIntent(question Question, labels map[string]struct{}) error {
 		return nil
 	}
 	if intent.Kind != IntentPlanReview {
-		return invalid("question %s declares unknown intent %q", question.ID, intent.Kind)
+		return classified("BAD_INTENT", "question %s declares unknown intent %q", question.ID, intent.Kind)
 	}
 	if _, ok := labels[intent.Approve]; !ok {
-		return invalid("question %s declares intent %s whose approve label %q names none of its options", question.ID, intent.Kind, intent.Approve)
+		return classified("BAD_INTENT", "question %s declares intent %s whose approve label %q names none of its options", question.ID, intent.Kind, intent.Approve)
 	}
 	if question.Detail == "" {
-		return invalid("question %s declares intent %s without the detail it reviews", question.ID, intent.Kind)
+		return classified("BAD_INTENT", "question %s declares intent %s without the detail it reviews", question.ID, intent.Kind)
 	}
 	return nil
 }

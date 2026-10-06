@@ -135,16 +135,18 @@ func TestAskUserQuestion_FailuresBecomeErrorResults(t *testing.T) {
 		arguments string
 		delegated bool
 		want      string
+		class     *session.ToolError
 	}{
-		{"cancelled", `{"questions":[{"id":"a","question":"?"}]}`, false, "Error: the user cancelled ask_user_question"},
-		{"delegated", `{"questions":[{"id":"a","question":"?"}]}`, true, "Error: " + appQuestion.ErrDelegated.Error()},
-		{"empty", `{"questions":[]}`, false, "Error: ask_user_question requires at least one question"},
-		{"duplicate", `{"questions":[{"id":"a","question":"?"},{"id":"a","question":"?"}]}`, false, `Error: question id "a" must be unique within this call`},
-		{"schema", `{"questions":[{"id":"a"}]}`, false, `Error: invalid arguments: missing required property "questions[0].question"`},
+		{"cancelled", `{"questions":[{"id":"a","question":"?"}]}`, false, "Error: the user cancelled ask_user_question", &session.ToolError{Name: "UserQuestionError", Code: "ASK_CANCELLED"}},
+		{"delegated", `{"questions":[{"id":"a","question":"?"}]}`, true, "Error: human interaction is unavailable while the calling agent is owned by another live agent; include the unresolved question or decision in the child agent's final result", &session.ToolError{Name: "UserQuestionError", Code: "DELEGATED_CALLER"}},
+		{"empty", `{"questions":[]}`, false, "Error: ask_user_question requires at least one question", &session.ToolError{Name: "UserQuestionError", Code: "EMPTY_QUESTIONS"}},
+		{"duplicate", `{"questions":[{"id":"a","question":"?"},{"id":"a","question":"?"}]}`, false, `Error: question id "a" must be unique within this call`, nil},
+		{"schema", `{"questions":[{"id":"a"}]}`, false, `Error: invalid arguments: missing required property "questions[0].question"`, &session.ToolError{Name: "ToolArgsError", Code: "INVALID_ARGS"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if result := current.call(t, test.arguments, test.delegated); !result.IsError || result.Output != test.want {
-				t.Fatalf("result = %+v", result)
+			result := current.call(t, test.arguments, test.delegated)
+			if !result.IsError || result.Output != test.want || (result.Error == nil) != (test.class == nil) || test.class != nil && *result.Error != *test.class || result.Meta != nil {
+				t.Fatalf("result = %+v error=%+v", result, result.Error)
 			}
 		})
 	}

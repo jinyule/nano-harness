@@ -276,6 +276,48 @@ func TestComposition_AskUserQuestionReturnsTheUserAnswer(t *testing.T) {
 	}
 }
 
+// TestComposition_QuestionFailuresPersistTheirClassification proves that
+// a cancelled question and an empty request reach the transcript with the
+// upstream UserQuestionError codes, while the model receives only the text.
+func TestComposition_QuestionFailuresPersistTheirClassification(t *testing.T) {
+	assembled, seen := startAssembled(t, []modelStep{
+		{tool: "ask_user_question", arguments: `{"questions":[{"id":"mode","question":"Which mode?"}]}`},
+		{tool: "ask_user_question", arguments: `{"questions":[]}`},
+		{text: "done"},
+	})
+	if result := assembled.turn(t, "ask me"); result.Err != nil || result.Text != "done" {
+		t.Fatalf("turn = %+v", result)
+	}
+	results := orderedToolResults(assembled.records(t))
+	want := []struct {
+		output string
+		code   string
+	}{{"Error: the user cancelled ask_user_question", "ASK_CANCELLED"}, {"Error: ask_user_question requires at least one question", "EMPTY_QUESTIONS"}}
+	if len(results) != len(want) {
+		t.Fatalf("results = %+v", results)
+	}
+	for index, expected := range want {
+		result := results[index]
+		if !result.IsError || result.Output != expected.output || result.Error == nil || *result.Error != (session.ToolError{Name: "UserQuestionError", Code: expected.code}) {
+			t.Errorf("result %d = %+v error=%+v", index, result, result.Error)
+		}
+	}
+	requests := seen()
+	if len(requests) != 3 || !strings.Contains(string(requests[1].Input[len(requests[1].Input)-1]), "the user cancelled ask_user_question") {
+		t.Fatalf("the cancellation text did not reach the model: %d requests", len(requests))
+	}
+	for index, request := range requests {
+		var builder strings.Builder
+		builder.WriteString(request.Instructions)
+		for _, item := range request.Input {
+			builder.Write(item)
+		}
+		if raw := builder.String(); strings.Contains(raw, "UserQuestionError") || strings.Contains(raw, "ASK_CANCELLED") || strings.Contains(raw, "EMPTY_QUESTIONS") {
+			t.Fatalf("request %d carried a classification: %s", index, raw)
+		}
+	}
+}
+
 func TestComposition_PlanModeReviewKeepsPlanningThenApproves(t *testing.T) {
 	const proposal = `{"plan":"# Cache plan\n\n- add a cache"}`
 	assembled, seen := startAssembled(t, []modelStep{

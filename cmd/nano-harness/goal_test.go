@@ -376,6 +376,24 @@ func TestComposition_GoalRoundsEnforceAuthorityAndTheRoundLimit(t *testing.T) {
 		"turn4 completed",
 		"goal:block r5 blocked 3/3 round-limit",
 	})
+	if got := errorClasses(events); strings.Join(got, ",") != "HarnessError/GOAL_TOOL_AUTHORITY_REQUIRED,HarnessError/GOAL_TOOL_BLOCK_THRESHOLD" {
+		t.Fatalf("persisted classifications = %v", got)
+	}
+}
+
+// errorClasses lists the classification of every failed tool result on disk.
+func errorClasses(events []session.Event) []string {
+	var classes []string
+	for _, event := range events {
+		if result := event.Record.Result; result != nil && result.IsError {
+			class := "none"
+			if result.Error != nil {
+				class = result.Error.Name + "/" + result.Error.Code
+			}
+			classes = append(classes, class)
+		}
+	}
+	return classes
 }
 
 // TestComposition_HostPauseInterruptsAndResumeSurvivesRestart proves that a

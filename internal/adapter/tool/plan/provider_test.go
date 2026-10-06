@@ -214,17 +214,20 @@ func TestExitPlanMode_KeepPlanningDismissalAndFailures(t *testing.T) {
 		name   string
 		answer func(appQuestion.Request) ([]appQuestion.Answer, error)
 		want   string
+		class  *session.ToolError
 	}{
-		{"keep planning", review([]string{"Keep planning"}, ""), "Error: The user chose to keep planning; revise the plan and present it again."},
-		{"skipped", review([]string{}, ""), "Error: The user chose to keep planning; revise the plan and present it again."},
-		{"feedback", review([]string{}, "split the migration"), "Error: The user chose to keep planning; their feedback: split the migration"},
-		{"dismissed", func(appQuestion.Request) ([]appQuestion.Answer, error) { return nil, appQuestion.ErrCancelled }, "Error: The user dismissed the plan review to speak instead; stay in plan mode, stop here, and wait for their message."},
-		{"unavailable", func(appQuestion.Request) ([]appQuestion.Answer, error) { return nil, context.DeadlineExceeded }, "Error: no user-questions answerer accepted the request"},
+		{"keep planning", review([]string{"Keep planning"}, ""), "Error: The user chose to keep planning; revise the plan and present it again.", nil},
+		{"skipped", review([]string{}, ""), "Error: The user chose to keep planning; revise the plan and present it again.", nil},
+		{"feedback", review([]string{}, "split the migration"), "Error: The user chose to keep planning; their feedback: split the migration", nil},
+		{"dismissed", func(appQuestion.Request) ([]appQuestion.Answer, error) { return nil, appQuestion.ErrCancelled }, "Error: The user dismissed the plan review to speak instead; stay in plan mode, stop here, and wait for their message.", nil},
+		{"unavailable", func(appQuestion.Request) ([]appQuestion.Answer, error) { return nil, context.DeadlineExceeded }, "Error: no user-questions answerer accepted the request", &session.ToolError{Name: "UserQuestionError", Code: "NO_PROVIDER"}},
+		{"invalid answer", func(appQuestion.Request) ([]appQuestion.Answer, error) { return nil, nil }, "Error: the user-questions answerer returned an invalid answer batch", &session.ToolError{Name: "UserQuestionError", Code: "BAD_ANSWER"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			current.answer = test.answer
-			if result := current.call(t, "# Plan"); !result.IsError || result.Output != test.want {
-				t.Fatalf("result = %+v", result)
+			result := current.call(t, "# Plan")
+			if !result.IsError || result.Output != test.want || (result.Error == nil) != (test.class == nil) || test.class != nil && *result.Error != *test.class {
+				t.Fatalf("result = %+v error=%+v", result, result.Error)
 			}
 			if !current.mode.Active("root") {
 				t.Fatal("a declined review left plan mode")
