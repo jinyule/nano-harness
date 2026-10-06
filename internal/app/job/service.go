@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
@@ -202,11 +203,19 @@ func (service *Service) settle(current *record, outcome Outcome) {
 	notify := !current.foreground && !awaited && current.cause == causeProducer && service.base.Err() == nil
 	view, owner := current.view(), current.owner
 	service.mu.Unlock()
-	if notify {
-		// The notice commits even if shutdown starts meanwhile. The only
-		// failure is an owner that is no longer live or cannot record it;
-		// such a notice has no reader left, like a teardown settlement.
-		_ = service.notifier.QueueNotice(context.WithoutCancel(service.base), owner, Notice(view))
+	if !notify {
+		return
+	}
+	// The notice commits even if shutdown starts meanwhile. Notice always
+	// renders an acceptable message, so a failure comes from the owner: it
+	// is no longer live or cannot take the notice, and then has no reader
+	// left like a teardown settlement, or it could not record the notice.
+	// The failure is kept in the job's status line, which job_output and
+	// job_kill show, so an owner that can still read is not left silent.
+	if err := service.notifier.QueueNotice(context.WithoutCancel(service.base), owner, Notice(view)); err != nil {
+		service.mu.Lock()
+		current.detail = joinDetail(current.detail, "completion notice not delivered: "+err.Error())
+		service.mu.Unlock()
 	}
 }
 
@@ -218,9 +227,22 @@ func joinDetail(detail, reason string) string {
 }
 
 // Notice renders the completion notice delivered to the owner as a
-// user/message with source kind NoticeSource.
+// user/message with source kind NoticeSource. Like upstream, a notice that
+// would not fit one text block keeps the job ID and the head of its
+// description, then marks the cut and names the collection tool; the label
+// is a bash command or a delegation description and may be that long.
 func Notice(view View) session.Message {
-	text := "background job " + view.ID + " (" + view.Kind + ": " + view.Label + ") finished " + view.StatusLine() + ". Read its output with job_output."
+	prefix := "background job " + view.ID
+	detail := " (" + view.Kind + ": " + view.Label + ") finished " + view.StatusLine()
+	text := prefix + detail + ". Read its output with job_output."
+	if len(text) > session.MaxTextBytes {
+		const omitted = "\n[notice truncated]\nDone; job_output."
+		cut := session.MaxTextBytes - len(prefix) - len(omitted)
+		for !utf8.RuneStart(detail[cut]) {
+			cut--
+		}
+		text = prefix + detail[:cut] + omitted
+	}
 	return session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: NoticeSource}, Content: []session.ContentBlock{{Type: session.ContentText, Text: text}}}
 }
 

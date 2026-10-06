@@ -105,6 +105,27 @@
     "test": "^TestService_ForegroundNoticeTransfersAtRead$"
   },
   {
+    "id": "job-notice-fits-text-block",
+    "file": "internal/app/job/service.go",
+    "before": "if len(text) > session.MaxTextBytes {",
+    "after": "if false {",
+    "test": "^TestNotice_FitsOneTextBlock$"
+  },
+  {
+    "id": "job-notice-rune-boundary",
+    "file": "internal/app/job/service.go",
+    "before": "for !utf8.RuneStart(detail[cut]) {",
+    "after": "for !utf8.RuneStart(detail[0]) {",
+    "test": "^TestNotice_FitsOneTextBlock$"
+  },
+  {
+    "id": "job-notice-failure-visible",
+    "file": "internal/app/job/service.go",
+    "before": "current.detail = joinDetail(current.detail, \"completion notice not delivered: \"+err.Error())",
+    "after": "_ = err",
+    "test": "^TestService_UndeliveredNoticeIsVisibleInDetail$"
+  },
+  {
     "id": "bash-handoff-read-status",
     "file": "internal/adapter/tool/shell/bash.go",
     "before": "if read.Job.Status == appJob.StatusRunning || read.Job.Status == appJob.StatusStopping {",

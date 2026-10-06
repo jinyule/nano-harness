@@ -91,6 +91,8 @@ job settle 时，如果前台完成收集权尚未释放、有正在进行的 wa
 background job <id> (<kind>: <label>) finished <status line>. Read its output with job_output.
 ```
 
+label 是 `bash` 的命令原文或子代理的 description，长度只受工具参数预算约束，可能超过一个文本块（`session.MaxTextBytes`，256 KiB）。完整文本超出时按上游 `fitCompletionNotice` 截断：保留 `background job <id>`，接着在 UTF-8 字符边界截取 ` (<kind>: <label>) finished <status line>` 的开头，最后追加 `\n[notice truncated]\nDone; job_output.`，总长恰好不超过一个文本块。被截掉的状态行仍可由 `job_output` 读取。上游由 producer 声明 `outputLimitBytes`；本仓的上限就是 durable 文本块上限，不另设 producer 参数，也不在准入时拒绝长命令。
+
 首次消费式 `Read` 在同一把锁内获取输出与状态并释放前台预留：终态由前台收集并 `Remove`，仍活动才交出后台 ID，后续 settle 可以通知一次。正常前台结束或取消通过 `Remove` 丢弃预留，consumer 必须读取或移除，不能直接遗弃。其他 producer 的 `Foreground` 零值行为与 `job_output` 的 wait 收集语义不变；这些修复不改变工具 schema、session v2、composition ID 或持久化格式，也不新增部署参数。
 
 通知是 role 为 user、source kind 为 `tool-jobs` 的消息，由 `Agent.Notify` 投递：
