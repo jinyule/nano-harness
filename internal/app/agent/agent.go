@@ -134,7 +134,7 @@ func (agent *Agent) finishTurn(result TurnResult, submitted bool) {
 	if !errors.Is(result.Err, ErrNotAdmitted) && !errors.Is(result.Err, ErrImageCapacity) {
 		agent.last = result
 	}
-	agent.woken = len(agent.notices) > 0 && agent.pending == 0 && result.Outcome != session.OutcomeCanceled
+	agent.woken = len(agent.notices) > 0 && agent.pending == 0 && result.Outcome != session.OutcomeCanceled && agent.mode != "one-shot"
 	if agent.pending == 0 && !agent.woken {
 		agent.notifyIdleLocked()
 	}
@@ -162,7 +162,9 @@ func (agent *Agent) claimWake() (session.Message, bool) {
 // boundary of its active turn, which then cannot close before answering
 // it; an idle agent opens a new turn for it. Notices left by a cancelled
 // turn wait for the next turn. Pending notices are in memory and are lost
-// when the agent stops.
+// when the agent stops. A one-shot agent runs exactly one turn, so it
+// accepts notices only while that turn runs and never opens another for
+// them; notices that arrive too late for it are refused or discarded.
 func (agent *Agent) Notify(message session.Message) error {
 	if !validUserMessage(message) {
 		return ErrInvalidConfig
@@ -171,6 +173,9 @@ func (agent *Agent) Notify(message session.Message) error {
 	defer agent.mu.Unlock()
 	if !agent.active {
 		return ErrNotRunning
+	}
+	if agent.mode == "one-shot" && !agent.busy {
+		return ErrInvalidConfig
 	}
 	agent.notices = append(agent.notices, cloneMessage(message))
 	if !agent.busy && agent.pending == 0 && !agent.woken {

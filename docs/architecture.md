@@ -147,7 +147,7 @@ Submit user message
 - 主动 compaction 在估算上下文超过阈值时运行；context-window 错误触发强制 compaction 后重试新 step。raw log 不删除，surface 用持久化 summary 替换旧 prefix。
 - `Followup` 排队新的 turn；`Steer` 只在活动 turn 的工具 step 边界注入；`Interrupt` 只取消活动 turn，保留已排队 followup；`WhenIdle` 等待队列、活动 turn 和已唤醒的通知 turn 都结算。
 - 注册了 `Admission` 的 source kind（目前只有目标轮次 `goal`）在 worker 取出 turn 时先经 admission：它在排除并发状态变化的同时提交 `turn/start` 与开场 `user/message`，或以 `ErrNotAdmitted` 丢弃这个 turn，不写任何记录，也不更新 `Status().Last`。规则见[长期目标](#长期目标)。
-- `Notify` 投递模型可见通知：后台任务完成通知、agent 之间的 `send_message` 消息、子代理结算通知和目标收尾指令。agent 忙时，通知在 turn 开始后、工具 step 结束后以及无工具调用的回答之后作为 `user/message` 追加；最后一种情况下 turn 继续一个 step 回应它，已到 step 上限时留待下一 turn。agent 空闲，或 turn 结束后仍有通知且没有排队的 turn 时，worker 以通知开启新 turn；被取消的 turn 留下的通知等待下一个 turn。待投递通知只在内存中，规则见 [ADR-0009](decisions/0009-background-jobs.md)。
+- `Notify` 投递模型可见通知：后台任务完成通知、agent 之间的 `send_message` 消息、子代理结算通知和目标收尾指令。agent 忙时，通知在 turn 开始后、工具 step 结束后以及无工具调用的回答之后作为 `user/message` 追加；最后一种情况下 turn 继续一个 step 回应它，已到 step 上限时留待下一 turn。agent 空闲，或 turn 结束后仍有通知且没有排队的 turn 时，worker 以通知开启新 turn；被取消的 turn 留下的通知等待下一个 turn。one-shot agent 只在它唯一的 turn 运行期间接受通知，turn 结束后拒绝通知，也不为未投递的通知开启新 turn。待投递通知只在内存中，规则见 [ADR-0009](decisions/0009-background-jobs.md)。
 - 调用取消、step limit、错误和恢复中断分别记录稳定 outcome。异常边界会尝试用不继承上游取消的 context 关闭 step/turn。
 - Registry 拥有每个动态 agent（包括 root）的 Scope、worker 和 journal。关闭时先拒绝新 agent，再同时关闭全部 agent：每个 worker 立即取消在途 turn、丢弃排队工作，registry 等待所有 worker 回收，不会出现一个 agent 在排空时另一个仍在开启新 turn。
 
@@ -242,7 +242,7 @@ producer Launch(kind, label, owner, Run)
 一个 child 是 Registry 中的完整 agent、独立 JSONL session 和独立 Scope。`internal/app/subagent.Service`（插件 `subagents`）拥有全部 child 句柄，模型可见契约、持久化与冷恢复见 [ADR-0013](decisions/0013-background-continuable-subagents.md)：
 
 ```text
-subagent (默认后台)        → StartContinuable → 立即返回 id → child 驻留 → 空闲且无 continuable 子代理 → 结算：关闭 agent，通知 parent
+subagent (默认后台)        → StartContinuable → 立即返回 id → child 驻留 → 空闲、无 continuable 子代理且投递已提交 → 结算：关闭 agent，通知 parent
 subagent (run_in_background: false)
 subagent_fork (默认前台)  → Run → 等待唯一 turn → 返回最终回答 → 释放 child
 subagent_fork (后台)       → StartBackground → kind subagent 的 job（owner 为 parent）
@@ -253,7 +253,7 @@ list_agents                → parent 自己的 subagent/catalog；descendants �
 
 - spawn child 从空会话开始；fork child 以 parent 最后一个 `turn/end` 为止的事件为种子（不含进行中的 turn），provider/model 由同一 route 决定。child 创建时持久化 parent/depth、descriptor v2 与 `never` 策略；parent 在创建它的工具 step 内写 `subagent/catalog`。
 - delegated session 在持久化策略层固定为 `never`，需要 approval 的工具无法执行，`bash` 的 sandbox 升级还在工具执行点再次拒绝。
-- 消息只跨越直接父子边，经 `Agent.Notify` 投递：接收方忙时在下一个 step 边界追加，空闲时开启新 turn。结算通知只在 child 自然结算时发送；服务关闭和 one-shot parent 回收是拆除，不发通知。
+- 消息只跨越直接父子边，经 `Agent.Notify` 投递：接收方忙时在下一个 step 边界追加，空闲时开启新 turn。被中断的 turn 留下未提交的消息时，child 保持驻留，由下一次投递开启的 turn 一并处理。结算通知只在 child 自然结算时发送；服务关闭和 one-shot parent 回收是拆除，不发通知。
 - 每个 continuable 池最多 8 个驻留 child，one-shot 不占池；绝对 delegation depth 上限为 4。
 - 释放 child 时先中断它，深度优先释放其 live 子代理，关闭 agent 与 transcript，再以 `job.Service.Release` 结束它拥有的 job。服务 cleanup 拒绝新操作、停止结算 watcher，再从最深处起释放全部 child。
 - 驻留状态只在内存中；进程重启后，恢复的 root 从目录列出 `inactive` child，并可用 `send_message` 冷恢复它们。

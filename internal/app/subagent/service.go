@@ -43,6 +43,8 @@ var (
 	closeAgent    = func(registry *agent.Registry, ctx context.Context, id string) error { return registry.Close(ctx, id) }
 	beforePublish = func(*agent.Agent) {}
 	beforeResume  = func() {}
+	// parked observes a settlement watcher that keeps its child resident.
+	parked = func(string) {}
 )
 
 // Code classifies a model-facing delegation failure.
@@ -147,6 +149,11 @@ type child struct {
 	// announced records that a delivery was accepted, so settlement owes
 	// the parent a notice.
 	announced bool
+	// delivered counts the messages and settlement notices this service
+	// handed to the agent during this residency. A child whose interrupted
+	// turn left some of them uncommitted stays resident until the next
+	// delivery opens a turn that commits them.
+	delivered int
 	// watched records that the settlement watcher runs; it starts with the
 	// first accepted delivery.
 	watched bool
@@ -497,8 +504,9 @@ func (service *Service) hasContinuableChildrenLocked(id string) bool {
 }
 
 // watch settles one continuable child: once it is idle, no delivery arrived
-// during the idle wait, and it has no continuable children, the watcher
-// releases it and notifies its parent with how its last turn ended.
+// during the idle wait, its log holds every message delivered to it, and it
+// has no continuable children, the watcher releases it and notifies its
+// parent with how its last turn ended.
 func (service *Service) watch(current *child) {
 	defer service.watchers.Done()
 	for {
@@ -513,14 +521,34 @@ func (service *Service) watch(current *child) {
 		if err := current.agent.WhenIdle(service.ctx); err != nil {
 			return
 		}
+		// A log that can no longer be read belongs to an agent that stopped;
+		// it settles with no pending messages and a default outcome.
+		var own []session.Event
+		events, err := current.agent.Events(service.ctx)
+		if err == nil {
+			own = events[current.boundary:]
+		}
+		outcome, ended := session.LastOutcome(own)
+		if !ended {
+			outcome = session.OutcomeCompleted
+		}
+		committed := relayed(own)
 		service.mu.Lock()
+		// An agent leaves accepted messages queued without opening a turn
+		// for them only after a cancelled turn; after any other ending a
+		// shortfall means nothing is left to wait for.
+		queued := committed < current.delivered && outcome == session.OutcomeCanceled
 		switch {
 		case current.generation != generation:
-			// Closing also advances the generation; the loop re-checks it.
+			// A delivery or closing advanced the generation; re-check.
 			service.mu.Unlock()
 			continue
-		case service.hasContinuableChildrenLocked(current.id):
+		case service.hasContinuableChildrenLocked(current.id) || queued:
+			// A working child, or a message an interrupted turn left
+			// queued, keeps the child resident until the next delivery or
+			// child release wakes it.
 			service.mu.Unlock()
+			parked(current.id)
 			select {
 			case <-wake:
 				continue
@@ -531,23 +559,34 @@ func (service *Service) watch(current *child) {
 		current.closing = true
 		announced := current.announced
 		service.mu.Unlock()
-		outcome, closing := session.OutcomeCompleted, ""
-		if events, err := current.agent.Events(service.ctx); err == nil {
-			own := events[current.boundary:]
-			if last, ok := session.LastOutcome(own); ok {
-				outcome = last
-			}
-			closing = session.FinalAssistantText(own)
-		}
 		var notice *session.Message
 		if announced {
-			message := settlementMessage(current.id, outcome, closing)
+			message := settlementMessage(current.id, outcome, session.FinalAssistantText(own))
 			notice = &message
 		}
 		// A failed release still removed the handle; nothing reads the error.
 		_ = service.release(context.WithoutCancel(service.ctx), current, notice)
 		return
 	}
+}
+
+// relayed counts the committed messages in events that this service
+// delivered: agent messages and settlement notices.
+func relayed(events []session.Event) int {
+	count := 0
+	for _, event := range events {
+		if record := event.Record; record.Type == session.RecordUserMessage && (record.Message.Source.Kind == SourceAgentMessage || record.Message.Source.Kind == SourceSettled) {
+			count++
+		}
+	}
+	return count
+}
+
+// deliveredLocked records one message the agent of a resident child
+// accepted from this service.
+func deliveredLocked(current *child) {
+	current.delivered++
+	wakeLocked(current)
 }
 
 // close releases a child and everything below it. Concurrent callers wait
@@ -594,12 +633,16 @@ func (service *Service) release(ctx context.Context, current *child, notice *ses
 	delete(service.children, current.id)
 	close(current.done)
 	parent := service.children[current.parent]
+	delivered := false
 	if notice != nil && service.active && (parent == nil || !parent.closing) {
 		// The only failure is a parent that is no longer live; the notice
 		// then has no reader, as during teardown.
-		_ = service.registry.Notify(current.parent, *notice)
+		delivered = service.registry.Notify(current.parent, *notice) == nil
 	}
 	if parent != nil {
+		if delivered {
+			parent.delivered++
+		}
 		wakeLocked(parent)
 	}
 	return errors.Join(failures...)
@@ -640,7 +683,7 @@ func (service *Service) deliver(ctx context.Context, sender *agent.Agent, sender
 			return false, &Error{Code: CodeParentUnavailable, Message: "direct parent is not live; the message was not delivered", Err: err}
 		}
 		if parent := service.children[targetID]; parent != nil {
-			wakeLocked(parent)
+			deliveredLocked(parent)
 		}
 		return false, nil
 	}
@@ -660,7 +703,7 @@ func (service *Service) deliver(ctx context.Context, sender *agent.Agent, sender
 		err := target.agent.Notify(agentMessage(senderID, text))
 		if err == nil {
 			acceptedLocked(service, target)
-			wakeLocked(target)
+			deliveredLocked(target)
 		}
 		service.mu.Unlock()
 		if err != nil {

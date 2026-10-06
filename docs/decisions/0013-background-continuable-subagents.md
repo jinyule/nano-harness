@@ -34,7 +34,7 @@
 
 - **前台 one-shot**（`subagent` 且 `run_in_background: false`，或 `subagent_fork` 默认）：创建 child、提交任务、等待唯一一个 turn、读取最终回答、释放 child。调用被取消时释放 child 并返回取消错误。
 - **后台 one-shot**（`subagent_fork` 且 `run_in_background: true`）：child 在调用内创建并写入目录，然后作为 kind `subagent`、owner 为 parent 的 job 运行。job 值结果是 child 的最终回答；完成为 `completed`，取消为 `killed`，其他结局为 `failed`、detail 为 outcome 名称。`job_output`、`job_kill` 按 ADR-0009 读取与终止它。
-- **后台 continuable**（`subagent` 默认）：创建 child、提交任务后立即返回 id。child 驻留（resident）期间接收消息；当它空闲、等待期间没有新投递且没有 continuable 子代理时**结算**：服务关闭 child agent（status 变为 `inactive`），然后通知 parent。之后 parent 的 `send_message` 从 transcript 冷恢复它。
+- **后台 continuable**（`subagent` 默认）：创建 child、提交任务后立即返回 id。child 驻留（resident）期间接收消息；当它空闲、等待期间没有新投递、没有 continuable 子代理，且服务投递给它的消息都已写入日志时**结算**：服务关闭 child agent（status 变为 `inactive`），然后通知 parent。之后 parent 的 `send_message` 从 transcript 冷恢复它。
 
 释放 child 时先中断它，按深度优先释放它的 live 子代理，关闭 agent 与 transcript，再释放它拥有的 job。服务关闭与 one-shot parent 被回收时也按此顺序释放整棵子树，但这些拆除不是结算，不发通知。
 
@@ -71,7 +71,7 @@ session format 仍为 v2，变化都在记录层：
 
 ### 6. job 的 owner 释放
 
-`job.Service.Release(ctx, owner)` 取消 owner 的 live job，等待全部 settle，然后删除该 owner 的全部记录；这些 settle 不发通知。subagent 服务在关闭每个 child agent 后调用它，因此 child 启动的后台 one-shot（及其子树）随 child 结算或拆除一起结束。root 的 job 仍由 `jobs` 插件关闭时回收。
+`job.Service.Release(ctx, owner)` 取消 owner 的 live job，等待全部 settle，然后删除该 owner 的全部记录；这些 settle 不发通知。subagent 服务在关闭每个 child agent 后调用它，因此 child 启动的后台 one-shot（及其子树）随 child 结算或拆除一起结束。root 的 job 仍由 `jobs` 插件关闭时回收。one-shot agent 只在它唯一的 turn 运行期间接受通知，turn 结束后既不接受新通知，也不为来不及投递的通知开启第二个 turn；因此 one-shot child 的后台 job 在其 turn 之后完成时，通知被拒绝并随释放丢弃，报告只来自那一个 turn。
 
 ## 后果
 
@@ -81,7 +81,7 @@ session format 仍为 v2，变化都在记录层：
 
 已知限制：
 
-- 中断后 child 尚未处理的消息在结算关闭 agent 时丢弃；上游会保留驻留直到下一次唤醒投递。
+- 被中断的 turn 不处理已接受但尚未提交的消息。服务按本次驻留投递的消息与结算通知计数，与日志中已提交的 `agent-message`/`subagent-settled` 比较；最后一个 turn 以取消结束且仍有差额时，child 保持驻留（`list_agents` 显示 `inactive`），由下一次投递开启的 turn 一并处理，与上游保留驻留直到下一次唤醒投递一致。parent 不再发送时，消息与池名额保留到服务关闭。
 - 后台任务通知不经过 subagent 服务；它与 child 结算并发到达时可能落在正在关闭的 agent 上而丢失，被释放的 job 本身已经结束。
 - 待投递消息与驻留状态只在内存中；进程崩溃会丢失已接受但尚未写入 child 日志的消息。
 - 目录的读不到状态只报告 `unavailable`，不区分上游的 `corrupt`。
@@ -97,4 +97,4 @@ session format 仍为 v2，变化都在记录层：
 
 ## 复审触发条件
 
-上游改变这些工具的定义、通知文案或授权规则；产品需要子代理写文件、按调用选择模型或跨进程共享 child；需要承诺跨版本恢复旧会话；中断后丢失消息或通知竞态在实际使用中造成问题。
+上游改变这些工具的定义、通知文案或授权规则；产品需要子代理写文件、按调用选择模型或跨进程共享 child；需要承诺跨版本恢复旧会话；被中断后保留驻留的 child 长期占用池名额，或通知竞态在实际使用中造成问题。

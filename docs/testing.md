@@ -66,8 +66,8 @@ loopback HTTP 证明协议实现，不声称证明远端服务部署。真实 pr
 - retry 只发生在没有已提交 stream 内容的可重试失败，并记录 sleep 前/后事实；
 - proactive 与 context-window compaction 保留 raw log，只替换 replay surface；
 - followup、steer、interrupt、idle、one-shot、shutdown drain 和 panic containment；
-- 完成通知在 turn 开始后、工具 step 边界和无工具调用的回答之后作为 `user/message` 提交，回答之后的通知让 turn 继续，最后一步留待下一 turn；空闲 agent 被通知唤醒，排队的 turn 优先投递，被取消的 turn 不自动续开；
-- subagent 的前台/后台 one-shot、后台 continuable 结算与通知、fork 只继承已完成 turn、双向 `send_message` 与冷恢复、直接父子边之外的拒绝矩阵、对后代的 `interrupt_agent`、parent 在 continuable 子代理工作时保持驻留、one-shot parent 回收其子树、池上限与深度上限、目录列表与不可读诊断、释放 child 时结束其 job，以及创建、冷恢复与关闭各阶段的 publication race 和 cleanup failure；
+- 完成通知在 turn 开始后、工具 step 边界和无工具调用的回答之后作为 `user/message` 提交，回答之后的通知让 turn 继续，最后一步留待下一 turn；空闲 agent 被通知唤醒，排队的 turn 优先投递，被取消的 turn 不自动续开，one-shot agent 在唯一 turn 之外拒绝通知且不为来不及投递的通知开启第二个 turn（单 step barrier 构造迟到通知）；
+- subagent 的前台/后台 one-shot、后台 continuable 结算与通知、fork 只继承已完成 turn、双向 `send_message` 与冷恢复、直接父子边之外的拒绝矩阵、对后代的 `interrupt_agent`、先 `send_message` 再中断时 child 保持驻留并在下一次投递时提交两条消息（`parked` 观察点与关闭钩子区分驻留与错误结算）、parent 在 continuable 子代理工作时保持驻留、one-shot parent 回收其子树、池上限与深度上限、目录列表与不可读诊断、释放 child 时结束其 job，以及创建、冷恢复与关闭各阶段的 publication race 和 cleanup failure；
 - 后台任务的 owner 隔离、每 owner 上限、增量读取与 UTF-8 拼接、保留窗口与丢失提示、wait 超时/取消/收走、kill reason、值结果只交出一次、producer panic、owner 释放时取消、等待、不发通知且只删除该 owner 的记录，以及关闭时取消、等待且不发通知；
 - 规划模式选择在 turn 之间立即提交、turn 内只在下一个 step 边界提交，用户切换提示只在最近请求描述另一种模式时出现，获批退出在下一个边界生效，边界写入失败使 turn 失败并保留选择；
 - step 上下文 provider 的贡献在规划模式边界之后、`step/start` 之前按注册顺序提交，后注册者能看到前者的贡献，Scope 关闭后不再运行；provider、日志读写、工具目录失败和取消都结束 turn 且不打开 step；

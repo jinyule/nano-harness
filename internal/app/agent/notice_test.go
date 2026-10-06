@@ -260,3 +260,53 @@ func TestAgent_NoticesFromCanceledTurnWaitForNextTurn(t *testing.T) {
 		t.Fatalf("user messages = %q", texts)
 	}
 }
+
+func TestAgent_OneShotNeverOpensASecondTurnForLateNotices(t *testing.T) {
+	started, gate := make(chan struct{}, 1), make(chan struct{})
+	// One step: the notice that arrives during it is too late for any
+	// boundary of the turn, like a background job that finishes while the
+	// one-shot child writes its answer.
+	harness := startEngineHarness(t, 1,
+		modelAction{started: started, wait: gate, completion: assistantCompletion("only answer")},
+		modelAction{completion: assistantCompletion("second turn")},
+	)
+	registry, _ := startRegistry(t, harness, newMemoryRepository(), newMemoryPolicy())
+	if _, err := registry.Create(context.Background(), CreateRequest{SessionID: "root", Create: true}); err != nil {
+		t.Fatal(err)
+	}
+	child, err := registry.Create(context.Background(), CreateRequest{SessionID: "child", ParentID: "root", Depth: 1, Mode: "one-shot", Provider: session.SubagentSpawn, Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Notify(noticeMessage("before the turn")); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("Notify before the turn = %v", err)
+	}
+	results, err := child.Submit(context.Background(), agentMessage(session.RoleUser, "task"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if err := child.Notify(noticeMessage("job finished")); err != nil {
+		t.Fatalf("Notify during the turn = %v", err)
+	}
+	close(gate)
+	if result := <-results; result.Outcome != session.OutcomeCompleted || result.Text != "only answer" {
+		t.Fatalf("turn = %+v", result)
+	}
+	if err := child.WhenIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := child.Events(context.Background())
+	starts := 0
+	for _, event := range events {
+		if event.Record.Type == session.RecordTurnStart {
+			starts++
+		}
+	}
+	if starts != 1 || child.Status().Last.Turn != 1 {
+		t.Fatalf("one-shot ran %d turns: %+v", starts, child.Status())
+	}
+	if err := child.Notify(noticeMessage("after the turn")); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("Notify after the turn = %v", err)
+	}
+}

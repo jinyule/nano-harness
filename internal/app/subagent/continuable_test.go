@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	jsonl "github.com/jinyule/nano-harness/internal/adapter/session/jsonl"
 	"github.com/jinyule/nano-harness/internal/app/agent"
@@ -741,4 +742,63 @@ func TestService_DeliveryEdgeCases(t *testing.T) {
 	}
 	rootCall.release <- "released"
 	receive(t, results)
+}
+
+func TestService_InterruptedChildKeepsDeliveredMessages(t *testing.T) {
+	previousParked, previousClose := parked, closeAgent
+	t.Cleanup(func() { parked, closeAgent = previousParked, previousClose })
+	h := startHarness(t,
+		rule{match: "ROOT_HOLD", first: reply{hold: true}, then: reply{text: "root done"}},
+		rule{match: "CHILD_TASK", first: reply{block: true}},
+		rule{match: "sent a message: AGAIN", first: reply{text: "handled both"}},
+	)
+	rootCall, results := h.submit("ROOT_HOLD")
+	id, err := h.service.StartContinuable(context.Background(), start(rootCall, "worker", "CHILD_TASK", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receive(t, h.model.blocked)
+	parkedChild, closed := make(chan string, 4), make(chan string, 4)
+	parked = func(id string) { parkedChild <- id }
+	closeAgent = func(registry *agent.Registry, ctx context.Context, target string) error {
+		closed <- target
+		return previousClose(registry, ctx, target)
+	}
+	// The message is accepted while the child's model request runs; the
+	// interrupt cancels the turn before any boundary commits the message.
+	if err := h.service.SendMessage(context.Background(), "root", id, "QUEUED"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.Interrupt("root", id); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case parkedID := <-parkedChild:
+		if parkedID != id {
+			t.Fatalf("parked %q", parkedID)
+		}
+	case closedID := <-closed:
+		t.Fatalf("child %q settled with an accepted message still queued", closedID)
+	case <-time.After(waitLimit):
+		t.Fatal("watcher neither parked nor settled")
+	}
+	if outcome, _ := session.LastOutcome(h.events(id)); outcome != session.OutcomeCanceled {
+		t.Fatalf("interrupted turn outcome = %q", outcome)
+	}
+	// The next delivery wakes the resident child, which handles both messages.
+	parked = previousParked
+	if err := h.service.SendMessage(context.Background(), "root", id, "AGAIN"); err != nil {
+		t.Fatal(err)
+	}
+	receive(t, h.done(id))
+	relayed := messages(h.events(id), SourceAgentMessage)
+	if len(relayed) != 2 || relayed[0] != "Agent root sent a message: QUEUED" || relayed[1] != "Agent root sent a message: AGAIN" {
+		t.Fatalf("child messages = %q", relayed)
+	}
+	rootCall.release <- "released"
+	receive(t, results)
+	h.idle(h.root)
+	if notices := messages(h.events("root"), SourceSettled); len(notices) != 1 || !strings.HasSuffix(notices[0], "Its closing message:handled both") {
+		t.Fatalf("root notices = %q", notices)
+	}
 }
