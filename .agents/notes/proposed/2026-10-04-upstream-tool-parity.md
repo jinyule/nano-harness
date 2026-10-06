@@ -50,9 +50,9 @@
 | WP10 | 长期目标 `create_goal`/`get_goal`/`update_goal` 与 round driver | WP3、WP8 | 0016 | 已合入 `d8ba519` |
 | WP11 | 图片移入会话日志之外的内容寻址附件存储（对齐上游 `attachment`/`attachment-local`），`/attach` 与 `read_image` 共用 | WP9 | 0017 | 已合入 `4e9d97e`（含透明缩放修复与转换并发上限 2） |
 | WP12 | 结构化工具结果：所有工具产出上游的错误分类（name/code/info）与结果 `meta` 并持久化到 `tool/result`；模型可见文本不变，TUI 卡片暂缓 | 小修合入后 | 0019 | 待开始 |
-| WP13 | compaction 先做上游 tool-result-pruner 的无模型裁剪（首 4096、尾 1024 码点，持久化裁剪事实），再决定是否摘要 | — | 0020 | 进行中（opus，自 Codex 队列改派） |
+| WP13 | compaction 先做上游 tool-result-pruner 的无模型裁剪（首 4096、尾 1024 码点，持久化裁剪事实），再决定是否摘要 | — | 0020 | 已合入 `57b56a9`（与 B3 截断摘要修复合为一个提交；opus 实现，B3 因每周限额由 Codex 接手完成） |
 | WP14 | 会话级 sandbox 模式：read-only、workspace-write、danger-full-access 三档，持久化 `sandbox/mode` 与策略上下文；Linux sandbox 与上游一致放开网络 | WP11 后的路径与 runner 修复 | 0021 | 待开始 |
-| WP15 | web_search 发送前持久化检索请求（route、endpoint、预算），写入失败不发送 | — | 0022 | 已实现，见[实施证据](../implemented/2026-10-06-web-search-request-audit.md) |
+| WP15 | web_search 发送前持久化检索请求（route、endpoint、预算），写入失败不发送 | — | 0022 | 已合入 `0eb3586`，见[实施证据](../implemented/2026-10-06-web-search-request-audit.md) |
 | WP16 | job 完成通知持久化（对齐上游 durable inbox），重启后未送达的完成事实不丢失 | WP3 engine 修复 | 0023 | 已合入 `27a6e8f` |
 
 ### 跨工作包决策记录
@@ -96,7 +96,7 @@
 | spill 清理顺序、`write` 大文件校验、spill root 位置、长工具名 | Suggestion | WP2 | 已合入 `ec3c142` |
 | 会话被内联图片写满 | Suggestion | WP9 | 已合入 `fe565ad`；WP11 迁移附件存储后容量检查已删除（`4e9d97e`） |
 | `TestComposition_SubagentsEndToEnd`、web 关闭测试偶发失败 | 测试缺陷 | WP7、WP5 | 已合入 `d9ad07b`、`87316d1` |
-| settings 写锁偶发失败 `TestProviderWatchAndAtomicFailures` | 产品缺陷 | Codex | 已合入 `ae02f02`：取消被锁超时掩盖、取消后仍写入；credentials 锁的同类排查进行中 |
+| settings 写锁偶发失败 `TestProviderWatchAndAtomicFailures` | 产品缺陷 | Codex | 已合入 `ae02f02`：取消被锁超时掩盖、取消后仍写入；credentials 锁的同类缺陷已合入 `f36621c` |
 | spill 会话目录可被预置 symlink 引出存储分区（Codex 审查） | Blocker | Codex-B | 已合入（Codex-B，另修 `approval/decided` 多余 `call_id`） |
 | 目标轮次开场持久化失败后 driver 无限重排同一轮（Codex 审查） | Blocker | Codex-A | 已合入（Codex-A） |
 | 输出 token 上限截断被记为正常完成，目标继续自动推进（Codex 审查；上游在 max-tokens 时 disarm） | Blocker | Codex-A | 已合入（Codex-A） |
@@ -120,13 +120,22 @@
 | subagent 工具族（`0073dfb`） | 默认分支与常规文案对齐 | 正确性：并发创建重复计数、已取消 send_message 仍投递、中断后新消息不唤醒、清理失败仍宣告成功、后台 fork 准入顺序、closing output 选择、description 截断（已派 Codex-K1）。设计：child 未固定并持久化继承的 route、委派说明放在 system prompt 破坏 fork 前缀、发送者身份未持久化（待 H2 合入后派发）；生命周期事件与回执暂缓（无消费者） |
 | 交互与会话状态（`0073dfb`） | todo、提问、规划、goal、skill 主路径对齐 | todo/goal/plan 与 `/goal edit` 的 ECMAScript 空白、skill 描述按 UTF-16 计数、todo 重复项引用格式、TUI 多选不能补充自由回答、发现不完整时 `/name` 被静默吞掉；结构化错误（WP12）。待 Codex-E（共享空白判断）合入后派发 |
 
-审计小修合入进度：文件工具（Codex-H1）`7269f8f`；搜索、spill 与共享 ECMAScript 空白判断（Codex-E）`3fa09d6`；job 前台交接与回退归属（Codex-C）`596ed4d`。web 传输层（Codex-F）`27eb355`；HTML 转换语义与抓取输出预算（Codex-G）`5acbfac`；运行时（Codex-H2 `37358cb`）已提交、rebase 冲突较多，交回 Codex 处理；运行时（Codex-H2）`726a95f`；settings 锁偶发失败 `ae02f02` 与 credentials 锁同类缺陷 `f36621c`；WP15 `0eb3586`；subagent 正确性 K1 `1a3568a`；WP16 `27a6e8f`；审计 5 的 Unicode 与交互修复 `8f7ef08`。审计 3 的 shell 修复、WP13、WP14、WP12 设计进行中。2026-10-06 晚 opus 子 agent 撞上每周限额（10/12 恢复），其未完成工作已转交 Codex。
+审计小修合入进度：文件工具（Codex-H1）`7269f8f`；搜索、spill 与共享 ECMAScript 空白判断（Codex-E）`3fa09d6`；job 前台交接与回退归属（Codex-C）`596ed4d`。web 传输层（Codex-F）`27eb355`；HTML 转换语义与抓取输出预算（Codex-G）`5acbfac`；运行时（Codex-H2 `37358cb`）已提交、rebase 冲突较多，交回 Codex 处理；运行时（Codex-H2）`726a95f`；settings 锁偶发失败 `ae02f02` 与 credentials 锁同类缺陷 `f36621c`；WP15 `0eb3586`；subagent 正确性 K1 `1a3568a`；WP16 `27a6e8f`；审计 5 的 Unicode 与交互修复 `8f7ef08`。审计 3 的 shell 修复（`789a147`，与 B5 一起等合入）、WP14、WP12 设计进行中；WP13 已合入 `57b56a9`。2026-10-06 晚 opus 子 agent 撞上每周限额（10/12 恢复），其未完成工作已转交 Codex。
 
 ### 第二轮审查（`25a304d..bbfd8a5`，Codex）
 
 对已合入修复的复审又发现 5 个 Blocker，均已分派：B1 旧轮次的结算撤销新 goal 授权（Codex goal 会话）；B2 多层解压绕过字节预算且不响应取消（Codex fetch 会话）；B3 截断的 compaction 摘要被成功落盘（并入 opus WP13）；B4 同一附件 ID 的后续引用跳过元数据校验（opus）；B5 前台超时到交接之间取消仍交出存活进程（Codex shell 会话）。另有建议：plan cleanup 应等待会话锁内的调用；ADR-0017 中关于 `/attach` 孤儿对象的文案过时。
 
-进度：B2 `37da286` 已合入。B3、B4 因 opus 每周限额转交 Codex，与 B1、B5 一起在进行。ADR-0017 的 `/attach` 文案并入 B4。plan cleanup 建议项与 subagent 设计项 K2 已写成任务说明，交给 opus 子 agent。
+进度：B2 `37da286`、B4 `6728b56`（含 ADR-0017 `/attach` 文案）、B1 `27ad50b`、B3（与 WP13 合为 `57b56a9`）已合入；B5 与审计 3 的 shell 修复一起等合入。plan cleanup 建议项已完成（`76f2758`，等合入），其排查发现 approval、retry、compaction 有同类关闭窗口，另开任务处理。subagent 设计项 K2 交给 opus。
+
+### 第三轮增量审查（`bbfd8a5..d7d199d`，opus）
+
+三位 opus 审查者分 agent、tools、wiring 三块审查第二轮之后合入的 7 个提交。
+
+- agent：A1 唤醒 turn 开场时被打断会留下未闭合的 `turn/start`，之后每个 turn 都被拒绝直到重启；A2 `claimWake` 已取出的通知在开场被取消时不再投递（非持久化消息永久丢失）。两者都是 Blocker，交 opus 修复。A3 one-shot 的 `QueueNotice` 提交后入队被拒（Suggestion），一并处理。
+- tools：无 Blocker。S1 单层压缩响应的网络输入没有上限，N1 审计记录未核对检索词与调用参数，N2 空白判断重复实现，交 Codex。
+- wiring：B1“运行时把已执行的成功结果改成 aborted”**驳回**：上游 `packages/core/tools/src/index.ts:1581-1584` 同样在 body 执行后发现取消时返回 `toolAbortedResult`，agent 审查者也核对为一致。B2 后台命令超过约 256 KiB 时完成通知被拒且 job 服务吞掉错误（726a95f 的参数上限与 WP16 的跨提交冲突），交 opus。S1 ADR-0022 的 query 上限与代码不一致、S2 省略参数的 web_search 审计条件无测试保护、S3 fetch/file 附加 mutation 清单不进门禁、N3 composition token 注释口径，交 Codex。
+- 集成分支另有偶发失败 `TestService_SendMessageRoundTripAndColdResume`（`release` 先关闭 done 再投递结算通知），多次打断合入门禁，交 opus 写确定性测试修复。
 
 ### 后续项（不在本次范围）
 
