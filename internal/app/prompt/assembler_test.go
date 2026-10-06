@@ -28,10 +28,11 @@ func TestAssemblerLifecycleAndSections(t *testing.T) {
 		t.Fatal("double start")
 	}
 	prompt, err := assembler.Build(Input{
-		Workspace: "/work", Provider: "openai", Model: "model", Persona: "reviewer", Delegated: true,
+		Workspace: "/work", Provider: "openai", Model: "model", Persona: "reviewer",
 		Tools: []session.ToolDefinition{{Name: "z"}, {Name: "a"}}, Guidance: []string{"first guidance", "second guidance"},
 	})
-	if err != nil || !strings.Contains(prompt, "Delegation:") || !strings.Contains(prompt, "reviewer") || !strings.Contains(prompt, "sandbox escalation") {
+	// Delegation scope is runtime context, never a child-only system section.
+	if err != nil || strings.Contains(prompt, "Delegation:") || !strings.Contains(prompt, "reviewer") {
 		t.Fatalf("prompt=%q err=%v", prompt, err)
 	}
 	for _, policy := range []string{

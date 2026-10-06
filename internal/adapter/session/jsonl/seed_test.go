@@ -35,7 +35,7 @@ func TestOpen_SeedsANewSessionAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor := coresession.Record{Type: coresession.RecordSubagentDescriptor, Subagent: &coresession.SubagentDescriptor{Version: 2, Provider: coresession.SubagentFork, Mode: coresession.SubagentOneShot, Label: "fork", Inherited: uint64(len(seed))}}
+	descriptor := coresession.Record{Type: coresession.RecordSubagentDescriptor, Subagent: &coresession.SubagentDescriptor{Version: 3, Route: coresession.SubagentRoute{Provider: "openai", Model: "model", Effort: coresession.EffortMax}, Provider: coresession.SubagentFork, Mode: coresession.SubagentOneShot, Label: "fork", Inherited: uint64(len(seed))}}
 	event, err := child.Append(context.Background(), descriptor)
 	if err != nil || event.Sequence != uint64(len(seed)+1) {
 		t.Fatalf("descriptor = %#v, %v", event, err)

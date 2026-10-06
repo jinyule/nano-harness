@@ -81,14 +81,15 @@ func (*testModel) Search(context.Context, llm.Credential, llm.SearchRequest) (ll
 }
 
 // latestUser returns the text of the last user message and whether a tool
-// result follows it.
+// result follows it. Runtime context is harness input, not a task, so it
+// is skipped.
 func latestUser(request llm.Request) (string, bool) {
 	answered := false
 	for _, node := range slices.Backward(request.Surface) {
 		if node.Result != nil {
 			answered = true
 		}
-		if node.Message != nil && node.Message.Role == session.RoleUser {
+		if node.Message != nil && node.Message.Role == session.RoleUser && node.Message.Source.Kind != SourceRuntimeContext {
 			return session.Text(*node.Message), answered
 		}
 	}
@@ -171,7 +172,10 @@ type noArguments struct{}
 type harness struct {
 	t            *testing.T
 	model        *testModel
+	settings     *settings.Service
+	engine       *agent.Engine
 	manager      *jsonl.Manager
+	sessionRoot  string
 	registry     *agent.Registry
 	root         *agent.Agent
 	jobs         *job.Service
@@ -200,6 +204,7 @@ func startHarness(t *testing.T, rules ...rule) *harness {
 		}
 	})
 	configuration := settings.New()
+	h.settings = configuration
 	start(configuration)
 	models, _ := llm.New(testStore{}, noImages{})
 	start(models)
@@ -241,7 +246,9 @@ func startHarness(t *testing.T, rules ...rule) *harness {
 		t.Fatal(err)
 	}
 	start(engine)
-	h.manager, err = jsonl.New(jsonl.Config{Root: filepath.Join(t.TempDir(), "sessions"), CompositionID: strings.Repeat("a", 64)})
+	h.engine = engine
+	h.sessionRoot = filepath.Join(t.TempDir(), "sessions")
+	h.manager, err = jsonl.New(jsonl.Config{Root: h.sessionRoot, CompositionID: strings.Repeat("a", 64)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +265,7 @@ func startHarness(t *testing.T, rules ...rule) *harness {
 		t.Fatal(err)
 	}
 	h.jobs, _ = job.New(h.registry)
-	h.service, err = New(h.registry, h.jobs, h.manager)
+	h.service, err = New(h.registry, h.jobs, h.manager, h.engine)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -49,6 +49,8 @@ WP3 的 [ADR-0009](../../../docs/decisions/0009-background-jobs.md) 要求引入
 
 fork 种子复制 parent 的全部事件，包括 WP8 的 `plan/mode` 与 WP6 的 skill 上下文消息，因此 fork child 继承 parent 当时的规划模式；上游 plan 投影同样折叠 fork 继承的日志（“resume and fork restore the state”）。以后新增的会话状态投影若不应被 fork 继承，应只读 `session.OwnEvents`。
 
+child 固定继承 route、委派说明改为 runtime context 与消息发送者身份由 [K2 Note](2026-10-06-subagent-route-context-sender.md) 记录。
+
 与上游的差异：深度上限保持本仓既有的固定 4（上游设置默认 1），池上限固定 8；`interrupt_agent` 对 live one-shot 后代同样有效；目录读取失败只报告 `unavailable`；结算 watcher 不等待 child 的后台 job，结算时由 owner 释放结束它们，与上游一致。
 
 ## Consequences

@@ -90,7 +90,10 @@ func TestAgent_SubmitFollowupSubscribeAndSnapshots(t *testing.T) {
 		t.Fatalf("manual compaction = %v, %v", compacted, err)
 	}
 
-	oneShot, err := registry.Create(context.Background(), CreateRequest{SessionID: "one", ParentID: "root", Depth: 1, Mode: "one-shot", Provider: session.SubagentSpawn, Create: true})
+	// A delegated agent sends every request on the route it inherited, not
+	// the hot settings route (whose catalog effort is max).
+	inherited := session.SubagentRoute{Provider: "openai", Model: "gpt-5.6-luna", Effort: session.EffortLow}
+	oneShot, err := registry.Create(context.Background(), CreateRequest{SessionID: "one", ParentID: "root", Depth: 1, Mode: "one-shot", Provider: session.SubagentSpawn, Route: inherited, Create: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +106,18 @@ func TestAgent_SubmitFollowupSubscribeAndSnapshots(t *testing.T) {
 	}
 	if result := <-completed; result.Outcome != session.OutcomeCompleted {
 		t.Fatalf("one-shot result = %+v", result)
+	}
+	oneEvents, _ := oneShot.Events(context.Background())
+	for _, event := range oneEvents {
+		if header := event.Record.Header; header != nil && header.Effort != session.EffortLow {
+			t.Fatalf("inherited request header = %+v", header)
+		}
+	}
+	harness.model.mu.Lock()
+	last := harness.model.seen[len(harness.model.seen)-1]
+	harness.model.mu.Unlock()
+	if last.Effort == nil || *last.Effort != session.EffortLow {
+		t.Fatalf("inherited request effort = %v", last.Effort)
 	}
 	if _, err := oneShot.Submit(context.Background(), agentMessage(session.RoleUser, "twice")); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("second one-shot Submit() error = %v", err)

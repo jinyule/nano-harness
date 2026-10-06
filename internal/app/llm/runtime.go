@@ -203,6 +203,10 @@ type Request struct {
 	Surface   []session.SurfaceNode
 	Tools     []session.ToolDefinition
 	MaxTokens int
+	// Effort, when set, is the exact effort to send ("" omits it) in place
+	// of the prepared model's catalog effort, so the request carries the
+	// effort its request header froze. Nil keeps the catalog effort.
+	Effort *session.Effort
 	// Images holds the verified bytes of every image the surface references,
 	// keyed by image ID. Call.Stream fills it after the request image budget
 	// is applied; providers encode only these bytes.

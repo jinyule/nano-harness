@@ -388,7 +388,7 @@ func TestService_ColdResumeFailures(t *testing.T) {
 		"other parent": {"other", session.SubagentContinuable, CodeUnauthorized},
 		"one-shot":     {"root", session.SubagentOneShot, CodeNotResumable},
 	} {
-		stray, err := h.registry.Create(context.Background(), agent.CreateRequest{ParentID: test.parent, Mode: test.mode, Provider: session.SubagentSpawn, Label: "stray", Depth: 1, Create: true})
+		stray, err := h.registry.Create(context.Background(), agent.CreateRequest{ParentID: test.parent, Mode: test.mode, Provider: session.SubagentSpawn, Route: testRoute, Label: "stray", Depth: 1, Create: true})
 		if err != nil {
 			t.Fatal(err)
 		}

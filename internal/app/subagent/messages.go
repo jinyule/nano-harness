@@ -11,22 +11,37 @@ import (
 const (
 	// SourceDelegation marks the task a parent assigned when it created a child.
 	SourceDelegation = "delegation"
-	// SourceAgentMessage marks a message another agent sent with send_message.
-	SourceAgentMessage = "agent-message"
+	// SourceAgentMessage marks a message another agent sent with send_message;
+	// its source names the sending session.
+	SourceAgentMessage = session.SourceAgentMessage
 	// SourceSettled marks the service's own account of a background child
-	// that finished. It is distinct from SourceAgentMessage so a transcript
-	// never credits the child with words it did not write.
-	SourceSettled = "subagent-settled"
+	// that finished; its source names that child. It is distinct from
+	// SourceAgentMessage so a transcript never credits the child with words
+	// it did not write.
+	SourceSettled = session.SourceSubagentSettled
+	// SourceRuntimeContext marks a delegated child's runtime-context
+	// snapshot, which states its fixed permission scope.
+	SourceRuntimeContext = "runtime-context"
 )
 
-func textMessage(source string, texts ...string) session.Message {
+// delegationContext is the upstream delegation-scope statement, contributed
+// as runtime context so a child's system prompt matches its parent's.
+const delegationContext = "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n" +
+	"You are a delegated subagent: your permission scope was fixed when you were started and cannot be " +
+	"widened from inside this session — operations that require approval are rejected automatically. " +
+	"When the task needs access beyond that scope, do not retry the denied operation; state the " +
+	"limitation in your reply so the delegating agent can handle it."
+
+// textMessage builds a user message from the non-empty texts. sender names
+// the session that produced it, for the kinds that record one.
+func textMessage(source, sender string, texts ...string) session.Message {
 	blocks := make([]session.ContentBlock, 0, len(texts))
 	for _, text := range texts {
 		if text != "" {
 			blocks = append(blocks, session.ContentBlock{Type: session.ContentText, Text: text})
 		}
 	}
-	return session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: source}, Content: blocks}
+	return session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: source, SenderSessionID: sender}, Content: blocks}
 }
 
 // taskMessage is a child's opening message. A continuable child is also told
@@ -45,12 +60,12 @@ func taskMessage(prompt, parentID string, continuable bool) session.Message {
 		"your workspace but does not automatically receive your transcript, tool output, or reasoning. Send " +
 		"earlier messages as well when a finding changes what the parent should do next; sending a message " +
 		"does not end your turn."
-	return textMessage(SourceDelegation, prompt, guidance)
+	return textMessage(SourceDelegation, "", prompt, guidance)
 }
 
 // agentMessage is the recipient's view of one send_message call.
 func agentMessage(senderID, text string) session.Message {
-	return textMessage(SourceAgentMessage, "Agent "+senderID+" sent a message: ", text)
+	return textMessage(SourceAgentMessage, senderID, "Agent "+senderID+" sent a message: ", text)
 }
 
 // settlementSummary is the one-line account of how a background child's
@@ -74,7 +89,7 @@ func settlementSummary(childID string, outcome session.TurnOutcome) string {
 // the child's closing text when it left any.
 func settlementMessage(childID string, outcome session.TurnOutcome, closing string) session.Message {
 	if closing == "" {
-		return textMessage(SourceSettled, settlementSummary(childID, outcome), "It left no closing message.")
+		return textMessage(SourceSettled, childID, settlementSummary(childID, outcome), "It left no closing message.")
 	}
-	return textMessage(SourceSettled, settlementSummary(childID, outcome), "Its closing message:", closing)
+	return textMessage(SourceSettled, childID, settlementSummary(childID, outcome), "Its closing message:", closing)
 }

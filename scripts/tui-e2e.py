@@ -49,10 +49,12 @@ class Fixture(http.server.BaseHTTPRequestHandler):
             return
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         inputs = body["input"]
-        users = [i for i, item in enumerate(inputs) if item.get("role") == "user"]
-        last_user = users[-1]
         def user_text(index):
             return " ".join(block.get("text", "") for block in inputs[index]["content"])
+        # A delegated child's runtime context is harness input, not a task.
+        users = [i for i, item in enumerate(inputs) if item.get("role") == "user"
+                 and not user_text(i).startswith("Current runtime context.")]
+        last_user = users[-1]
         task = user_text(last_user)
         if "switched this session" in task and len(users) > 1:
             # A plan-mode notice follows the user's own message in the same turn.
@@ -391,6 +393,9 @@ def verify(binary):
                 own = child_records[descriptors[-1].get("inherited", 0):]
                 assert own[0]["type"] == "subagent/descriptor" and own[0]["subagent"]["mode"] == "one-shot", own[0]
                 assert own[1]["type"] == "approval/policy" and own[1]["approval"]["policy"] == "never", own[1]
+                assert own[0]["subagent"]["route"] == {"provider": "openai", "model": "fixture"}, own[0]
+                assert [entry for entry in own if entry["type"] == "user/message"
+                        and entry["message"]["source"]["kind"] == "runtime-context"], "missing delegation runtime context"
                 assert [entry["outcome"] for entry in own if entry["type"] == "turn/end"] == ["completed"], own
                 if label == "reader":
                     assert own[0]["subagent"]["provider"] == "spawn" and own[0]["subagent"].get("inherited", 0) == 0

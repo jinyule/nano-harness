@@ -132,7 +132,7 @@ func (registry *Registry) Create(ctx context.Context, request CreateRequest) (*A
 	if request.Mode == "" {
 		request.Mode = "continuable"
 	}
-	if request.Mode != "one-shot" && request.Mode != "continuable" || request.Depth < 0 || request.Depth > 16 || request.ParentID == "" && (request.Depth != 0 || request.Provider != "" || len(request.Seed) > 0) || request.ParentID != "" && request.Depth == 0 {
+	if request.Mode != "one-shot" && request.Mode != "continuable" || request.Depth < 0 || request.Depth > 16 || request.ParentID == "" && (request.Depth != 0 || request.Provider != "" || request.Route != (session.SubagentRoute{}) || len(request.Seed) > 0) || request.ParentID != "" && request.Depth == 0 {
 		return nil, ErrInvalidConfig
 	}
 	registry.mu.Lock()
@@ -160,7 +160,7 @@ func (registry *Registry) Create(ctx context.Context, request CreateRequest) (*A
 	}
 	if request.Create {
 		if request.ParentID != "" {
-			descriptor := &session.SubagentDescriptor{Version: session.SubagentDescriptorVersion, Provider: request.Provider, Mode: request.Mode, Label: request.Label, Persona: request.Persona, Tools: slices.Clone(request.Tools), Inherited: uint64(len(request.Seed))}
+			descriptor := &session.SubagentDescriptor{Version: session.SubagentDescriptorVersion, Provider: request.Provider, Mode: request.Mode, Label: request.Label, Route: request.Route, Persona: request.Persona, Tools: slices.Clone(request.Tools), Inherited: uint64(len(request.Seed))}
 			if _, err := ownedJournal.Append(ctx, session.Record{Type: session.RecordSubagentDescriptor, Subagent: descriptor}); err != nil {
 				_ = ownedJournal.Close(context.WithoutCancel(ctx))
 				return nil, err
@@ -188,7 +188,7 @@ func (registry *Registry) Create(ctx context.Context, request CreateRequest) (*A
 	agent := &Agent{
 		engine: registry.engine, journal: ownedJournal, parentID: request.ParentID,
 		label: request.Label, mode: request.Mode, persona: request.Persona,
-		tools: slices.Clone(request.Tools), depth: request.Depth, delegated: request.ParentID != "",
+		tools: slices.Clone(request.Tools), depth: request.Depth, delegated: request.ParentID != "", route: request.Route,
 		turns: make(chan turnRequest, 32), steers: make(chan session.Message, 32), done: make(chan struct{}), wake: make(chan struct{}, 1),
 		// Notices this session still owes wait for its next turn, as
 		// upstream's durable inbox does; resuming opens no turn for them.
@@ -222,6 +222,7 @@ func restoreRequest(request CreateRequest, header session.Header, events []sessi
 		if event.Record.Type == session.RecordSubagentDescriptor {
 			request.Label = event.Record.Subagent.Label
 			request.Mode = event.Record.Subagent.Mode
+			request.Route = event.Record.Subagent.Route
 			request.Persona = event.Record.Subagent.Persona
 			request.Tools = slices.Clone(event.Record.Subagent.Tools)
 		}

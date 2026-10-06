@@ -180,7 +180,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 ## Subagent 与生命周期
 
 - subagent 是同进程的独立 agent/session，不启动外部 Codex/Claude 进程，也不共享可变 transcript。fork child 复制 parent 已完成 turn 的事件作为自己日志的前缀，之后两者独立追加；复制内容与 parent 一样是模型可见数据，可能包含工具输出和图片引用；图片对象由两者共享，不复制字节。
-- delegated session 的 approval 策略在创建时持久化为 `never`，fork 复制的 parent `ask` 策略被其后的 `never` 覆盖；child 因此不能写文件、运行 `bash` 或请求 sandbox 升级。最大 delegation depth 为 4，每个 continuable 池最多 8 个驻留 child。
+- delegated session 的 approval 策略在创建时持久化为 `never`，fork 复制的 parent `ask` 策略被其后的 `never` 覆盖；child 因此不能写文件、运行 `bash` 或请求 sandbox 升级。这一权限范围以 runtime context 告诉 child（审批会自动拒绝、不要重试被拒操作、向委派方说明限制）；它只是模型指引，执行点的拒绝不依赖它。最大 delegation depth 为 4，每个 continuable 池最多 8 个驻留 child。
 - 授权以精确的 live 调用方 session 与持久化 lineage 为准，不信任模型提供的身份：
 
 | 操作 | 允许 | 拒绝 |
@@ -191,7 +191,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 | `list_agents` | 调用方自己的目录及其后代目录 | 其他 session 的目录 |
 
 - `send_message` 在调度前与收件箱接受时检查取消，被拒消息不入队也不写日志；description/prompt 的原样保存、显式大小上限与后台 job 的先准入规则见 [ADR-0013](decisions/0013-background-continuable-subagents.md)。
-- 消息以 `agent-message`、结算以 `subagent-settled` source kind 写入，只表示来源，不授予权限；接收方仍按自己的策略执行工具。
+- 消息以 `agent-message`、结算以 `subagent-settled` source kind 写入，并持久化发送方会话 `sender_session_id`，只表示来源，不授予权限；授权仍按 live 调用方与目录 lineage 判定，不读取该字段；接收方仍按自己的策略执行工具。
 - delegated agent 只能访问自己的 job；后台 one-shot child 的 job 属于创建它的 parent。child 被释放时，服务以 `job.Service.Release` 取消并等待它拥有的 job，不留下无人读取的后台工作。
 - 列表只返回 session id、标签、模式、深度、运行状态和不可读诊断，不返回账户、prompt 或 child 输出。
 - plugin shutdown 先停止发布新工作和结算 watcher，再从最深处起中断并关闭 child、等待 worker 退出、释放 writer lock 与 job。goroutine、listener、临时目录和 registry contribution 必须由创建它的 Scope 回收。

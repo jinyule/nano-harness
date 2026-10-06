@@ -43,15 +43,16 @@ type Status struct {
 }
 
 // CreateRequest defines a root or delegated agent. A created delegated
-// agent records Provider ("spawn" or "fork") in its descriptor; Seed is the
-// closed prefix of the parent's events a fork starts with. Roots take
-// neither.
+// agent records Provider ("spawn" or "fork") and the Route it inherited in
+// its descriptor; Seed is the closed prefix of the parent's events a fork
+// starts with. Roots take none of them and follow the hot settings route.
 type CreateRequest struct {
 	SessionID string
 	ParentID  string
 	Label     string
 	Mode      string
 	Provider  string
+	Route     session.SubagentRoute
 	Persona   string
 	Tools     []string
 	Seed      []session.Event

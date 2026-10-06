@@ -206,6 +206,18 @@ func TestProviderProtocolsAndLifecycle(t *testing.T) {
 		if err != nil || session.Text(completion.Message) != "hello" || len(completion.Calls) != 1 || len(chunks) == 0 {
 			t.Fatalf("%s completion=%#v chunks=%#v err=%v", id, completion, chunks, err)
 		}
+		// A request effort replaces the catalog effort: the loopback server
+		// accepts only "max", so an override to "" is sent and refused.
+		pinned, omitted := providerRequest(), providerRequest()
+		maximum, none := session.EffortMax, session.Effort("")
+		pinned.Effort, omitted.Effort = &maximum, &none
+		if _, err := prepared.Stream(context.Background(), llm.Credential{Kind: llm.CredentialAPIKey, APIKey: "key"}, pinned, func(session.AssistantChunk) error { return nil }); err != nil {
+			t.Fatalf("%s pinned effort=%v", id, err)
+		}
+		var refused *llm.Error
+		if _, err := prepared.Stream(context.Background(), llm.Credential{Kind: llm.CredentialAPIKey, APIKey: "key"}, omitted, func(session.AssistantChunk) error { return nil }); !errors.As(err, &refused) || refused.HTTPStatus != http.StatusBadRequest {
+			t.Fatalf("%s omitted effort override=%v", id, err)
+		}
 		if id != "openrouter" {
 			oauth := llm.Credential{Kind: llm.CredentialOAuth, AccessToken: "access", RefreshToken: "refresh", AccountID: "account"}
 			if _, err := prepared.Stream(context.Background(), oauth, providerRequest(), func(session.AssistantChunk) error { return nil }); err != nil {

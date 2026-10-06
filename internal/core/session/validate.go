@@ -111,6 +111,10 @@ func validateMessage(message Message, user bool) error {
 	if message.Source.NoticeID != "" && (!user || validateIdentifier("notice ID", message.Source.NoticeID, 128) != nil) {
 		return invalid("notice ID is invalid")
 	}
+	relayed := message.Source.Kind == SourceAgentMessage || message.Source.Kind == SourceSubagentSettled
+	if relayed != (message.Source.SenderSessionID != "") || relayed && (!user || validateIdentifier("sender session ID", message.Source.SenderSessionID, 64) != nil) {
+		return invalid("message sender is invalid")
+	}
 	for index, block := range message.Content {
 		if err := validateContent(block); err != nil {
 			return invalid("content %d: %v", index, err)
@@ -370,7 +374,7 @@ func (record Record) requireSubagent() error {
 		return invalid("subagent/descriptor shape is invalid")
 	}
 	data := record.Subagent
-	if data.Version != SubagentDescriptorVersion || data.Provider != SubagentSpawn && data.Provider != SubagentFork || data.Provider == SubagentSpawn && data.Inherited != 0 || !validSubagentMode(data.Mode) || !validSubagentLabel(data.Label) || len(data.Persona) > 4096 || len(data.Tools) > 32 {
+	if data.Version != SubagentDescriptorVersion || data.Provider != SubagentSpawn && data.Provider != SubagentFork || data.Provider == SubagentSpawn && data.Inherited != 0 || !validSubagentMode(data.Mode) || !validSubagentLabel(data.Label) || !validSubagentRoute(data.Route) || len(data.Persona) > 4096 || len(data.Tools) > 32 {
 		return invalid("subagent descriptor fields are invalid")
 	}
 	for _, tool := range data.Tools {
@@ -394,6 +398,10 @@ func (record Record) requireCatalog() error {
 
 func validSubagentMode(mode string) bool {
 	return mode == SubagentOneShot || mode == SubagentContinuable
+}
+
+func validSubagentRoute(route SubagentRoute) bool {
+	return validateIdentifier("subagent route provider", route.Provider, 64) == nil && validateIdentifier("subagent route model", route.Model, 256) == nil && (route.Effort == "" || ValidEffort(route.Effort))
 }
 
 func validSubagentLabel(label string) bool {

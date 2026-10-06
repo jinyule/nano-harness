@@ -249,7 +249,7 @@ func TestAgent_ForkOwesNoneOfItsParentsNotices(t *testing.T) {
 	if owed := session.PendingNotices(seed); len(owed) != 1 {
 		t.Fatalf("seed owes %d notices", len(owed))
 	}
-	child, err := registry.Create(context.Background(), CreateRequest{SessionID: "fork", ParentID: "root", Label: "fork", Mode: "continuable", Provider: session.SubagentFork, Seed: seed, Depth: 1, Create: true})
+	child, err := registry.Create(context.Background(), CreateRequest{SessionID: "fork", ParentID: "root", Label: "fork", Mode: "continuable", Provider: session.SubagentFork, Route: testRoute, Seed: seed, Depth: 1, Create: true})
 	if err != nil {
 		t.Fatal(err)
 	}

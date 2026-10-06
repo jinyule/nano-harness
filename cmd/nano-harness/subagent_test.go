@@ -23,6 +23,10 @@ import (
 
 const subagentRoot = "session-sub"
 
+// runtimeContextPrefix opens the runtime-context snapshot a delegated child
+// receives before its first step.
+const runtimeContextPrefix = "Current runtime context."
+
 // subagentModel plays every agent of one composition on a loopback
 // Responses endpoint. Notices can land in any turn, so the root follows a
 // state machine over the tool outputs already in its history; children are
@@ -62,7 +66,10 @@ func (model *subagentModel) ServeHTTP(writer http.ResponseWriter, request *http.
 			for _, block := range item["content"].([]any) {
 				text.WriteString(block.(map[string]any)["text"].(string))
 			}
-			users, latestOutputs = append(users, text.String()), 0
+			// A delegated child's runtime context is harness input, not a task.
+			if !strings.HasPrefix(text.String(), runtimeContextPrefix) {
+				users, latestOutputs = append(users, text.String()), 0
+			}
 		}
 		if item["type"] == "function_call_output" {
 			outputs, latestOutputs = append(outputs, item["output"].(string)), latestOutputs+1
@@ -290,6 +297,31 @@ func TestComposition_SubagentsEndToEnd(t *testing.T) {
 	}
 	if tasks := notices(childRecords, appSubagent.SourceDelegation); len(tasks) != 1 || !strings.Contains(tasks[0], `Your parent agent id is "`+subagentRoot+`".`) {
 		t.Errorf("child task = %q", tasks)
+	}
+	// The child inherits the parent's route, receives its delegation scope as
+	// runtime context, and keeps the parent's system prompt unchanged.
+	var rootHeader, childHeader *session.RequestHeader
+	for _, record := range records {
+		if record.Type == session.RecordRequestHeader {
+			rootHeader = record.Header
+		}
+	}
+	for _, record := range childRecords {
+		if record.Type == session.RecordRequestHeader && childHeader == nil {
+			childHeader = record.Header
+		}
+		if record.Type == session.RecordUserMessage && record.Message.Source.Kind == appSubagent.SourceAgentMessage && record.Message.Source.SenderSessionID != subagentRoot {
+			t.Errorf("child message sender = %q", record.Message.Source.SenderSessionID)
+		}
+	}
+	if route := childRecords[0].Subagent.Route; route != (session.SubagentRoute{Provider: rootHeader.Provider, Model: rootHeader.Model, Effort: rootHeader.Effort}) {
+		t.Errorf("inherited route = %#v, root request %s/%s %q", route, rootHeader.Provider, rootHeader.Model, rootHeader.Effort)
+	}
+	if childHeader == nil || childHeader.System != rootHeader.System || childHeader.Provider != rootHeader.Provider || childHeader.Model != rootHeader.Model {
+		t.Errorf("child request header differs from the root's: %+v", childHeader)
+	}
+	if contexts := notices(childRecords, appSubagent.SourceRuntimeContext); len(contexts) != 1 || !strings.Contains(contexts[0], "do not retry the denied operation") {
+		t.Errorf("child runtime context = %q", contexts)
 	}
 	forkEvents := readTranscript(t, filepath.Join(data, "sessions", review.SessionID+".jsonl"))
 	own := session.OwnEvents(forkEvents)

@@ -26,16 +26,21 @@ func TestService_ValidatesLifecycleAndRequests(t *testing.T) {
 		registry   *agent.Registry
 		jobs       *job.Service
 		repository bool
-	}{{nil, h.jobs, true}, {h.registry, nil, true}, {h.registry, h.jobs, false}} {
+		contexts   Contexts
+	}{{nil, h.jobs, true, h.engine}, {h.registry, nil, true, h.engine}, {h.registry, h.jobs, false, h.engine}, {h.registry, h.jobs, true, nil}} {
 		var err error
 		if test.repository {
-			_, err = New(test.registry, test.jobs, h.manager)
+			_, err = New(test.registry, test.jobs, h.manager, test.contexts)
 		} else {
-			_, err = New(test.registry, test.jobs, nil)
+			_, err = New(test.registry, test.jobs, nil, test.contexts)
 		}
 		if !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("New(%+v) = %v", test, err)
 		}
+	}
+	refusing, _ := New(h.registry, h.jobs, h.manager, refusingContexts{})
+	if err := refusing.Start(context.Background(), &plugin.Scope{}); !errors.Is(err, agent.ErrNotRunning) {
+		t.Fatalf("Start with a refusing context registry = %v", err)
 	}
 	if h.service.ID() != "subagents" {
 		t.Fatalf("ID = %q", h.service.ID())
@@ -45,7 +50,7 @@ func TestService_ValidatesLifecycleAndRequests(t *testing.T) {
 	}
 	closed := &plugin.Scope{}
 	_ = closed.Close(context.Background())
-	failed, _ := New(h.registry, h.jobs, h.manager)
+	failed, _ := New(h.registry, h.jobs, h.manager, h.engine)
 	if err := failed.Start(context.Background(), closed); !errors.Is(err, plugin.ErrScopeClosed) {
 		t.Fatalf("closed scope Start = %v", err)
 	}
@@ -184,4 +189,11 @@ func TestCheckStart_DescriptionLeavesRoomForJobNotification(t *testing.T) {
 			t.Fatalf("description cannot fit notification envelope: label bytes=%d, err=%v", len(label), err)
 		}
 	}
+}
+
+// refusingContexts is a context registry that is no longer running.
+type refusingContexts struct{}
+
+func (refusingContexts) RegisterContext(agent.ContextProvider, *plugin.Scope) error {
+	return agent.ErrNotRunning
 }

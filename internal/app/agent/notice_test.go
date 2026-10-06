@@ -275,7 +275,7 @@ func TestAgent_OneShotNeverOpensASecondTurnForLateNotices(t *testing.T) {
 	if _, err := registry.Create(context.Background(), CreateRequest{SessionID: "root", Create: true}); err != nil {
 		t.Fatal(err)
 	}
-	child, err := registry.Create(context.Background(), CreateRequest{SessionID: "child", ParentID: "root", Depth: 1, Mode: "one-shot", Provider: session.SubagentSpawn, Create: true})
+	child, err := registry.Create(context.Background(), CreateRequest{SessionID: "child", ParentID: "root", Depth: 1, Mode: "one-shot", Provider: session.SubagentSpawn, Route: testRoute, Create: true})
 	if err != nil {
 		t.Fatal(err)
 	}

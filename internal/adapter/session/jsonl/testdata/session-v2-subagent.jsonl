@@ -8,7 +8,7 @@
 {"seq":7,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-spawn","output":"started subagent sibling","is_error":false}}}
 {"seq":8,"record":{"type":"step/end","turn":1,"step":1}}
 {"seq":9,"record":{"type":"turn/end","turn":1,"outcome":"completed"}}
-{"seq":10,"record":{"type":"subagent/descriptor","subagent":{"version":2,"provider":"fork","mode":"continuable","label":"review","inherited":9}}}
+{"seq":10,"record":{"type":"subagent/descriptor","subagent":{"version":3,"provider":"fork","mode":"continuable","label":"review","route":{"provider":"openai","model":"model","effort":"max"},"inherited":9}}}
 {"seq":11,"record":{"type":"approval/policy","approval":{"policy":"never","source":"delegation"}}}
 {"seq":12,"record":{"type":"turn/start","turn":2}}
 {"seq":13,"record":{"type":"user/message","turn":2,"message":{"role":"user","content":[{"type":"text","text":"review the scan"},{"type":"text","text":"report back"}],"source":{"kind":"delegation"}}}}
@@ -17,7 +17,7 @@
 {"seq":16,"record":{"type":"tool/call","turn":2,"step":1,"call":{"id":"call-send","name":"send_message","arguments":{"agent_id":"parent","message":"looks fine"}}}}
 {"seq":17,"record":{"type":"tool/result","turn":2,"step":1,"result":{"call_id":"call-send","output":"message delivered to agent parent","is_error":false}}}
 {"seq":18,"record":{"type":"step/end","turn":2,"step":1}}
-{"seq":19,"record":{"type":"user/message","turn":2,"message":{"role":"user","content":[{"type":"text","text":"Agent parent sent a message: "},{"type":"text","text":"thanks"}],"source":{"kind":"agent-message"}}}}
+{"seq":19,"record":{"type":"user/message","turn":2,"message":{"role":"user","content":[{"type":"text","text":"Agent parent sent a message: "},{"type":"text","text":"thanks"}],"source":{"kind":"agent-message","sender_session_id":"parent"}}}}
 {"seq":20,"record":{"type":"step/start","turn":2,"step":2}}
 {"seq":21,"record":{"type":"assistant/message","turn":2,"step":2,"message":{"role":"assistant","content":[{"type":"text","text":"done"}],"source":{"kind":"provider"}}}}
 {"seq":22,"record":{"type":"step/end","turn":2,"step":2}}

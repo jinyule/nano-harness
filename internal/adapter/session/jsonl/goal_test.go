@@ -261,7 +261,7 @@ func TestOpen_ForkSeedKeepsTheParentGoalInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	appendRecord(t, child, coresession.Record{Type: coresession.RecordSubagentDescriptor, Subagent: &coresession.SubagentDescriptor{Version: 2, Provider: coresession.SubagentFork, Mode: coresession.SubagentOneShot, Label: "fork", Inherited: uint64(len(seed))}})
+	appendRecord(t, child, coresession.Record{Type: coresession.RecordSubagentDescriptor, Subagent: &coresession.SubagentDescriptor{Version: 3, Route: coresession.SubagentRoute{Provider: "openai", Model: "model", Effort: coresession.EffortMax}, Provider: coresession.SubagentFork, Mode: coresession.SubagentOneShot, Label: "fork", Inherited: uint64(len(seed))}})
 	if err := child.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}

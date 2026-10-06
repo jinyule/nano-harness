@@ -15,6 +15,9 @@ import (
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
+// testRoute is a valid inherited route for delegated agents.
+var testRoute = session.SubagentRoute{Provider: "openai", Model: "gpt-5.6-luna", Effort: session.EffortMax}
+
 type memoryRepository struct {
 	mu      sync.Mutex
 	logs    map[string]*memoryLog
@@ -196,14 +199,14 @@ func TestRegistry_CreatesRootDelegatedAndRestoredAgents(t *testing.T) {
 	}
 
 	child, err := registry.Create(context.Background(), CreateRequest{
-		SessionID: "child", ParentID: "root", Label: "research", Mode: "one-shot", Provider: session.SubagentSpawn, Persona: "focus", Tools: []string{"read"}, Depth: 1, Create: true,
+		SessionID: "child", ParentID: "root", Label: "research", Mode: "one-shot", Provider: session.SubagentSpawn, Route: testRoute, Persona: "focus", Tools: []string{"read"}, Depth: 1, Create: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	childEvents, _ := child.Events(context.Background())
 	descriptor := childEvents[0].Record.Subagent
-	if len(childEvents) != 2 || descriptor.Version != 2 || descriptor.Provider != session.SubagentSpawn || descriptor.Mode != "one-shot" || descriptor.Inherited != 0 || childEvents[1].Record.Approval.Policy != session.ApprovalNever {
+	if len(childEvents) != 2 || descriptor.Version != 3 || descriptor.Route != testRoute || descriptor.Provider != session.SubagentSpawn || descriptor.Mode != "one-shot" || descriptor.Inherited != 0 || childEvents[1].Record.Approval.Policy != session.ApprovalNever {
 		t.Fatalf("child events = %#v", childEvents)
 	}
 
@@ -212,7 +215,7 @@ func TestRegistry_CreatesRootDelegatedAndRestoredAgents(t *testing.T) {
 		{Sequence: 1, Record: session.Record{Type: session.RecordApprovalPolicy, Approval: &session.ApprovalData{Policy: session.ApprovalAsk}}},
 		{Sequence: 2, Record: session.Record{Type: session.RecordTurnStart, Turn: 1}},
 	}
-	forked, err := registry.Create(context.Background(), CreateRequest{SessionID: "forked", ParentID: "root", Label: "fork", Mode: "continuable", Provider: session.SubagentFork, Seed: seed, Depth: 1, Create: true})
+	forked, err := registry.Create(context.Background(), CreateRequest{SessionID: "forked", ParentID: "root", Label: "fork", Mode: "continuable", Provider: session.SubagentFork, Route: testRoute, Seed: seed, Depth: 1, Create: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +256,7 @@ func TestRegistry_CreatesRootDelegatedAndRestoredAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := restored.Status()
-	if status.ParentID != "root" || status.Depth != 1 || status.Mode != "one-shot" || status.Label != "research" {
+	if status.ParentID != "root" || status.Depth != 1 || status.Mode != "one-shot" || status.Label != "research" || restored.route != testRoute {
 		t.Fatalf("restored status = %+v", status)
 	}
 	if err := registry.Close(context.Background(), "child"); err != nil {
@@ -280,6 +283,7 @@ func TestRegistry_GeneratesIDsAndRejectsInvalidRequests(t *testing.T) {
 		{SessionID: "parent-zero", ParentID: "root", Depth: 0, Create: true},
 		{SessionID: "depth-no-parent", Depth: 1, Create: true},
 		{SessionID: "root-provider", Provider: session.SubagentSpawn, Create: true},
+		{SessionID: "root-route", Route: testRoute, Create: true},
 		{SessionID: "root-seed", Seed: []session.Event{{Sequence: 1}}, Create: true},
 	} {
 		if _, err := registry.Create(context.Background(), request); !errors.Is(err, ErrInvalidConfig) {

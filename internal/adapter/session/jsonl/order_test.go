@@ -71,9 +71,9 @@ func TestValidateOrderRejectsEveryInvalidTransition(t *testing.T) {
 		"end without start": {
 			orderedEvent(coresession.Record{Type: coresession.RecordCompactionEnd, Compaction: &coresession.CompactionData{ID: "compact"}}),
 		},
-		"descriptor in turn": addOrder(prefix, coresession.Record{Type: coresession.RecordSubagentDescriptor, Subagent: &coresession.SubagentDescriptor{Version: 2, Provider: coresession.SubagentFork, Mode: coresession.SubagentOneShot, Label: "worker", Inherited: 3}}),
+		"descriptor in turn": addOrder(prefix, coresession.Record{Type: coresession.RecordSubagentDescriptor, Subagent: &coresession.SubagentDescriptor{Version: 3, Route: coresession.SubagentRoute{Provider: "openai", Model: "model", Effort: coresession.EffortMax}, Provider: coresession.SubagentFork, Mode: coresession.SubagentOneShot, Label: "worker", Inherited: 3}}),
 		"descriptor inherited": {
-			{Sequence: 2, Record: coresession.Record{Type: coresession.RecordSubagentDescriptor, Subagent: &coresession.SubagentDescriptor{Version: 2, Provider: coresession.SubagentFork, Mode: coresession.SubagentOneShot, Label: "worker", Inherited: 0}}},
+			{Sequence: 2, Record: coresession.Record{Type: coresession.RecordSubagentDescriptor, Subagent: &coresession.SubagentDescriptor{Version: 3, Route: coresession.SubagentRoute{Provider: "openai", Model: "model", Effort: coresession.EffortMax}, Provider: coresession.SubagentFork, Mode: coresession.SubagentOneShot, Label: "worker", Inherited: 0}}},
 		},
 		"catalog outside step": {
 			orderedEvent(coresession.Record{Type: coresession.RecordTurnStart, Turn: 1}),
@@ -103,7 +103,7 @@ func TestValidateOrderRejectsEveryInvalidTransition(t *testing.T) {
 func TestValidateOrderValidMetadataCompactionAndRemoval(t *testing.T) {
 	events := []coresession.Event{
 		orderedEvent(coresession.Record{Type: coresession.RecordApprovalPolicy, Approval: &coresession.ApprovalData{Policy: coresession.ApprovalAsk}}),
-		{Sequence: 2, Record: coresession.Record{Type: coresession.RecordSubagentDescriptor, Subagent: &coresession.SubagentDescriptor{Version: 2, Provider: coresession.SubagentFork, Mode: coresession.SubagentContinuable, Label: "worker", Inherited: 1}}},
+		{Sequence: 2, Record: coresession.Record{Type: coresession.RecordSubagentDescriptor, Subagent: &coresession.SubagentDescriptor{Version: 3, Route: coresession.SubagentRoute{Provider: "openai", Model: "model", Effort: coresession.EffortMax}, Provider: coresession.SubagentFork, Mode: coresession.SubagentContinuable, Label: "worker", Inherited: 1}}},
 		orderedEvent(coresession.Record{Type: coresession.RecordTurnStart, Turn: 1}),
 		{Sequence: 1, Record: coresession.Record{Type: coresession.RecordUserMessage, Turn: 1, Message: userMessage("hello")}},
 		orderedEvent(coresession.Record{Type: coresession.RecordCompactionStart, Turn: 1, Compaction: &coresession.CompactionData{ID: "compact"}}),

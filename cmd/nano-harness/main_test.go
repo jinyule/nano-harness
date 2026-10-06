@@ -573,7 +573,7 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 		}},
 		{name: "jobs", set: func() { newJobService = func(appJob.Notifier) (*appJob.Service, error) { return nil, failure } }},
 		{name: "subagents", set: func() {
-			newSubagentService = func(*agent.Registry, *appJob.Service, transcript.Repository) (*subagent.Service, error) {
+			newSubagentService = func(*agent.Registry, *appJob.Service, transcript.Repository, subagent.Contexts) (*subagent.Service, error) {
 				return nil, failure
 			}
 		}},

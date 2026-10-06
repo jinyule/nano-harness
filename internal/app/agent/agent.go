@@ -29,6 +29,9 @@ type Agent struct {
 	tools     []string
 	depth     int
 	delegated bool
+	// route is the inherited route of a delegated agent; the zero value
+	// follows the hot settings route.
+	route session.SubagentRoute
 
 	turns  chan turnRequest
 	steers chan session.Message
@@ -115,7 +118,7 @@ func (agent *Agent) turn(ctx context.Context, message session.Message) TurnResul
 	agent.mu.Unlock()
 	result := agent.engine.runTurn(turnContext, runInput{
 		journal: agent.journal, message: message, persona: agent.persona,
-		tools: agent.tools, delegated: agent.delegated, drain: agent.drainSteers, notices: agent.drainNotices,
+		tools: agent.tools, delegated: agent.delegated, route: agent.route, drain: agent.drainSteers, notices: agent.drainNotices,
 	})
 	cancel()
 	return result

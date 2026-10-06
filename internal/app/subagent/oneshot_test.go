@@ -77,7 +77,8 @@ func TestService_ForkInheritsOnlyCompletedTurns(t *testing.T) {
 			seen = append(seen, session.Text(*node.Message))
 		}
 	}
-	if strings.Join(seen, "|") != "FIRST|first answer|FORK_TASK" {
+	// The child's own runtime context follows its task, after the inherited prefix.
+	if strings.Join(seen, "|") != "FIRST|first answer|FORK_TASK|"+delegationContext {
 		t.Fatalf("fork surface = %q", seen)
 	}
 	id := session.Children(h.events("root"))[0].SessionID
@@ -155,7 +156,7 @@ func TestService_CreationFailuresReleaseTheChild(t *testing.T) {
 		t.Fatalf("catalog failure = %v", err)
 	}
 
-	deep, err := h.registry.Create(context.Background(), agent.CreateRequest{ParentID: "root", Mode: session.SubagentOneShot, Provider: session.SubagentSpawn, Label: "deep", Depth: maxDelegationDepth, Create: true})
+	deep, err := h.registry.Create(context.Background(), agent.CreateRequest{ParentID: "root", Mode: session.SubagentOneShot, Provider: session.SubagentSpawn, Route: testRoute, Label: "deep", Depth: maxDelegationDepth, Create: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,6 +176,10 @@ func TestService_CreationFailuresReleaseTheChild(t *testing.T) {
 	}
 	if _, err := h.service.Run(cancelled, start(call, "scan", "TASK", false)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled spawn = %v", err)
+	}
+	// Cancellation after the parent's route was read stops the child's creation.
+	if _, err := h.service.Run(&lateCancel{Context: context.Background(), after: 1}, start(call, "scan", "TASK", false)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("spawn cancelled during creation = %v", err)
 	}
 
 	// The child stops before its task is submitted.

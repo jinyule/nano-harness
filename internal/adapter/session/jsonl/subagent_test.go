@@ -94,9 +94,9 @@ func TestSessionV2Subagent_FrozenContract(t *testing.T) {
 	}
 	writer := &Log{file: output, header: written, active: true, size: size, events: seed}
 	delegated := &coresession.Message{Role: coresession.RoleUser, Source: coresession.MessageSource{Kind: "delegation"}, Content: textBlocks("review the scan", "report back")}
-	relayed := &coresession.Message{Role: coresession.RoleUser, Source: coresession.MessageSource{Kind: "agent-message"}, Content: textBlocks("Agent parent sent a message: ", "thanks")}
+	relayed := &coresession.Message{Role: coresession.RoleUser, Source: coresession.MessageSource{Kind: "agent-message", SenderSessionID: "parent"}, Content: textBlocks("Agent parent sent a message: ", "thanks")}
 	for _, record := range []coresession.Record{
-		{Type: coresession.RecordSubagentDescriptor, Subagent: &coresession.SubagentDescriptor{Version: 2, Provider: coresession.SubagentFork, Mode: coresession.SubagentContinuable, Label: "review", Inherited: 9}},
+		{Type: coresession.RecordSubagentDescriptor, Subagent: &coresession.SubagentDescriptor{Version: 3, Route: coresession.SubagentRoute{Provider: "openai", Model: "model", Effort: coresession.EffortMax}, Provider: coresession.SubagentFork, Mode: coresession.SubagentContinuable, Label: "review", Inherited: 9}},
 		{Type: coresession.RecordApprovalPolicy, Approval: &coresession.ApprovalData{Policy: coresession.ApprovalNever, Source: "delegation"}},
 		{Type: coresession.RecordTurnStart, Turn: 2},
 		{Type: coresession.RecordUserMessage, Turn: 2, Message: delegated},
@@ -128,7 +128,13 @@ func TestSessionV2Subagent_RejectsChangedContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, test := range []struct{ name, from, to string }{
-		{"descriptor-version-1", `"subagent":{"version":2`, `"subagent":{"version":1`},
+		{"descriptor-version-1", `"subagent":{"version":3`, `"subagent":{"version":1`},
+		{"descriptor-version-2", `"subagent":{"version":3`, `"subagent":{"version":2`},
+		{"descriptor-missing-route", `"route":{"provider":"openai","model":"model","effort":"max"},`, ``},
+		{"descriptor-route-effort", `"effort":"max"}`, `"effort":"extreme"}`},
+		{"descriptor-route-field", `"effort":"max"}`, `"effort":"max","base_url":"x"}`},
+		{"agent-message-missing-sender", `,"sender_session_id":"parent"`, ``},
+		{"sender-on-delegation", `"source":{"kind":"delegation"}`, `"source":{"kind":"delegation","sender_session_id":"parent"}`},
 		{"descriptor-old-provider", `"provider":"fork"`, `"provider":"in-process"`},
 		{"descriptor-unknown-field", `"inherited":9}`, `"inherited":9,"pool":1}`},
 		{"descriptor-inherited-short", `"inherited":9}`, `"inherited":8}`},

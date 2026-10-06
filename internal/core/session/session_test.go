@@ -10,6 +10,9 @@ import (
 	"testing"
 )
 
+// testRoute is a valid inherited child route.
+var testRoute = SubagentRoute{Provider: "openai", Model: "model", Effort: EffortMax}
+
 func textMessage(role MessageRole, text string) *Message {
 	return &Message{Role: role, Source: MessageSource{Kind: "test"}, Content: []ContentBlock{{Type: ContentText, Text: text}}}
 }
@@ -42,9 +45,12 @@ func TestRecordValidate_AllKinds(t *testing.T) {
 		{Type: RecordCompactionStart, Compaction: &CompactionData{ID: "compact"}},
 		{Type: RecordCompactionSummary, Compaction: &CompactionData{ID: "compact", ShadowedSeqs: []uint64{1}, ShadowedTokenCount: 1, Summary: []ContentBlock{{Type: ContentText, Text: "summary"}}, Provider: "openai", Model: "model", Effort: EffortMax}},
 		{Type: RecordCompactionEnd, Compaction: &CompactionData{ID: "compact", Error: "failure"}},
-		{Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker", Tools: []string{"tool"}}},
-		{Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentFork, Mode: SubagentOneShot, Label: strings.Repeat("x", 128<<10), Inherited: 9}},
+		{Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 3, Route: testRoute, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker", Tools: []string{"tool"}}},
+		{Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 3, Route: testRoute, Provider: SubagentFork, Mode: SubagentOneShot, Label: strings.Repeat("x", 128<<10), Inherited: 9}},
 		{Type: RecordSubagentCatalog, Turn: 1, Step: 1, Catalog: &SubagentCatalog{SessionID: "child", Mode: SubagentOneShot, Label: "worker"}},
+		{Type: RecordUserMessage, Turn: 1, Message: &Message{Role: RoleUser, Source: MessageSource{Kind: SourceAgentMessage, SenderSessionID: "root"}, Content: []ContentBlock{{Type: ContentText, Text: "relayed"}}}},
+		{Type: RecordUserMessage, Turn: 1, Message: &Message{Role: RoleUser, Source: MessageSource{Kind: SourceSubagentSettled, SenderSessionID: "session-1"}, Content: []ContentBlock{{Type: ContentText, Text: "settled"}}}},
+		{Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 3, Route: SubagentRoute{Provider: "openai", Model: "model"}, Provider: SubagentSpawn, Mode: SubagentOneShot, Label: "no effort"}},
 		{Type: RecordStepEnd, Turn: 1, Step: 1, Usage: &TokenUsage{InputTokens: 1, OutputTokens: 1}},
 		{Type: RecordTurnEnd, Turn: 1, Outcome: OutcomeCompleted},
 	}
@@ -170,13 +176,21 @@ func TestRecordValidateRejectsEveryInvalidShape(t *testing.T) {
 		"compaction end fields":     {Type: RecordCompactionEnd, Compaction: &CompactionData{ID: "compact", Provider: "p"}},
 		"subagent shape":            {Type: RecordSubagentDescriptor},
 		"subagent fields":           {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{}},
-		"subagent tool":             {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker", Tools: []string{""}}},
+		"subagent tool":             {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 3, Route: testRoute, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker", Tools: []string{""}}},
+		"subagent version 2":        {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Route: testRoute, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker"}},
+		"subagent route provider":   {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 3, Route: SubagentRoute{Model: "model"}, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker"}},
+		"subagent route model":      {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 3, Route: SubagentRoute{Provider: "openai", Model: " model"}, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker"}},
+		"subagent route effort":     {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 3, Route: SubagentRoute{Provider: "openai", Model: "model", Effort: "extreme"}, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker"}},
+		"agent message sender":      {Type: RecordUserMessage, Turn: 1, Message: &Message{Role: RoleUser, Source: MessageSource{Kind: SourceAgentMessage}, Content: []ContentBlock{{Type: ContentText, Text: "x"}}}},
+		"settled sender":            {Type: RecordUserMessage, Turn: 1, Message: &Message{Role: RoleUser, Source: MessageSource{Kind: SourceSubagentSettled, SenderSessionID: " root"}, Content: []ContentBlock{{Type: ContentText, Text: "x"}}}},
+		"sender on other kind":      {Type: RecordUserMessage, Turn: 1, Message: &Message{Role: RoleUser, Source: MessageSource{Kind: "user", SenderSessionID: "root"}, Content: []ContentBlock{{Type: ContentText, Text: "x"}}}},
+		"assistant sender":          {Type: RecordAssistantMessage, Turn: 1, Step: 1, Message: &Message{Role: RoleAssistant, Source: MessageSource{Kind: SourceAgentMessage, SenderSessionID: "root"}, Content: []ContentBlock{{Type: ContentText, Text: "x"}}}},
 		"subagent version 1":        {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 1, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker"}},
-		"subagent old provider":     {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: "in-process", Mode: SubagentContinuable, Label: "worker"}},
-		"subagent spawn inherits":   {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker", Inherited: 1}},
-		"subagent mode":             {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentFork, Mode: "resident", Label: "worker"}},
-		"subagent long label":       {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentFork, Mode: SubagentOneShot, Label: strings.Repeat("x", (128<<10)+1)}},
-		"subagent step":             {Type: RecordSubagentDescriptor, Step: 1, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentSpawn, Mode: SubagentOneShot, Label: "worker"}},
+		"subagent old provider":     {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 3, Route: testRoute, Provider: "in-process", Mode: SubagentContinuable, Label: "worker"}},
+		"subagent spawn inherits":   {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 3, Route: testRoute, Provider: SubagentSpawn, Mode: SubagentContinuable, Label: "worker", Inherited: 1}},
+		"subagent mode":             {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 3, Route: testRoute, Provider: SubagentFork, Mode: "resident", Label: "worker"}},
+		"subagent long label":       {Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 3, Route: testRoute, Provider: SubagentFork, Mode: SubagentOneShot, Label: strings.Repeat("x", (128<<10)+1)}},
+		"subagent step":             {Type: RecordSubagentDescriptor, Step: 1, Subagent: &SubagentDescriptor{Version: 3, Route: testRoute, Provider: SubagentSpawn, Mode: SubagentOneShot, Label: "worker"}},
 		"catalog shape":             {Type: RecordSubagentCatalog, Turn: 1, Step: 1},
 		"catalog step":              {Type: RecordSubagentCatalog, Turn: 1, Catalog: &SubagentCatalog{SessionID: "child", Mode: SubagentOneShot, Label: "worker"}},
 		"catalog turn":              {Type: RecordSubagentCatalog, Step: 1, Catalog: &SubagentCatalog{SessionID: "child", Mode: SubagentOneShot, Label: "worker"}},

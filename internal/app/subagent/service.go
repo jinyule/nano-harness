@@ -183,6 +183,7 @@ type Service struct {
 	registry   *agent.Registry
 	jobs       *job.Service
 	repository transcript.Repository
+	contexts   Contexts
 
 	mu      sync.Mutex
 	started bool
@@ -200,11 +201,38 @@ type Service struct {
 // New constructs an inactive delegation service. Background one-shot runs
 // are jobs owned by the parent; repository reads the catalogs of children
 // that are not live.
-func New(registry *agent.Registry, jobs *job.Service, repository transcript.Repository) (*Service, error) {
-	if registry == nil || jobs == nil || repository == nil {
+func New(registry *agent.Registry, jobs *job.Service, repository transcript.Repository, contexts Contexts) (*Service, error) {
+	if registry == nil || jobs == nil || repository == nil || contexts == nil {
 		return nil, ErrInvalidConfig
 	}
-	return &Service{registry: registry, jobs: jobs, repository: repository, children: map[string]*child{}, reserved: map[string]int{}}, nil
+	return &Service{registry: registry, jobs: jobs, repository: repository, contexts: contexts, children: map[string]*child{}, reserved: map[string]int{}}, nil
+}
+
+// Contexts publishes the step-context contribution that tells delegated
+// children their permission scope. The agent engine implements it.
+type Contexts interface {
+	RegisterContext(agent.ContextProvider, *plugin.Scope) error
+}
+
+// StepContext contributes the delegation-scope runtime context to a
+// delegated session whenever no copy of it is visible in the replay
+// surface: before its first step, and again after compaction hid it. A
+// resumed child finds the committed copy and contributes nothing. Root
+// sessions, which carry no subagent descriptor, never receive it.
+func (*Service) StepContext(_ context.Context, request agent.ContextRequest) ([]session.Message, error) {
+	if !slices.ContainsFunc(request.Events, func(event session.Event) bool { return event.Record.Type == session.RecordSubagentDescriptor }) {
+		return nil, nil
+	}
+	surface, err := session.Surface(request.Events)
+	if err != nil {
+		return nil, err
+	}
+	if slices.ContainsFunc(surface, func(node session.SurfaceNode) bool {
+		return node.Message != nil && node.Message.Source.Kind == SourceRuntimeContext
+	}) {
+		return nil, nil
+	}
+	return []session.Message{textMessage(SourceRuntimeContext, "", delegationContext)}, nil
 }
 
 // ID returns the stable plugin identity.
@@ -220,6 +248,9 @@ func (service *Service) Start(ctx context.Context, scope *plugin.Scope) error {
 	service.ctx, service.cancel = context.WithCancel(ctx)
 	if err := scope.Defer(service.stop); err != nil {
 		service.cancel()
+		return err
+	}
+	if err := service.contexts.RegisterContext(service, scope); err != nil {
 		return err
 	}
 	service.started, service.active = true, true
@@ -369,12 +400,16 @@ func (service *Service) create(ctx context.Context, request StartRequest, mode s
 	if depth > maxDelegationDepth {
 		return nil, fail(CodeDepthLimit, "subagent depth %d exceeds maxDepth %d", depth, maxDelegationDepth)
 	}
+	events, err := parent.Events(ctx)
+	if err != nil {
+		return nil, err
+	}
+	route, ok := inheritedRoute(events)
+	if !ok {
+		return nil, fail(CodeInvalidRequest, "subagent delegation requires a parent request to inherit its route from")
+	}
 	provider, seed := session.SubagentSpawn, []session.Event(nil)
 	if request.Fork {
-		events, err := parent.Events(ctx)
-		if err != nil {
-			return nil, err
-		}
 		provider, seed = session.SubagentFork, completedTurns(events)
 	}
 	pool := ""
@@ -391,7 +426,7 @@ func (service *Service) create(ctx context.Context, request StartRequest, mode s
 		}()
 	}
 	created, err := service.registry.Create(ctx, agent.CreateRequest{
-		ParentID: request.ParentID, Label: label, Mode: mode, Provider: provider, Seed: seed, Depth: depth, Create: true,
+		ParentID: request.ParentID, Label: label, Mode: mode, Provider: provider, Route: route, Seed: seed, Depth: depth, Create: true,
 	})
 	if err != nil {
 		return nil, err
@@ -424,6 +459,17 @@ func checkStart(request StartRequest) (string, error) {
 		return "", fail(CodeInvalidRequest, "invalid prompt: at most %d bytes", session.MaxTextBytes)
 	}
 	return request.Description, nil
+}
+
+// inheritedRoute is the provider, model, and effort of the parent's latest
+// request: the route the parent was using when it delegated.
+func inheritedRoute(events []session.Event) (session.SubagentRoute, bool) {
+	for _, event := range slices.Backward(events) {
+		if header := event.Record.Header; event.Record.Type == session.RecordRequestHeader {
+			return session.SubagentRoute{Provider: header.Provider, Model: header.Model, Effort: header.Effort}, true
+		}
+	}
+	return session.SubagentRoute{}, false
 }
 
 // completedTurns is the balanced prefix a fork inherits: every event up to

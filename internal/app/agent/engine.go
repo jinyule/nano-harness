@@ -81,6 +81,9 @@ type runInput struct {
 	persona   string
 	tools     []string
 	delegated bool
+	// route pins a delegated agent's requests to the route it inherited;
+	// the zero value follows the hot settings route.
+	route session.SubagentRoute
 	// drain takes steers at tool-step boundaries.
 	drain func() []session.Message
 	// notices takes queued notices at turn start, at tool-step boundaries,
@@ -188,21 +191,22 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			return result
 		}
 		definitions := catalog.Definitions
+		route := requestRoute(document, input.route)
 		system, err := engine.prompt.Build(prompt.Input{
-			Workspace: input.journal.Header().Cwd, Provider: document.Route.Provider, Model: document.Route.Model,
-			Persona: input.persona, Delegated: input.delegated, PlanPolicy: planPolicy, Tools: definitions, Guidance: catalog.Guidance,
+			Workspace: input.journal.Header().Cwd, Provider: route.Provider, Model: route.Model,
+			Persona: input.persona, PlanPolicy: planPolicy, Tools: definitions, Guidance: catalog.Guidance,
 		})
 		if err != nil {
 			result.Err, result.Outcome = err, session.OutcomeError
 			return result
 		}
-		model := findModel(document, document.Route.Provider, document.Route.Model)
-		header := &session.RequestHeader{Provider: document.Route.Provider, Model: document.Route.Model, Effort: model.Effort, System: system, Tools: definitions, ContextWindow: model.ContextWindow}
+		model := findModel(document, route.Provider, route.Model)
+		header := &session.RequestHeader{Provider: route.Provider, Model: route.Model, Effort: route.Effort, System: system, Tools: definitions, ContextWindow: model.ContextWindow}
 		if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordRequestHeader, Turn: turn, Step: step, Header: header}); err != nil {
 			result.Err, result.Outcome = err, session.OutcomeError
 			return result
 		}
-		call, err := engine.llm.PrepareCall(ctx, document.Route.Provider, document.Route.Model)
+		call, err := engine.llm.PrepareCall(ctx, route.Provider, route.Model)
 		if err != nil {
 			result.Err, result.Outcome = err, outcomeFor(err)
 			return result
@@ -217,11 +221,11 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			result.Err, result.Outcome = err, session.OutcomeError
 			return result
 		}
-		completion, err := engine.retry.Do(ctx, input.journal, turn, step, document.Route.Provider, document.Route.Provider+"/"+document.Route.Model, func() (llm.Completion, bool, error) {
+		completion, err := engine.retry.Do(ctx, input.journal, turn, step, route.Provider, route.Provider+"/"+route.Model, func() (llm.Completion, bool, error) {
 			emitted := false
 			completion, streamErr := call.Stream(ctx, llm.Request{
 				SessionID: result.SessionID, Purpose: "agent", System: system,
-				Surface: surface, Tools: definitions,
+				Surface: surface, Tools: definitions, Effort: &header.Effort,
 			}, func(chunk session.AssistantChunk) error {
 				emitted = true
 				_, appendErr := input.journal.Append(ctx, session.Record{Type: session.RecordAssistantChunk, Turn: turn, Step: step, Chunk: &chunk})
@@ -251,7 +255,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		message := completion.Message
 		message.Role = session.RoleAssistant
 		if message.Source.Kind == "" {
-			message.Source = session.MessageSource{Kind: "provider", Plugin: document.Route.Provider}
+			message.Source = session.MessageSource{Kind: "provider", Plugin: route.Provider}
 		}
 		if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordAssistantMessage, Turn: turn, Step: step, Message: &message}); err != nil {
 			result.Err, result.Outcome = err, session.OutcomeError
@@ -309,9 +313,9 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			result.Outcome = session.OutcomeCompleted
 			return result
 		}
-		route := appTool.Route{Provider: document.Route.Provider, Model: document.Route.Model, ImageInput: call.Info().Vision}
+		toolRoute := appTool.Route{Provider: route.Provider, Model: route.Model, ImageInput: call.Info().Vision}
 		toolResults := engine.tools.ExecuteBatch(ctx, appTool.BatchRequest{
-			SessionID: result.SessionID, Cwd: input.journal.Header().Cwd, Route: route, Turn: turn, Step: step,
+			SessionID: result.SessionID, Cwd: input.journal.Header().Cwd, Route: toolRoute, Turn: turn, Step: step,
 			Calls: completion.Calls, Delegated: input.delegated, Journal: input.journal,
 		})
 		for index := range toolResults {
@@ -364,6 +368,15 @@ func nextTurn(events []session.Event) uint64 {
 		}
 	}
 	return turn + 1
+}
+
+// requestRoute is the route one request uses: a delegated agent's
+// inherited route, or else the hot settings route with its catalog effort.
+func requestRoute(document settings.Document, inherited session.SubagentRoute) session.SubagentRoute {
+	if inherited != (session.SubagentRoute{}) {
+		return inherited
+	}
+	return session.SubagentRoute{Provider: document.Route.Provider, Model: document.Route.Model, Effort: findModel(document, document.Route.Provider, document.Route.Model).Effort}
 }
 
 func findModel(document settings.Document, provider, model string) settings.Model {

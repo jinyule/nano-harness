@@ -52,7 +52,7 @@ func TestProjectPlan_SkipsRecordsAForkInherited(t *testing.T) {
 		{Sequence: 1, Record: Record{Type: RecordPlanMode, Plan: &PlanMode{Active: true}}},
 		{Sequence: 2, Record: Record{Type: RecordRequestHeader, Turn: 1, Step: 1, Header: &RequestHeader{Provider: "p", Model: "m"}}},
 	}
-	descriptor := Event{Sequence: 3, Record: Record{Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: SubagentDescriptorVersion, Provider: SubagentFork, Mode: SubagentOneShot, Label: "fork", Inherited: 2}}}
+	descriptor := Event{Sequence: 3, Record: Record{Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: SubagentDescriptorVersion, Route: testRoute, Provider: SubagentFork, Mode: SubagentOneShot, Label: "fork", Inherited: 2}}}
 	child := append(append([]Event(nil), inherited...), descriptor)
 	if view := ProjectPlan(child); view != (PlanView{}) {
 		t.Fatalf("forked child inherited plan mode: %+v", view)

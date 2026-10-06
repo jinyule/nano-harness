@@ -179,7 +179,7 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	if err != nil {
 		return nil, err
 	}
-	subagents, err := newSubagentService(registry, jobs, sessions)
+	subagents, err := newSubagentService(registry, jobs, sessions, engine)
 	if err != nil {
 		return nil, err
 	}

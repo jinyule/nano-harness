@@ -56,7 +56,7 @@ func newImageServer(t *testing.T) *imageServer {
 		task, answered := "", false
 		for _, item := range parsed.Input {
 			switch {
-			case item.Role == "user":
+			case item.Role == "user" && !strings.HasPrefix(item.Content[0].Text, runtimeContextPrefix):
 				task, answered = "", false
 				for _, block := range item.Content {
 					task += block.Text

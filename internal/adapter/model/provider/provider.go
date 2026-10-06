@@ -198,13 +198,17 @@ func (prepared *prepared) Stream(ctx context.Context, credential llm.Credential,
 	if request.MaxTokens < 0 || !prepared.info.Vision && surfaceHasImage(request.Surface) || !prepared.info.Tools && len(request.Tools) != 0 {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorInvalid, Provider: prepared.owner.id}
 	}
+	info := prepared.info
+	if request.Effort != nil {
+		info.Effort = *request.Effort
+	}
 	switch prepared.owner.id {
 	case "openai":
-		return prepared.owner.streamResponses(ctx, prepared.snapshot, prepared.info, credential, request, emit)
+		return prepared.owner.streamResponses(ctx, prepared.snapshot, info, credential, request, emit)
 	case "anthropic":
-		return prepared.owner.streamAnthropic(ctx, prepared.snapshot, prepared.info, credential, request, emit)
+		return prepared.owner.streamAnthropic(ctx, prepared.snapshot, info, credential, request, emit)
 	case "openrouter":
-		return prepared.owner.streamOpenRouter(ctx, prepared.snapshot, prepared.info, credential, request, emit)
+		return prepared.owner.streamOpenRouter(ctx, prepared.snapshot, info, credential, request, emit)
 	default:
 		return llm.Completion{}, llm.ErrUnknownProvider
 	}

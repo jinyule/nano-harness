@@ -141,7 +141,7 @@ Submit user message
 - 一个 agent 串行处理 turn；一个 turn 最多 256 个 step，产品默认 32。一个 step 是一次模型调用与其产生的全部工具执行。
 - 每个 step 在 `step/start` 之前经过规划模式边界：提交待生效的 `plan/mode` 选择、必要时追加用户切换提示，并取得本 step 的规划段落，见[用户提问与规划模式](#用户提问与规划模式)。
 - 规划模式边界之后、`step/start` 之前运行 step 上下文扩展点：`Engine.RegisterContext` 注册的 `ContextProvider` 随注册方 Scope 存在，按注册顺序收到该 step 可见的工具名和已提交日志，返回的消息作为本 turn 的 `user/message`（step 为 0）先提交再进入请求。provider 错误结束 turn，取消映射为 `canceled`。当前唯一的 provider 是运行时 skill；后台任务通知仍由 engine 在 turn 开始和工具 step 边界直接提交。
-- 每个 step 从权威 log 重新折叠 model surface。request header 在调用前固定 provider、model、effort、system、tool schema 和 context window；compaction summary 同样记录其冻结的 provider、model 和 effort。
+- 每个 step 从权威 log 重新折叠 model surface。request header 在调用前固定 provider、model、effort、system、tool schema 和 context window；provider 请求携带 header 冻结的 effort，不再另读当时的模型目录。root 跟随热切换的设置 route，delegated child 使用它继承的 route（见 [Subagent](#subagent)）；compaction summary 同样记录其冻结的 provider、model 和 effort。
 - streaming chunk 按 provider 顺序持久化。完成的 assistant message 和全部 tool call 先提交，工具才能执行；每个 call 最终得到唯一 tool result。
 - 超出参数预算的提案先转换为保留 ID/名称、`arguments:{}` 和 `arguments_omitted:true` 的调用，再提交日志；runtime 为其产生错误结果，turn 继续。provider 越界后停止累积与提交该调用的参数 delta，继续消费有界响应；普通参数仍按原顺序提交。限值与持久化策略见 [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败)。
 - 没有输出提交的 retryable provider 失败按热策略指数退避；一旦流内容已提交就不自动重试，避免重复事实。
@@ -257,8 +257,8 @@ interrupt_agent            → 取消任一 live 后代当前 turn，不等待
 list_agents                → parent 自己的 subagent/catalog；descendants 深度优先遍历
 ```
 
-- spawn child 从空会话开始；fork child 以 parent 最后一个 `turn/end` 为止的事件为种子（不含进行中的 turn），provider/model 由同一 route 决定。child 创建时持久化 parent/depth、descriptor v2 与 `never` 策略；parent 在创建它的工具 step 内写 `subagent/catalog`。
-- delegated session 在持久化策略层固定为 `never`，需要 approval 的工具无法执行，`bash` 的 sandbox 升级还在工具执行点再次拒绝。
+- spawn child 从空会话开始；fork child 以 parent 最后一个 `turn/end` 为止的事件为种子（不含进行中的 turn），child 固定使用 parent 委派时最新请求的 provider、model 和 effort，每个 step 与冷恢复都不随之后的热切换改变。child 创建时持久化 parent/depth、带继承 route 的 descriptor v3 与 `never` 策略；parent 在创建它的工具 step 内写 `subagent/catalog`。
+- delegated session 在持久化策略层固定为 `never`，需要 approval 的工具无法执行，`bash` 的 sandbox 升级还在工具执行点再次拒绝。child 与 parent 使用同一 system prompt；委派说明由 subagent 服务的 step context provider 作为 source kind `runtime-context` 的 `user/message` 贡献（审批自动拒绝、不要重试、向委派方说明限制），surface 中没有可见副本时（首个 step、compaction 之后）才提交，恢复后不重复。
 - 消息只跨越直接父子边，经 `Agent.NotifyContext` 在收件箱锁内检查取消后投递：接收方忙时在下一个 step 边界追加，空闲时开启新 turn。中断前排队的未提交消息使 child 保持驻留；中断后接受的新消息在旧 turn 退出后自动唤醒下一轮，一并处理旧消息。结算通知只在 child 自然结算时发送；服务关闭和 one-shot parent 回收是拆除，不发通知。
 - 每个 continuable 池最多 8 个驻留 child，创建占位与发布后的 handle 原子转交同一个名额，one-shot 不占池；绝对 delegation depth 上限为 4。
 - 释放 child 时先中断它，深度优先释放其 live 子代理，关闭 agent 与 transcript，再以 `job.Service.Release` 结束它拥有的 job。清理失败覆盖成功或取消结局，通知及后台 job 不附成功输出。服务 cleanup 拒绝新操作、停止结算 watcher，再从最深处起释放全部 child。
@@ -342,8 +342,8 @@ notice/queued, step/end, turn/end
 - `todo/write` 必须位于活动 step，引用尚未得到 result 的 `todo_write` call，且每个 call 最多一条。它不进入 surface；模型只从自己的 tool call 参数和 tool result 看到列表。`session.StandingTodos` 把最新一条之后没有更晚 `turn/start` 的 `todo/write` 投影为当前计划。
 - `web/search-request` 必须引用当前 step 尚未结束的 `web_search` call；每个 call 的查询序号从 1 连续到最多 4，查询不能重复，call 结束后不能追加。它不进入 surface。resume 保留已提交的意图，只为未决 call 补 interrupted error 并关闭 step/turn，不补造检索审计或重新发送；format 仍为 v2，严格字段与保留策略见 ADR-0022。
 - `goal/change` 的 `turn` 与 `step` 都缺省，可出现在日志任意位置（人类命令可在 turn 进行中提交）。`session.GoalState.Apply` 校验 revision 连续、阶段迁移合法、时间戳不倒退、计数保持和目标 ID 不复用；`source.kind = "goal"` 的 `user/message` 必须携带 `goal_id`/`goal_revision`/`goal_round`，且恰为当前 active 目标当前 revision 的下一轮、不超过上限，其他来源不得携带这些字段。JSONL 在每次追加与读取时执行同一折叠，非法事实被拒绝且不写入。
-- 后台任务完成通知先提交为会话级的 `notice/queued`（turn 0，携带完整消息和 `notice_id`），投递是内容完全相同、带同一 `notice_id` 的 `user/message`，validator 要求每个 ID 只入队一次、投递一次且内容一致；agent 消息与子代理结算通知分别为 source kind `agent-message` 和 `subagent-settled` 的 `user/message`，没有专用记录类型。无工具调用的 step 之后可以出现 `user/message` 并继续 step。
-- `subagent/descriptor` 为 v2，是 child 自己写的第一条记录：位于 `inherited + 1` 号序列且不在 turn 内，`inherited` 是 fork 种子复制的事件数（spawn 为 0）。种子在创建时与 header 一次写入并整体校验，复制的事件保留原序号。`session.OwnEvents` 以最后一个 descriptor 区分继承前缀。
+- 后台任务完成通知先提交为会话级的 `notice/queued`（turn 0，携带完整消息和 `notice_id`），投递是内容完全相同、带同一 `notice_id` 的 `user/message`，validator 要求每个 ID 只入队一次、投递一次且内容一致；agent 消息与子代理结算通知分别为 source kind `agent-message` 和 `subagent-settled` 的 `user/message`，source 必须带 `sender_session_id`（发送方会话或结算的 child），其他消息不得带它；没有专用记录类型。无工具调用的 step 之后可以出现 `user/message` 并继续 step。
+- `subagent/descriptor` 为 v3，带必填的继承 `route`（provider、model、可省略的 effort），是 child 自己写的第一条记录：位于 `inherited + 1` 号序列且不在 turn 内，`inherited` 是 fork 种子复制的事件数（spawn 为 0）。种子在创建时与 header 一次写入并整体校验，复制的事件保留原序号。`session.OwnEvents` 以最后一个 descriptor 区分继承前缀。
 - `subagent/catalog` 必须位于活动 step，同一日志内 `session_id` 唯一，不进入 surface；`session.Children` 只从自有事件投影目录，fork 继承的 parent 目录不属于 child。
 
 格式变化必须同一变更原子更新领域类型、严格 decoder/order validator、所有 provider、测试、本文和 ADR。预发布阶段不保留静默兼容层。

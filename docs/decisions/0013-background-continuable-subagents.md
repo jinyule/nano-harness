@@ -26,7 +26,7 @@
 
 `subagent` 与 `subagent_fork` 声明并发安全，与上游一致；三个控制工具是 exclusive。结果文案沿用上游 render：`started subagent <id>`、`started background subagent job <id>`、前台返回 child 的最终文本；`message delivered to agent <id>`；`interrupt requested for agent <id>`；`list_agents` 每行 `<id> [running|inactive][ parent=<id> depth=<n>] — <label>`，读不到目录的条目为 `<id> [diagnostic: unavailable]...`，空列表为 `(no subagents)`。
 
-description 原样进入 descriptor、catalog、列表与 job label，不去空白或截断；空字符串和空白字符串在前台及 continuable 委派中合法，prompt 同样允许为空或只有空白。后台 one-shot 的空 label 由 job 准入拒绝。description 最多 128 KiB，独立于完整工具参数对象的预算，为 job 通知的附加文案在 256 KiB 文本块内保留空间；prompt 最多 256 KiB，与单文本块上限一致。服务在创建 child 前明确拒绝超限值；持久化 decoder 同样拒绝超限 label。字段、descriptor v2 与 composition token 不变，已有合法记录均可读取；旧二进制仍可能拒绝含超过 128 字节或空 label 的新记录。
+description 原样进入 descriptor、catalog、列表与 job label，不去空白或截断；空字符串和空白字符串在前台及 continuable 委派中合法，prompt 同样允许为空或只有空白。后台 one-shot 的空 label 由 job 准入拒绝。description 最多 128 KiB，独立于完整工具参数对象的预算，为 job 通知的附加文案在 256 KiB 文本块内保留空间；prompt 最多 256 KiB，与单文本块上限一致。服务在创建 child 前明确拒绝超限值；持久化 decoder 同样拒绝超限 label。这一规则不增加记录字段；旧二进制仍可能拒绝含超过 128 字节或空 label 的新记录。
 
 前台 run 未完成时返回错误：`subagent run was cancelled`（取消或中断恢复）、`subagent run failed`（错误）或 `subagent run ended abnormally (step_limit)`，有部分回答时追加 `\nPartial output before the run ended:\n<text>`。
 
@@ -55,9 +55,9 @@ description 原样进入 descriptor、catalog、列表与 job label，不去空�
 
 `send_message` 在调度之前和收件箱接受消息的锁内检查调用取消。前者返回 `ABORTED_BEFORE_DISPATCH`（`tool call aborted before dispatch`），后者返回 `ABORTED`（`tool call aborted`）；工具结果使用 `Error: ` 信封。被截止线拒绝的消息不入队、不写 recipient 日志，也不释放原有 resident child。
 
-消息以 `user/message`（source kind `agent-message`）投递，内容为 `Agent <sender> sent a message: ` 加正文两个文本块，经 `Agent.NotifyContext`：接收方忙时在下一个 step 边界追加，空闲时开启新 turn。中断已生效、旧 turn 尚未退出时接受的新消息属于下一 turn，并保留唤醒请求；旧 turn 退出后自动处理，旧 turn 不消费这些待投递消息。中断前已排队的消息不单独唤醒，但可随该新 turn 一起提交。one-shot 仍不因此开启第二个 turn。continuable child 的首条任务（source kind `delegation`）在正文后追加上游的返回指引，告诉它 parent id 并要求用 `send_message` 报告结果；one-shot 任务只有正文。
+消息以 `user/message`（source kind `agent-message`，`sender_session_id` 为发送方会话）投递，内容为 `Agent <sender> sent a message: ` 加正文两个文本块，经 `Agent.NotifyContext`：接收方忙时在下一个 step 边界追加，空闲时开启新 turn。中断已生效、旧 turn 尚未退出时接受的新消息属于下一 turn，并保留唤醒请求；旧 turn 退出后自动处理，旧 turn 不消费这些待投递消息。中断前已排队的消息不单独唤醒，但可随该新 turn 一起提交。one-shot 仍不因此开启第二个 turn。continuable child 的首条任务（source kind `delegation`）在正文后追加上游的返回指引，告诉它 parent id 并要求用 `send_message` 报告结果；one-shot 任务只有正文。
 
-结算通知是 source kind `subagent-settled` 的 `user/message`，以 `Background subagent <id> finished and will do no further work unless you send it more.`（取消或中断为 `was stopped before it finished.`，错误为 `failed before it finished.`，step 上限为 `ended abnormally (step_limit) before it finished.`）开头，后接 `Its closing message:` 与本次驻留的最终回答，没有回答时为 `It left no closing message.`。结局取本次驻留中最后一个 `turn/end`，回答先选择最后一条含内容块的 assistant message，再提取文本；本仓分开记录的 `tool/call` 同样属于该 assistant 消息的内容。最后消息只有工具提案时没有 closing text，不退回较早的进度文字。空 content 的 usage-only 消息不替换候选；没有任何带内容的 assistant 消息时才拼接流式文本。child 的移除和通知在同一临界区完成，continuable parent 不会在两者之间结算；等待该 child 释放的调用方最后才被唤醒，看到 child 已结束时通知已投递给 parent。
+结算通知是 source kind `subagent-settled`、`sender_session_id` 为结算 child 的 `user/message`，以 `Background subagent <id> finished and will do no further work unless you send it more.`（取消或中断为 `was stopped before it finished.`，错误为 `failed before it finished.`，step 上限为 `ended abnormally (step_limit) before it finished.`）开头，后接 `Its closing message:` 与本次驻留的最终回答，没有回答时为 `It left no closing message.`。结局取本次驻留中最后一个 `turn/end`，回答先选择最后一条含内容块的 assistant message，再提取文本；本仓分开记录的 `tool/call` 同样属于该 assistant 消息的内容。最后消息只有工具提案时没有 closing text，不退回较早的进度文字。空 content 的 usage-only 消息不替换候选；没有任何带内容的 assistant 消息时才拼接流式文本。child 的移除和通知在同一临界区完成，continuable parent 不会在两者之间结算；等待该 child 释放的调用方最后才被唤醒，看到 child 已结束时通知已投递给 parent。
 
 `interrupt_agent` 取消调用方任一 live 后代当前 turn 而不等待，不级联到目标的子代理；目标不 live 是被接受的空操作，自身或非后代返回 `UNAUTHORIZED` 类错误。上游只中断 continuable activation；本仓对 live one-shot 后代同样有效。
 
@@ -65,21 +65,36 @@ description 原样进入 descriptor、catalog、列表与 job label，不去空�
 
 session format 仍为 v2，变化都在记录层：
 
-1. **`subagent/descriptor` v2**：`{"version":2,"provider":"spawn"|"fork","mode":"one-shot"|"continuable","label":...,"inherited":N}`，`persona`/`tools` 字段保留。v1 与 `in-process` provider 被拒绝。descriptor 是 child 自己写的第一条记录，必须位于 `inherited + 1` 号序列且不在 turn 内；spawn 的 `inherited` 必须为 0（省略）。
-2. **fork 种子**：fork child 创建时复制 parent 最后一个 `turn/end` 为止的事件（不含调用方进行中的 turn），序号保持不变，因此 compaction 的 shadowed 序号仍然有效。`transcript.OpenOptions.Seed` 让 JSONL 管理器把 header 与种子一次写入、一次 `fsync`，先整体校验连续序号、记录 schema 和闭合因果顺序。之后追加 descriptor 与 `never` 策略。child 的模型 surface 因此直接包含 parent 已完成的会话，provider/model 由当前 route 决定，与 parent 相同。
+1. **`subagent/descriptor` v3**：`{"version":3,"provider":"spawn"|"fork","mode":"one-shot"|"continuable","label":...,"route":{"provider":...,"model":...,"effort":...},"inherited":N}`，`persona`/`tools` 字段保留。`route` 必填，`effort` 省略表示不发送 effort；未知字段、非法 effort 和空 provider/model 被拒绝。v1、v2 与 `in-process` provider 被拒绝。descriptor 是 child 自己写的第一条记录，必须位于 `inherited + 1` 号序列且不在 turn 内；spawn 的 `inherited` 必须为 0（省略）。
+2. **fork 种子**：fork child 创建时复制 parent 最后一个 `turn/end` 为止的事件（不含调用方进行中的 turn），序号保持不变，因此 compaction 的 shadowed 序号仍然有效。`transcript.OpenOptions.Seed` 让 JSONL 管理器把 header 与种子一次写入、一次 `fsync`，先整体校验连续序号、记录 schema 和闭合因果顺序。之后追加 descriptor 与 `never` 策略。child 的模型 surface 因此直接包含 parent 已完成的会话，并按第 7 节固定使用 parent 委派时的 route。
 3. **`subagent/catalog`**：parent 在创建 child 的工具 step 内写 `{"type":"subagent/catalog","turn":T,"step":S,"catalog":{"session_id":...,"mode":...,"label":...}}`。记录必须位于活动 step，同一日志内 `session_id` 唯一。它不进入 surface。
 4. **自有事件**：`session.OwnEvents` 以最后一个 descriptor 的 `inherited` 为界区分继承前缀；`session.Children` 只读取自有事件中的目录，fork 继承的 parent 目录不属于 child。会话自有的状态同样只从自有事件折叠：规划模式（`session.ProjectPlan`，见 [ADR-0014](0014-user-questions-and-plan-mode.md)）与目标（见 [ADR-0016](0016-long-running-goals.md)）。种子中的这些记录仍按顺序规则原位校验，只作为 parent 的历史存在；种子带入 child 模型 surface 的只有消息、工具调用与结果和 compaction 摘要。
-5. **消息来源**：`agent-message` 与 `subagent-settled` 是新的 source kind，不改变 `user/message` 结构。
+5. **消息来源**：`agent-message` 与 `subagent-settled` 的 source 必须带 `sender_session_id`（发送消息的会话，或结算的 child），其他 source kind 与 assistant 消息不得带它；decoder 同时拒绝缺失和多余的发送者。上游 source 的 `form` 与结算 `summary` 只服务界面展示，本仓不持久化：消息正文已含发送者与结算摘要，TUI 按 kind 区分显示。
+6. **runtime context**：delegated child 的委派说明是 source kind `runtime-context` 的 `user/message`，见第 7 节。
 
-旧二进制遇到新记录或 descriptor v2 时按未知记录或非法字段拒绝；composition token 升为 `subagent-tools-v3`，旧组合创建的会话按 composition mismatch 拒绝恢复，不迁移。本仓尚无发布 tag，没有需要迁移的会话。新记录与其他事实同存于 `0600`、写后 `fsync` 的只追加日志，受单 record 6 MiB、单 session 64 MiB 限制；fork 种子计入 child 的 64 MiB，parent 接近上限时 fork 失败。
+旧二进制遇到新记录或 descriptor v3 时按未知记录或非法字段拒绝；composition token 现为 `subagent-tools-v4`（v3 引入本 ADR 的记录，v4 引入继承 route、发送者身份与 runtime context），旧组合创建的会话按 composition mismatch 拒绝恢复，不迁移。本仓尚无发布 tag，没有需要迁移的会话。新记录与其他事实同存于 `0600`、写后 `fsync` 的只追加日志，受单 record 6 MiB、单 session 64 MiB 限制；fork 种子计入 child 的 64 MiB，parent 接近上限时 fork 失败。
 
 ### 5. 冷恢复语义
 
-驻留状态只在进程内。进程重启后，恢复 root 会话即可通过它的目录看到全部 child（`inactive`）；`send_message` 校验目录后以 `registry.Create` 重新打开 child 日志，按常规修复中断尾部，再从 descriptor 与 header 恢复 parent、depth、mode 和 label，并核对 header 中的 parent 与目录一致、mode 为 continuable。transcript 被其他 writer 持有或无法读取时返回 `subagent "<id>" is unavailable`。结算报告只看本次驻留新增的事件；冷恢复为上次驻留补写的结束事实在边界之前，不计入。
+驻留状态只在进程内。进程重启后，恢复 root 会话即可通过它的目录看到全部 child（`inactive`）；`send_message` 校验目录后以 `registry.Create` 重新打开 child 日志，按常规修复中断尾部，再从 descriptor 与 header 恢复 parent、depth、mode、label 和继承的 route，并核对 header 中的 parent 与目录一致、mode 为 continuable。transcript 被其他 writer 持有或无法读取时返回 `subagent "<id>" is unavailable`。结算报告只看本次驻留新增的事件；冷恢复为上次驻留补写的结束事实在边界之前，不计入。
 
 ### 6. job 的 owner 释放
 
 `job.Service.Release(ctx, owner)` 取消 owner 的 live job，等待全部 settle，然后删除该 owner 的全部记录；这些 settle 不发通知。subagent 服务在关闭每个 child agent 后调用它，因此 child 启动的后台 one-shot（及其子树）随 child 结算或拆除一起结束。root 的 job 仍由 `jobs` 插件关闭时回收。one-shot agent 只在它唯一的 turn 运行期间接受通知，turn 结束后既不接受新通知，也不为来不及投递的通知开启第二个 turn；因此 one-shot child 的后台 job 在其 turn 之后完成时，通知被拒绝并随释放丢弃，报告只来自那一个 turn。
+
+### 7. 继承 route 与委派 runtime context
+
+**继承 route。** 创建 child 时，服务读取 parent 最新的 `request/header`，把其中的 provider、model 和 effort 写入 descriptor 的 `route`；parent 还没有发出请求时委派失败。child 的每个 step 与冷恢复都使用这一 route：request header、system prompt 中的 route 行、`PrepareCall`、retry 策略键和工具执行 route 都取自它，`llm.Request.Effort` 携带 header 冻结的 effort（含省略），provider 以它代替目录中当时的 effort。context window 仍按该 provider/model 查当前设置目录。root 与 parent 自身继续跟随热切换的设置 route（[ADR-0002](0002-provider-neutral-agent-harness.md)）。route 所指的模型从设置中移除后，child 的请求以 `PrepareCall` 的未知模型错误失败，不改用其他模型。child 的 compaction 摘要调用仍使用设置 route，留待 compaction 改造时对齐。
+
+**委派 runtime context。** child 与 parent 使用同一 system prompt 组装，不再有 child 专属段落，因此同 route 的 fork 请求在继承历史之前与 parent 前缀一致。委派说明改由 subagent 服务注册的 step context provider 贡献：有 descriptor 的会话在 step 开始前，若 replay surface 中没有可见的 `runtime-context` 消息，就提交一条
+
+```text
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+
+You are a delegated subagent: your permission scope was fixed when you were started and cannot be widened from inside this session — operations that require approval are rejected automatically. When the task needs access beyond that scope, do not retry the denied operation; state the limitation in your reply so the delegating agent can handle it.
+```
+
+文本与上游 `SUBAGENT_DELEGATION_CONTEXT` 及其快照包装一致，包含审批自动拒绝、不要重试被拒操作、向委派方说明限制三项指引。它位于首个 step 的任务消息之后，与上游把 runtime context 追加在已领取消息之后的顺序相同。恢复后已提交的副本仍可见，不重复贡献；compaction 隐藏它后，下一个 step 重新贡献。root 会话没有 descriptor，不受影响。本仓 runtime context 只承载委派说明；上游的 sandbox 与审批策略快照仍由 system prompt 的 Safety 段落表达。
 
 ## 后果
 

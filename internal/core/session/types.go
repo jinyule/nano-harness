@@ -156,6 +156,9 @@ type MessageSource struct {
 	GoalRound    uint64 `json:"goal_round,omitempty"`
 	// NoticeID links a queued notice and the user/message that delivers it.
 	NoticeID string `json:"notice_id,omitempty"`
+	// SenderSessionID names the session whose action produced an
+	// agent-message or subagent-settled message; other kinds omit it.
+	SenderSessionID string `json:"sender_session_id,omitempty"`
 }
 
 // Message is one replayable user or assistant message.
@@ -313,7 +316,7 @@ type CompactionData struct {
 // Subagent provider and mode vocabulary shared by descriptors and catalog entries.
 const (
 	// SubagentDescriptorVersion is the only descriptor version this build reads or writes.
-	SubagentDescriptorVersion = 2
+	SubagentDescriptorVersion = 3
 	// SubagentSpawn identifies a child that starts with a fresh conversation.
 	SubagentSpawn = "spawn"
 	// SubagentFork identifies a child seeded with its parent's completed turns.
@@ -324,19 +327,39 @@ const (
 	SubagentContinuable = "continuable"
 )
 
+// Message source kinds that name the session whose action produced the
+// message in MessageSource.SenderSessionID.
+const (
+	// SourceAgentMessage marks a message another agent sent with send_message.
+	SourceAgentMessage = "agent-message"
+	// SourceSubagentSettled marks the harness's account of a background child
+	// that finished; the sender is that child.
+	SourceSubagentSettled = "subagent-settled"
+)
+
+// SubagentRoute is the model route a child inherits from the parent request
+// that delegated it. The child sends every request on this route, including
+// after cold resume, while the parent keeps following the hot route.
+type SubagentRoute struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Effort   Effort `json:"effort,omitempty"`
+}
+
 // SubagentDescriptor is the durable identity needed for cold resume. It is
 // the first record the child writes itself: Inherited counts the events
 // copied from the parent before it (always zero for spawn), so the
 // descriptor sits at sequence Inherited+1 and every later event is the
 // child's own.
 type SubagentDescriptor struct {
-	Version   int      `json:"version"`
-	Provider  string   `json:"provider"`
-	Mode      string   `json:"mode"`
-	Label     string   `json:"label"`
-	Persona   string   `json:"persona,omitempty"`
-	Tools     []string `json:"tools,omitempty"`
-	Inherited uint64   `json:"inherited,omitempty"`
+	Version   int           `json:"version"`
+	Provider  string        `json:"provider"`
+	Mode      string        `json:"mode"`
+	Label     string        `json:"label"`
+	Route     SubagentRoute `json:"route"`
+	Persona   string        `json:"persona,omitempty"`
+	Tools     []string      `json:"tools,omitempty"`
+	Inherited uint64        `json:"inherited,omitempty"`
 }
 
 // SubagentCatalog is a parent's durable record of one child it created.

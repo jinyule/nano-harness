@@ -7,7 +7,7 @@ func catalogEvent(seq uint64, id string) Event {
 }
 
 func descriptorEvent(seq, inherited uint64) Event {
-	return Event{Sequence: seq, Record: Record{Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 2, Provider: SubagentFork, Mode: SubagentOneShot, Label: "fork", Inherited: inherited}}}
+	return Event{Sequence: seq, Record: Record{Type: RecordSubagentDescriptor, Subagent: &SubagentDescriptor{Version: 3, Route: testRoute, Provider: SubagentFork, Mode: SubagentOneShot, Label: "fork", Inherited: inherited}}}
 }
 
 func TestChildren_ExcludesForkInheritedEntries(t *testing.T) {
