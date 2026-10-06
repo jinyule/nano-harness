@@ -159,9 +159,12 @@ type responsesEvent struct {
 	Delta       string `json:"delta"`
 	OutputIndex int    `json:"output_index"`
 	Response    struct {
-		Status string `json:"status"`
-		Error  any    `json:"error"`
-		Usage  struct {
+		Status            string `json:"status"`
+		Error             any    `json:"error"`
+		IncompleteDetails struct {
+			Reason string `json:"reason"`
+		} `json:"incomplete_details"`
+		Usage struct {
 			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
 			InputDetails struct {
@@ -183,10 +186,11 @@ type responsesAccumulator struct {
 	calls     map[int]*session.ToolCall
 	completed bool
 	usage     *session.TokenUsage
+	stop      string
 }
 
 func (provider *Provider) consumeResponses(body io.Reader, emit llm.Emit) (llm.Completion, error) {
-	state := responsesAccumulator{calls: map[int]*session.ToolCall{}}
+	state := responsesAccumulator{calls: map[int]*session.ToolCall{}, stop: "completed"}
 	err := scanSSE(body, provider.id, func(data []byte) error {
 		var event responsesEvent
 		if err := json.Unmarshal(data, &event); err != nil {
@@ -240,13 +244,19 @@ func (provider *Provider) consumeResponses(body io.Reader, emit llm.Emit) (llm.C
 					call.Arguments = json.RawMessage(event.Item.Arguments)
 				}
 			}
-		case "response.completed":
+		case "response.completed", "response.incomplete":
+			if event.Type == "response.incomplete" {
+				if event.Response.Status != "incomplete" || event.Response.IncompleteDetails.Reason != "max_output_tokens" || event.Response.Error != nil {
+					return &llm.Error{Code: llm.ErrorInvalid, Provider: provider.id, Cause: errors.New("response incomplete without an output token limit")}
+				}
+				state.stop = llm.StopMaxTokens
+			}
 			state.completed = true
 			state.usage = &session.TokenUsage{
 				InputTokens: event.Response.Usage.InputTokens, OutputTokens: event.Response.Usage.OutputTokens,
 				CacheReadTokens: event.Response.Usage.InputDetails.CachedTokens,
 			}
-		case "response.failed", "response.incomplete", "error":
+		case "response.failed", "error":
 			return &llm.Error{Code: llm.ErrorInvalid, Provider: provider.id, Cause: fmt.Errorf("provider event %s", event.Type)}
 		}
 		return nil
@@ -257,6 +267,9 @@ func (provider *Provider) consumeResponses(body io.Reader, emit llm.Emit) (llm.C
 	if !state.completed {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("stream ended before response.completed")}
 	}
+	if state.stop == llm.StopMaxTokens {
+		clear(state.calls)
+	}
 	calls := make([]session.ToolCall, 0, len(state.calls))
 	for index := 0; index <= maxIndex(state.calls); index++ {
 		if call := state.calls[index]; call != nil {
@@ -266,10 +279,10 @@ func (provider *Provider) consumeResponses(body io.Reader, emit llm.Emit) (llm.C
 			calls = append(calls, *call)
 		}
 	}
-	if state.text.Len() == 0 && len(calls) == 0 {
+	if state.text.Len() == 0 && len(calls) == 0 && state.stop != llm.StopMaxTokens {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorEmptyResponse, Provider: provider.id}
 	}
-	return llm.Completion{Message: assistantMessage(state.text.String()), Calls: calls, Usage: state.usage, Stop: "completed"}, nil
+	return llm.Completion{Message: assistantMessage(state.text.String()), Calls: calls, Usage: state.usage, Stop: state.stop}, nil
 }
 
 func maxIndex(values map[int]*session.ToolCall) int {

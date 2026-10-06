@@ -201,5 +201,33 @@
     "before": "!validApprovalOutcome(data.Outcome) || data.ToolName != \"\" || data.CallID != \"\" || data.Reason",
     "after": "!validApprovalOutcome(data.Outcome) || data.ToolName != \"\" || data.Reason",
     "test": "^TestRecordValidateRejectsEveryInvalidShape$"
+  },
+  {
+    "id": "goal-opening-failure-stop",
+    "file": "internal/app/goal/driver.go",
+    "before": "if result.Err != nil {",
+    "after": "if false {",
+    "test": "^TestDriver_FailedOpeningDoesNotRequeueTheRound$"
+  },
+  {
+    "id": "agent-output-limit-stop",
+    "file": "internal/app/agent/engine.go",
+    "before": "if completion.Stop == llm.StopMaxTokens {",
+    "after": "if false {",
+    "test": "^TestEngine_OutputLimitStopsBeforeToolsAndNotices$"
+  },
+  {
+    "id": "goal-output-limit-disarm",
+    "file": "internal/app/goal/goal.go",
+    "before": " || record.Outcome == session.OutcomeMaxTokens",
+    "after": "",
+    "test": "^TestService_SettlePausesCancelledRoundsAndDisarmsOtherStops$"
+  },
+  {
+    "id": "goal-settlement-revision",
+    "file": "internal/app/goal/goal.go",
+    "before": "if service.armed[sessionID] == ref {",
+    "after": "if service.armed[sessionID].ID != \"\" {",
+    "test": "^TestService_SettlePreservesLaterHumanAuthorization$"
   }
 ]

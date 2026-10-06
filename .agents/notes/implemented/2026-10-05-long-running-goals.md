@@ -20,10 +20,10 @@
 
 - `internal/core/session`：`goal/change` 记录、`GoalSnapshot`/`GoalChange`、`MessageSource` 的 `goal_id`/`goal_revision`/`goal_round`，形状校验与严格折叠 `GoalState.Apply`/`ProjectGoal`（拒绝时状态不变）；`CloneEvent` 深拷贝目标负载。`jsonl/order.go` 对每个事件执行同一折叠，`goal/change` 位置不受 turn/step 约束。
 - `internal/app/agent`：`Journal` 接口与 `Registry.Journal`；`Engine.RegisterAdmission(kind, Admission, scope)`，`runTurn` 通过 `openTurn` 提交开场记录；被拒绝的 turn 返回 `ErrNotAdmitted`、不写记录、不覆盖 `Status().Last`。新代码放在 `admission.go`，`engine.go` 与 `agent.go` 只做局部替换，减少与 WP6/WP7 的冲突。
-- `internal/app/goal`：`Service`（插件 `goals`）持有一把锁串行化变更、轮次 admission 与 `Settle`；上游错误码与文本；`Authority(sessionID, turn, delegated)` 读取调用方 turn 的已提交消息判定人类或轮次权限；`Watch` 由 scope 撤回且撤回后不再回调。`Driver`（插件 `goal-driver`）按 ADR 的五步循环运行。`prompt.go` 持有上游原文的轮次提示与收尾指令，`Quote` 按 `JSON.stringify` 规则引用（不转义 `<>&` 与 U+2028/U+2029）。
+- `internal/app/goal`：`Service`（插件 `goals`）持有一把锁串行化变更与轮次 admission，`Settle` 按读取时的 revision 条件应用结果；上游错误码与文本；`Authority(sessionID, turn, delegated)` 读取调用方 turn 的已提交消息判定人类或轮次权限；`Watch` 由 scope 撤回且撤回后不再回调。`Driver`（插件 `goal-driver`）按 ADR 的五步循环运行。`prompt.go` 持有上游原文的轮次提示与收尾指令，`Quote` 按 `JSON.stringify` 规则引用（不转义 `<>&` 与 U+2028/U+2029）。
 - `internal/adapter/tool/goal`（`goal-tools`）：三个工具与上游逐字节一致，`update_goal` 携带 `tool:goal` 段落（新增 `appTool.OrderGoal = 2400`）；自主 complete/blocked 经 `Registry.Notify` 投递收尾指令。
 - TUI：`/goal` 上游语法与渲染、`Config.Goals`、状态栏 `goal=<阶段> <轮次>/<上限>`、`goal>` 转录行；待发送图片时拒绝 `/goal`。
-- composition：`goals` 在 subagents 之后、`goal-tools` 在 plan tools 之后、`goal-driver` 最后；composition ID 加入 `goal-tools-v1`；两份 fixture 增加三个工具，`upstream-base-tools.json` 增加 `tool:goal` 段落；上游工具数量断言为 23（含 WP6/WP7 的工具）；原 `upstreamPlanSection` 改为按名称查找的 `upstreamSection`。
+- composition：`goals` 在 subagents 之后、`goal-tools` 在 plan tools 之后、`goal-driver` 最后；composition ID 使用 `goal-tools-v2`（停止语义见[后续修复](2026-10-06-goal-stop-outcomes.md)）；两份 fixture 增加三个工具，`upstream-base-tools.json` 增加 `tool:goal` 段落；上游工具数量断言为 23（含 WP6/WP7 的工具）；原 `upstreamPlanSection` 改为按名称查找的 `upstreamSection`。
 - mutation 新增 `goal-direct-human` 与 `goal-round-revision`。守卫测试 `TestHumanSource_OnlyFrontendsAttributeHumanInput`（`internal/app/goal`）用 `go/parser` 扫描全部非测试产品源码，只允许 `internal/adapter/tui` 与 `internal/adapter/media/image` 把来源 `Kind` 设为 `"user"` 或 `HumanSource`。PTY 脚本加入 `/goal` 创建 → driver 第 1 轮 `get_goal` → `update_goal complete` → 收尾指令回复的流程。
 
 关键取舍：
@@ -35,6 +35,8 @@
 - driver 在空闲时从日志 `Settle`，而不是订阅事件流：订阅可丢弃，日志顺序还能准确处理“取消之后又 resume”。
 - 收尾指令走既有 `Notify`，位置在 `step/end` 之后，模型可见内容与上游相同。
 - `/goal` 附件暂缓，因为无法保证附件消息先于 driver 的第一轮。
+
+停止原因与结算交错的实施证据由[目标停止修复](2026-10-06-goal-stop-outcomes.md)补充；本 Note 仍记录工具、权限、轮次与持久化目标的初始实现。
 
 ## Consequences
 

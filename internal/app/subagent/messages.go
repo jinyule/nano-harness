@@ -64,7 +64,7 @@ func settlementSummary(childID string, outcome session.TurnOutcome) string {
 		return subject + " was stopped before it finished."
 	case session.OutcomeError:
 		return subject + " failed before it finished."
-	case session.OutcomeStepLimit:
+	case session.OutcomeStepLimit, session.OutcomeMaxTokens:
 		// Reported below under its stable outcome name.
 	}
 	return subject + " ended abnormally (" + string(outcome) + ") before it finished."

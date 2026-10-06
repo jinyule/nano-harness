@@ -36,7 +36,7 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 			if state.turn != 0 || record.Turn != state.lastTurn+1 {
 				return state, orderError("invalid turn/start %d", record.Turn)
 			}
-			state.turn, state.lastTurn, state.lastStep = record.Turn, record.Turn, 0
+			state.turn, state.lastTurn, state.lastStep, state.assistant = record.Turn, record.Turn, 0, false
 		case coresession.RecordUserMessage:
 			if record.Turn != state.turn || record.Step != 0 && record.Step != state.step {
 				return state, orderError("user/message outside active turn or step")
@@ -131,10 +131,13 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 			if record.Turn != state.turn || record.Step != state.step || len(state.calls) != 0 || len(state.approvals) != 0 || state.compaction != "" {
 				return state, orderError("step/end has unfinished work")
 			}
-			state.step, state.assistant = 0, false
+			state.step = 0
 		case coresession.RecordTurnEnd:
 			if record.Turn != state.turn || state.step != 0 || state.compaction != "" {
 				return state, orderError("turn/end has unfinished work")
+			}
+			if record.Outcome == coresession.OutcomeMaxTokens && !state.assistant {
+				return state, orderError("max_tokens turn/end has no assistant completion")
 			}
 			state.turn = 0
 		case coresession.RecordPlanMode:

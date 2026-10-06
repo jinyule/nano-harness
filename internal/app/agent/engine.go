@@ -254,6 +254,15 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			result.Err, result.Outcome = err, session.OutcomeError
 			return result
 		}
+		if completion.Stop == llm.StopMaxTokens {
+			result.Text, result.Outcome = session.Text(message), session.OutcomeMaxTokens
+			if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordStepEnd, Turn: turn, Step: step, Usage: completion.Usage}); err != nil {
+				result.Err, result.Outcome = err, session.OutcomeError
+				return result
+			}
+			stepOpen, openStep = false, 0
+			return result
+		}
 		for index := range completion.Calls {
 			call := completion.Calls[index]
 			if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordToolCall, Turn: turn, Step: step, Call: &call}); err != nil {

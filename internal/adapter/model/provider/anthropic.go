@@ -249,6 +249,9 @@ func (provider *Provider) consumeAnthropic(body io.Reader, emit llm.Emit) (llm.C
 	if !state.completed {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("stream ended before message_stop")}
 	}
+	if state.stop == llm.StopMaxTokens {
+		clear(state.calls)
+	}
 	indexes := make([]int, 0, len(state.calls))
 	for index := range state.calls {
 		indexes = append(indexes, index)
@@ -265,7 +268,7 @@ func (provider *Provider) consumeAnthropic(body io.Reader, emit llm.Emit) (llm.C
 		}
 		calls = append(calls, call)
 	}
-	if state.text.Len() == 0 && len(calls) == 0 {
+	if state.text.Len() == 0 && len(calls) == 0 && state.stop != llm.StopMaxTokens {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorEmptyResponse, Provider: provider.id}
 	}
 	return llm.Completion{Message: assistantMessage(state.text.String()), Calls: calls, Usage: &state.usage, Stop: state.stop}, nil

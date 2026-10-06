@@ -172,7 +172,7 @@ func (provider *Provider) foreground(ctx context.Context, request appSubagent.St
 		headline = "subagent run was cancelled"
 	case session.OutcomeError:
 		headline = "subagent run failed"
-	case session.OutcomeStepLimit:
+	case session.OutcomeStepLimit, session.OutcomeMaxTokens:
 		headline = "subagent run ended abnormally (" + string(report.Outcome) + ")"
 	}
 	if report.Text != "" {

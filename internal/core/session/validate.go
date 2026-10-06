@@ -403,7 +403,7 @@ func (record Record) requireTurnEnd() error {
 		return invalid("turn/end has unrelated fields")
 	}
 	switch record.Outcome {
-	case OutcomeCompleted, OutcomeCanceled, OutcomeError, OutcomeStepLimit, OutcomeInterrupted:
+	case OutcomeCompleted, OutcomeMaxTokens, OutcomeCanceled, OutcomeError, OutcomeStepLimit, OutcomeInterrupted:
 		return nil
 	default:
 		return invalid("invalid turn outcome %q", record.Outcome)

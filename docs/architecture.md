@@ -148,7 +148,7 @@ Submit user message
 - `Followup` 排队新的 turn；`Steer` 只在活动 turn 的工具 step 边界注入；`Interrupt` 只取消活动 turn，保留已排队 followup；`WhenIdle` 等待队列、活动 turn 和已唤醒的通知 turn 都结算。
 - 注册了 `Admission` 的 source kind（目前只有目标轮次 `goal`）在 worker 取出 turn 时先经 admission：它在排除并发状态变化的同时提交 `turn/start` 与开场 `user/message`，或以 `ErrNotAdmitted` 丢弃这个 turn，不写任何记录，也不更新 `Status().Last`。规则见[长期目标](#长期目标)。
 - `Notify` 投递模型可见通知：后台任务完成通知、agent 之间的 `send_message` 消息、子代理结算通知和目标收尾指令。agent 忙时，通知在 turn 开始后、工具 step 结束后以及无工具调用的回答之后作为 `user/message` 追加；最后一种情况下 turn 继续一个 step 回应它，已到 step 上限时留待下一 turn。agent 空闲，或 turn 结束后仍有通知且没有排队的 turn 时，worker 以通知开启新 turn；被取消的 turn 留下的通知等待下一个 turn。one-shot agent 只在它唯一的 turn 运行期间接受通知，turn 结束后拒绝通知，也不为未投递的通知开启新 turn。待投递通知只在内存中，规则见 [ADR-0009](decisions/0009-background-jobs.md)。
-- 调用取消、step limit、错误和恢复中断分别记录稳定 outcome。异常边界会尝试用不继承上游取消的 context 关闭 step/turn。
+- 调用取消、输出 token 上限、step limit、错误和恢复中断分别记录稳定 outcome。输出上限归一为 `max_tokens`：提交已生成的 assistant message 与 usage 后结束 turn，不执行截断响应的工具提案，也不消费待投递通知；停止事实与兼容规则见 [ADR-0018](decisions/0018-goal-stop-outcomes.md)。异常边界会尝试用不继承上游取消的 context 关闭 step/turn。
 - Registry 拥有每个动态 agent（包括 root）的 Scope、worker 和 journal。关闭时先拒绝新 agent，再同时关闭全部 agent：每个 worker 立即取消在途 turn、丢弃排队工作，registry 等待所有 worker 回收，不会出现一个 agent 在排空时另一个仍在开启新 turn。
 
 ## 工具、approval 与调度
@@ -293,7 +293,7 @@ goal driver ──Followup(<goal_round>)──► agent worker ──► engine.
 
 - `internal/app/goal.Service`（插件 `goals`）是唯一写 `goal/change` 的组件。目标只从 session 自己提交的事件折叠，fork 子代理继承的父目标事实不属于它。每次变更在服务锁内从日志折叠当前状态（`session.ProjectGoal`）、校验 compare-and-set 的 `{id, revision}` 与阶段迁移、追加完整快照，再通知 watcher。轮次 admission 持有同一把锁，所以变更不会与轮次的开场记录交错。
 - 是否允许自动继续（armed）只在进程内：create 与 resume 置 armed，pause、complete、block、clear 解除，edit 保持；driver 接管 session 时与退出时都解除。resume 或 fork 后恢复的 active 目标因此是 disarmed，需人类或模型（在人类的 turn 中）resume。
-- `goal-driver` 插件只驱动 root agent。它在 root 自身空闲（`WhenIdle`，不等待驻留子代理，与上游一致）时先 `Settle` 自上次以来结束的 turn：被取消的目标轮次暂停其自身 revision（仍为当前、active、armed 时），其他被取消的 turn 或任何 error turn 解除 armed，之后的 create/resume 会抵消。随后若目标 active、armed 且未达上限，就以 `Followup` 排入一条 `source.kind = "goal"` 的轮次提示；达到上限时以 `round-limit` 阻塞，排队失败以 `queue-failed` 阻塞，admission 拒绝且无法由新 revision 或撤销解释时以 `prompt-rejected` 阻塞。step limit 不影响继续。
+- `goal-driver` 插件只驱动 root agent。它在 root 自身空闲（`WhenIdle`，不等待驻留子代理，与上游一致）时先 `Settle` 自上次以来结束的 turn：被取消的目标轮次暂停其自身 revision（仍为当前、active、armed 时），其他被取消的 turn、error 或 `max_tokens` turn 解除 armed，之后的 create/resume 会抵消。解除只针对读取时的确切 ID/revision；旧结算和失败的旧轮次不能撤销后来的人类授权。随后若目标 active、armed 且未达上限，就以 `Followup` 排入一条 `source.kind = "goal"` 的轮次提示；达到上限时以 `round-limit` 阻塞，排队失败以 `queue-failed` 阻塞，admission 拒绝且无法由新 revision 或撤销解释时以 `prompt-rejected` 阻塞。轮次结果中的非准入错误即使没有 `turn/end` 也解除该轮次 revision 的 armed，避免开场持久化失败后重排；step limit 不影响继续。
 - admission 只接纳当前 active、armed revision 的下一轮，且最近一次撤销性停止之后已有 create/resume；否则丢弃该 turn。人类的 `/goal pause` 会中断正在运行的 turn，模型自己的 pause 让本 turn 正常结束。
 - 轮次与普通 turn 一样服从当前规划模式、approval policy 与等待；审批等待中 driver 只等待该轮次结束。
 - 工具在执行点判定权限：create、edit、pause、resume 要求调用方 turn 中有 `source.kind = "user"` 的消息且调用方不是 delegated；complete 与 blocked 也接受当前目标 revision 的当前轮次，blocked 需已有至少 3 个准入轮次。模型不能 resume 一个 paused 目标。目标轮次中成功的 complete/blocked 通过 `Notify` 排入 `source.kind = "tool-goal"` 的收尾指令，模型在下一 step 回复用户。
@@ -322,7 +322,7 @@ subagent/descriptor, subagent/catalog, todo/write, plan/mode, goal/change, step/
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）与 spill 策略的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、goal 停止语义（`goal-tools-v2`）与 spill 策略的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。`approval/asked` 的工具名必须等于 pending call 的名称；`approval/decided` 仅通过 approval ID 关联问题，不允许携带 `call_id`。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。

@@ -21,6 +21,7 @@ type Goals interface {
 	Settle(context.Context, string, uint64) (uint64, error)
 	Block(context.Context, string, session.GoalRef, session.GoalBlockReason, Actor) (*View, error)
 	Disarm(string)
+	DisarmRevision(string, session.GoalRef)
 	Watch(string, func(Change), *plugin.Scope) error
 }
 
@@ -166,6 +167,10 @@ func (driver *Driver) round(ctx context.Context, controller agent.Controller, se
 	}
 	if errors.Is(result.Err, agent.ErrNotAdmitted) {
 		return &message.Source, false
+	}
+	if result.Err != nil {
+		// A failed append can leave no turn/end for Settle to observe.
+		driver.goals.DisarmRevision(sessionID, ref)
 	}
 	return nil, false
 }

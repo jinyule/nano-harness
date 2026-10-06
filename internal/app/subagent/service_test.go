@@ -126,6 +126,7 @@ func TestMessages_RenderUpstreamWording(t *testing.T) {
 		session.OutcomeCanceled:    "Background subagent c was stopped before it finished.",
 		session.OutcomeInterrupted: "Background subagent c was stopped before it finished.",
 		session.OutcomeError:       "Background subagent c failed before it finished.",
+		session.OutcomeMaxTokens:   "Background subagent c ended abnormally (max_tokens) before it finished.",
 		session.OutcomeStepLimit:   "Background subagent c ended abnormally (step_limit) before it finished.",
 	} {
 		if got := settlementSummary("c", outcome); got != want {
@@ -145,14 +146,15 @@ func TestJobOutcome_MapsRunEndings(t *testing.T) {
 		err    error
 		want   job.Outcome
 	}{
-		"cancelled":   {err: context.Canceled, want: job.Outcome{Status: job.StatusKilled}},
-		"deadline":    {err: errors.Join(context.DeadlineExceeded, errors.New("close")), want: job.Outcome{Status: job.StatusKilled}},
-		"failure":     {err: errors.New("broken"), want: job.Outcome{Status: job.StatusFailed, Detail: "broken"}},
-		"completed":   {report: Report{Outcome: session.OutcomeCompleted, Text: "answer"}, want: job.Outcome{Status: job.StatusCompleted, Result: "answer"}},
-		"canceled":    {report: Report{Outcome: session.OutcomeCanceled}, want: job.Outcome{Status: job.StatusKilled}},
-		"interrupted": {report: Report{Outcome: session.OutcomeInterrupted}, want: job.Outcome{Status: job.StatusKilled}},
-		"error":       {report: Report{Outcome: session.OutcomeError}, want: job.Outcome{Status: job.StatusFailed, Detail: "error"}},
-		"step limit":  {report: Report{Outcome: session.OutcomeStepLimit}, want: job.Outcome{Status: job.StatusFailed, Detail: "step_limit"}},
+		"cancelled":    {err: context.Canceled, want: job.Outcome{Status: job.StatusKilled}},
+		"deadline":     {err: errors.Join(context.DeadlineExceeded, errors.New("close")), want: job.Outcome{Status: job.StatusKilled}},
+		"failure":      {err: errors.New("broken"), want: job.Outcome{Status: job.StatusFailed, Detail: "broken"}},
+		"completed":    {report: Report{Outcome: session.OutcomeCompleted, Text: "answer"}, want: job.Outcome{Status: job.StatusCompleted, Result: "answer"}},
+		"canceled":     {report: Report{Outcome: session.OutcomeCanceled}, want: job.Outcome{Status: job.StatusKilled}},
+		"interrupted":  {report: Report{Outcome: session.OutcomeInterrupted}, want: job.Outcome{Status: job.StatusKilled}},
+		"error":        {report: Report{Outcome: session.OutcomeError}, want: job.Outcome{Status: job.StatusFailed, Detail: "error"}},
+		"output limit": {report: Report{Outcome: session.OutcomeMaxTokens}, want: job.Outcome{Status: job.StatusFailed, Detail: "max_tokens"}},
+		"step limit":   {report: Report{Outcome: session.OutcomeStepLimit}, want: job.Outcome{Status: job.StatusFailed, Detail: "step_limit"}},
 	} {
 		if got := jobOutcome(test.report, test.err); got != test.want {
 			t.Errorf("%s: %#v", name, got)

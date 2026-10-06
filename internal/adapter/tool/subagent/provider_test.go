@@ -225,6 +225,7 @@ func TestDelegationTools_ReportFailuresAndUnfinishedRuns(t *testing.T) {
 		{appSubagent.Report{Outcome: session.OutcomeCanceled, Text: "half"}, "Error: subagent run was cancelled\nPartial output before the run ended:\nhalf"},
 		{appSubagent.Report{Outcome: session.OutcomeInterrupted}, "Error: subagent run was cancelled"},
 		{appSubagent.Report{Outcome: session.OutcomeError}, "Error: subagent run failed"},
+		{appSubagent.Report{Outcome: session.OutcomeMaxTokens, Text: "partial"}, "Error: subagent run ended abnormally (max_tokens)\nPartial output before the run ended:\npartial"},
 		{appSubagent.Report{Outcome: session.OutcomeStepLimit, Text: "draft"}, "Error: subagent run ended abnormally (step_limit)\nPartial output before the run ended:\ndraft"},
 	} {
 		service.report = test.report

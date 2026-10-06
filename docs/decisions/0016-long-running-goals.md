@@ -47,19 +47,21 @@
 
 ### 核心循环变化
 
-engine 增加按 source kind 注册的 `Admission`（`Engine.RegisterAdmission`，scope 所有）。worker 取出 turn 后，若开场消息的 kind 已注册，admission 在排除并发状态变化的同时调用 `open` 提交 `turn/start` 与开场 `user/message`，或以 `agent.ErrNotAdmitted` 丢弃。被丢弃的 turn 不写任何记录，`TurnResult` 没有 turn 与 outcome，也不覆盖 `Status().Last`。目标服务为 `goal` 注册 admission：持有与变更相同的锁，只接纳当前 active、armed revision 的下一轮，且日志中最近一次撤销性停止（被取消或失败的 turn）之后已有 create/resume。这取代上游的 pre-step 栅栏：陈旧轮次从不进入日志。
+engine 增加按 source kind 注册的 `Admission`（`Engine.RegisterAdmission`，scope 所有）。worker 取出 turn 后，若开场消息的 kind 已注册，admission 在排除并发状态变化的同时调用 `open` 提交 `turn/start` 与开场 `user/message`，或以 `agent.ErrNotAdmitted` 丢弃。被丢弃的 turn 不写任何记录，`TurnResult` 没有 turn 与 outcome，也不覆盖 `Status().Last`。目标服务为 `goal` 注册 admission：持有与变更相同的锁，只接纳当前 active、armed revision 的下一轮，且日志中最近一次撤销性停止（被取消、失败或输出截断的 turn）之后已有 create/resume。这取代上游的 pre-step 栅栏：陈旧轮次从不进入日志。
 
 `internal/app/goal.Driver`（插件 `goal-driver`）驱动 root agent，不另建 turn 启动路径：
 
 1. 启动时解除该 session 的 armed，并从当前日志末尾开始观察。
-2. 循环等待 root 的 `WhenIdle`（不等待其驻留的 continuable 子代理），然后 `Settle` 自上次以来的事件：被取消的目标轮次在其 revision 仍为当前、active、armed 时暂停（暂停失败则解除），其他被取消的 turn 与任何 error turn 解除 armed，之后的 create/resume 抵消前面的停止。step limit 不影响继续。
-3. 目标 active 且 armed 时：达到上限以 `round-limit` 阻塞；否则用 `Followup` 排入上游原文的 `<goal_round>` 提示并等待其结果。排队失败以 `queue-failed` 阻塞；admission 拒绝后若下一次计算出的轮次来源不变（既无新 revision 也未被撤销），以 `prompt-rejected` 阻塞。否则等待目标变更通知。
+2. 循环等待 root 的 `WhenIdle`（不等待其驻留的 continuable 子代理），然后 `Settle` 自上次以来的事件：被取消的目标轮次在其 revision 仍为当前、active、armed 时暂停（暂停失败则解除），其他被取消的 turn、error 与 `max_tokens` turn 解除读取时 revision 的 armed，之后的 create/resume 抵消前面的停止；旧结算的条件解除不能撤销后来授权的新 ID/revision。step limit 不影响继续。
+3. 目标 active 且 armed 时：达到上限以 `round-limit` 阻塞；否则用 `Followup` 排入上游原文的 `<goal_round>` 提示并等待其结果。排队失败以 `queue-failed` 阻塞；admission 拒绝后若下一次计算出的轮次来源不变（既无新 revision 也未被撤销），以 `prompt-rejected` 阻塞。非准入拒绝的轮次错误（含没有 `turn/end` 的开场追加/fsync 失败）解除该轮次 revision 的 armed，不重排；否则等待目标变更通知。
 4. watcher 收到人类（`ActorHost`）的 pause 时中断当前 turn；模型与 driver 的 pause 不中断。
 5. cleanup 先解除 armed（排队中的轮次因此被 admission 拒绝），再取消循环；在途轮次被中断并等待结果，受 shutdown 期限约束。driver 最后启动，因此在目标服务撤回 admission 之前停止。
 
 “整个 agent 空闲”与上游一致，指 root agent 自身没有活动、排队或被通知唤醒的 turn。上游 driver 检查的是该 agent 的 `status === 'idle'`，`whenIdle()` 文档写明它等待“当前 whole-agent activity”，即该 agent 的 driver 与维护任务，不包括后代 agent。因此 root 有驻留的 continuable 子代理在后台工作时，driver 仍会排下一轮；子代理结算或发来消息时，`Notify` 会唤醒 root，driver 随之等待那次 turn。等待整棵树空闲会让后台子代理阻塞目标推进，并与上游行为不同，所以不采用。
 
 规划模式、approval 等待和用户打断都不需要专门分支：轮次是普通 turn，服从当前规划段落、approval policy 与等待；人类 `/interrupt` 使轮次以 canceled 结束，driver 随后暂停该目标。
+
+输出停止事实、三个 provider 映射、截断工具提案与通知处理、v2 枚举及兼容规则由 [ADR-0018](0018-goal-stop-outcomes.md) 定义。
 
 ### 模型输入变化
 
@@ -73,7 +75,7 @@ TUI 的 `/goal` 实现上游语法：空参数显示状态（阶段、阻塞原�
 ### 版本识别、拒绝旧格式与恢复
 
 - session format 保持 v2。`goal/change` 与消息来源的三个字段是加法格式，与 [ADR-0004](0004-provider-neutral-effort.md)、ADR-0014 一致：不含它们的 v2 日志仍可解码；较旧的二进制遇到 `goal/change` 或未知来源字段按未知记录/字段拒绝整份日志。
-- composition ID 加入 `goal-tools-v1`。由不含目标工具的组合创建的会话恢复时因 composition mismatch 被拒绝，不迁移，也不静默接受。本仓尚无发布 tag，没有需要迁移的已发布会话。
+- composition ID 使用 `goal-tools-v2` 绑定目标停止语义（见 [ADR-0018](0018-goal-stop-outcomes.md)）。由不含目标工具的组合创建的会话恢复时因 composition mismatch 被拒绝，不迁移，也不静默接受。本仓尚无发布 tag，没有需要迁移的已发布会话。
 - 严格 decoder 拒绝未知字段、未知操作与阶段、缺失负载、带 turn/step 的记录和任何违反折叠的事实；非法行使整份日志被拒绝，文件不被截断或改写，维护者仍可离线检查原始数据。
 - `goal/change` 与其他事实保存在同一个只追加、`0600`、写后 `fsync` 的 JSONL 中，受单 record 6 MiB 与单 session 64 MiB 限制，compaction 不删除它，保留期与会话文件相同。resume 修复中断尾部不追加、不改动目标记录；恢复后目标、阶段、revision 与轮次计数不变，自动继续一律 disarmed，需人类 `/goal resume` 或在人类 turn 中由模型 resume。
 

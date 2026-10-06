@@ -203,12 +203,16 @@ type Request struct {
 	MaxTokens int
 }
 
+// StopMaxTokens identifies output truncated by the provider's token limit.
+const StopMaxTokens = "max_tokens"
+
 // Completion is the final provider response assembled from its stream.
 type Completion struct {
 	Message session.Message
 	Calls   []session.ToolCall
 	Usage   *session.TokenUsage
-	Stop    string
+	// Stop uses StopMaxTokens for output limits; other reasons are provider-specific.
+	Stop string
 }
 
 // Emit receives provider-neutral chunks in provider order.

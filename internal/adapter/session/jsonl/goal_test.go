@@ -43,7 +43,7 @@ func TestSessionV2Goal_FrozenContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 37 {
+	if len(events) != 37 || events[16].Record.Outcome != coresession.OutcomeMaxTokens {
 		t.Fatalf("events=%d", len(events))
 	}
 	for _, check := range []struct {
@@ -107,7 +107,7 @@ func TestSessionV2Goal_FrozenContract(t *testing.T) {
 		{Type: coresession.RecordRequestHeader, Turn: 2, Step: 1, Header: header1},
 		{Type: coresession.RecordAssistantMessage, Turn: 2, Step: 1, Message: assistantMessage("fixed one gate")},
 		{Type: coresession.RecordStepEnd, Turn: 2, Step: 1},
-		{Type: coresession.RecordTurnEnd, Turn: 2, Outcome: coresession.OutcomeCompleted},
+		{Type: coresession.RecordTurnEnd, Turn: 2, Outcome: coresession.OutcomeMaxTokens},
 		goalSnapshotRecord(coresession.GoalOpEdit, 2, edited, coresession.GoalActive, 1, 2000),
 		goalSnapshotRecord(coresession.GoalOpPause, 3, edited, coresession.GoalPaused, 1, 3000),
 		goalSnapshotRecord(coresession.GoalOpResume, 4, edited, coresession.GoalActive, 1, 4000),
@@ -149,6 +149,7 @@ func TestSessionV2Goal_RejectsChangedContract(t *testing.T) {
 		{"unknown-change-field", `"operation":"create",`, `"operation":"create","version":1,`},
 		{"unknown-snapshot-field", `"revision":1,"objective"`, `"revision":1,"owner":"x","objective"`},
 		{"unknown-source-field", `"goal_round":1}`, `"goal_round":1,"goal":"x"}`},
+		{"unknown-stop", `"outcome":"max_tokens"`, `"outcome":"length"`},
 		{"unknown-operation", `"operation":"pause"`, `"operation":"halt"`},
 		{"unknown-phase", `"phase":"paused"`, `"phase":"stopped"`},
 		{"missing-payload", `{"type":"goal/change","goal":{"operation":"clear","cleared":{"id":"goal-fixture","revision":7},"cleared_at_unix_ms":7000}}`, `{"type":"goal/change"}`},

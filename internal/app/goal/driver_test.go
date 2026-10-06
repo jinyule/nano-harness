@@ -29,6 +29,7 @@ type fakeRoot struct {
 	blocked   chan struct{}
 	idleErr   error
 	eventsErr error
+	idle      chan chan struct{}
 
 	mu         sync.Mutex
 	interrupts int
@@ -45,10 +46,78 @@ func (root *fakeRoot) Events(ctx context.Context) ([]session.Event, error) {
 	return root.journal.Events(ctx)
 }
 func (root *fakeRoot) WhenIdle(ctx context.Context) error {
+	if root.idle != nil {
+		release := make(chan struct{})
+		select {
+		case root.idle <- release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+	}
 	if root.idleErr != nil {
 		return root.idleErr
 	}
 	return ctx.Err()
+}
+
+func TestDriver_FailedOpeningDoesNotRequeueTheRound(t *testing.T) {
+	test := startDriver(t, func(test *driverFixture) { test.root.idle = make(chan chan struct{}, 1) })
+	view := test.create(t, "ship", nil)
+	close(<-test.root.idle)
+	call := test.next(t)
+	call.result <- agent.TurnResult{Outcome: session.OutcomeError, Err: errors.New("disk full")}
+	release := <-test.root.idle // The result has been processed; let the next scheduling pass run.
+	close(release)
+	select {
+	case repeated := <-test.root.calls:
+		t.Fatalf("failed opening requeued round %+v as %+v", call.message.Source, repeated.message.Source)
+	case <-test.root.idle:
+		// The create wake was consumed without queueing another round.
+	case <-time.After(5 * time.Second):
+		t.Fatal("driver never finished the scheduling pass")
+	}
+	current, err := test.service.Get(t.Context(), "root")
+	if err != nil || current.Armed || current.Goal.Ref() != view.Goal.Ref() || current.RoundsStarted != 0 {
+		t.Fatalf("failed opening retains continuation: %+v, %v", current, err)
+	}
+	test.stop(t)
+	if len(test.root.calls) != 0 {
+		t.Fatal("failed opening requeued the same round")
+	}
+}
+
+func TestDriver_FailedOldRoundPreservesNewAuthorization(t *testing.T) {
+	test := startDriver(t, func(test *driverFixture) {
+		test.root.idle = make(chan chan struct{}, 1)
+		test.root.cancelOnInterrupt(false)
+	})
+	view := test.create(t, "old", nil)
+	close(<-test.root.idle)
+	call := test.next(t)
+	if err := test.service.Clear(t.Context(), "root", view.Goal.Ref(), ActorHost); err != nil {
+		t.Fatal(err)
+	}
+	authorized := test.create(t, "new", nil)
+	call.result <- agent.TurnResult{Outcome: session.OutcomeError, Err: errors.New("disk full")}
+	release := <-test.root.idle
+	current, err := test.service.Get(t.Context(), "root")
+	if err != nil || !current.Armed || current.Goal.Ref() != authorized.Goal.Ref() {
+		t.Fatalf("failed old round revoked authorization: %+v, %v", current, err)
+	}
+	close(release)
+	next := test.next(t)
+	if next.message.Source.GoalID != authorized.Goal.ID || next.message.Source.GoalRound != 1 {
+		t.Fatalf("new round = %+v", next.message.Source)
+	}
+	test.play(t, next, session.OutcomeCompleted, func() {
+		if _, err := test.service.Complete(t.Context(), "root", authorized.Goal.Ref(), ActorModel); err != nil {
+			t.Error(err)
+		}
+	})
 }
 
 func (root *fakeRoot) Followup(ctx context.Context, message session.Message) (<-chan agent.TurnResult, error) {

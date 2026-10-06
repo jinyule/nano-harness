@@ -136,7 +136,8 @@ type Service struct {
 	mu      sync.Mutex
 	started bool
 	running bool
-	armed   map[string]bool
+	// armed binds continuation to the revision that owns it.
+	armed map[string]session.GoalRef
 
 	// watchMu is held for reading while watchers run, so a withdrawn
 	// watcher is never called after its cleanup returns.
@@ -158,7 +159,7 @@ func New(journals Journals, admissions Admissions, config Config) (*Service, err
 	if config.Random == nil {
 		config.Random = rand.Reader
 	}
-	return &Service{journals: journals, admissions: admissions, maxRounds: config.DefaultMaxRounds, now: config.Now, random: config.Random, armed: map[string]bool{}, watchers: map[*watcher]struct{}{}}, nil
+	return &Service{journals: journals, admissions: admissions, maxRounds: config.DefaultMaxRounds, now: config.Now, random: config.Random, armed: map[string]session.GoalRef{}, watchers: map[*watcher]struct{}{}}, nil
 }
 
 // ID returns the stable plugin identity.
@@ -177,7 +178,7 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	if err := scope.Defer(func(context.Context) error {
 		service.mu.Lock()
 		service.running = false
-		service.armed = map[string]bool{}
+		service.armed = map[string]session.GoalRef{}
 		service.mu.Unlock()
 		return nil
 	}); err != nil {
@@ -282,6 +283,16 @@ func (service *Service) Disarm(sessionID string) {
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	delete(service.armed, sessionID)
+}
+
+// DisarmRevision removes continuation only from the exact armed revision.
+// A later create, edit, or resume keeps its own activation.
+func (service *Service) DisarmRevision(sessionID string, ref session.GoalRef) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.armed[sessionID] == ref {
+		delete(service.armed, sessionID)
+	}
 }
 
 // Create starts and arms a goal. A completed goal may be replaced; any
@@ -441,7 +452,7 @@ func (service *Service) mutate(ctx context.Context, sessionID string, actor Acto
 		service.mu.Unlock()
 		return nil, err
 	}
-	change, armed, err := build(state, service.armed[sessionID])
+	change, armed, err := build(state, service.armed[sessionID].ID != "")
 	if err == nil {
 		record := session.Record{Type: session.RecordGoalChange, Goal: &change}
 		if _, err = journal.Append(ctx, record); err == nil {
@@ -453,7 +464,7 @@ func (service *Service) mutate(ctx context.Context, sessionID string, actor Acto
 		return nil, err
 	}
 	if armed {
-		service.armed[sessionID] = true
+		service.armed[sessionID] = state.Goal.Ref()
 	} else {
 		delete(service.armed, sessionID)
 	}
@@ -491,7 +502,7 @@ func (service *Service) Admit(ctx context.Context, journal agent.Journal, messag
 		return err
 	}
 	source, current := message.Source, state.Goal
-	if current == nil || current.Phase != session.GoalActive || !service.armed[journal.Header().SessionID] || source.GoalID != current.ID || source.GoalRevision != current.Revision || source.GoalRound != state.RoundsStarted+1 || source.GoalRound > current.MaxRounds || settle(events, 0).revoked() {
+	if current == nil || current.Phase != session.GoalActive || service.armed[journal.Header().SessionID] != current.Ref() || source.GoalID != current.ID || source.GoalRevision != current.Revision || source.GoalRound != state.RoundsStarted+1 || source.GoalRound > current.MaxRounds || settle(events, 0).revoked() {
 		return agent.ErrNotAdmitted
 	}
 	return open(ctx)
@@ -499,8 +510,9 @@ func (service *Service) Admit(ctx context.Context, journal agent.Journal, messag
 
 // Settle applies the turns committed after sequence after: a cancelled
 // goal round pauses its own revision if it is still current, active, and
-// armed, and any other cancelled turn or any failed turn disarms the goal,
-// unless a later create or resume armed it again. It returns the last
+// armed, and any other cancelled turn, failed turn, or output-token limit
+// disarms the observed revision unless a later create or resume armed it
+// again. It returns the last
 // sequence it examined.
 func (service *Service) Settle(ctx context.Context, sessionID string, after uint64) (uint64, error) {
 	journal, err := service.journal(sessionID)
@@ -529,12 +541,12 @@ func (service *Service) Settle(ctx context.Context, sessionID string, after uint
 	}
 	if current := state.Goal; outcome.pause != nil && current != nil && current.Ref() == *outcome.pause && current.Phase == session.GoalActive && service.isArmed(sessionID) {
 		if _, err := service.Pause(ctx, sessionID, *outcome.pause, ActorDriver); err != nil {
-			service.Disarm(sessionID)
+			service.DisarmRevision(sessionID, *outcome.pause)
 			return last, err
 		}
 	}
-	if outcome.disarm {
-		service.Disarm(sessionID)
+	if outcome.disarm && state.Goal != nil {
+		service.DisarmRevision(sessionID, state.Goal.Ref())
 	}
 	return last, nil
 }
@@ -542,14 +554,14 @@ func (service *Service) Settle(ctx context.Context, sessionID string, after uint
 func (service *Service) isArmed(sessionID string) bool {
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	return service.armed[sessionID]
+	return service.armed[sessionID].ID != ""
 }
 
 // settlement is what the turns after a sequence imply for continuation.
 type settlement struct {
 	// pause names the revision of a cancelled goal round.
 	pause *session.GoalRef
-	// disarm reports a cancelled non-round turn or a failed turn.
+	// disarm reports a cancelled non-round turn, failure, or output-token limit.
 	disarm bool
 }
 
@@ -578,7 +590,7 @@ func settle(events []session.Event, after uint64) settlement {
 			outcome = settlement{}
 		case record.Type == session.RecordTurnEnd && record.Outcome == session.OutcomeCanceled && round != nil:
 			outcome.pause = round
-		case record.Type == session.RecordTurnEnd && (record.Outcome == session.OutcomeCanceled || record.Outcome == session.OutcomeError):
+		case record.Type == session.RecordTurnEnd && (record.Outcome == session.OutcomeCanceled || record.Outcome == session.OutcomeError || record.Outcome == session.OutcomeMaxTokens):
 			outcome.disarm = true
 		}
 	}
@@ -675,5 +687,5 @@ func (service *Service) view(sessionID string, state session.GoalState) *View {
 		reason := *snapshot.BlockedReason
 		snapshot.BlockedReason = &reason
 	}
-	return &View{Goal: snapshot, RoundsStarted: state.RoundsStarted, CreatedAtUnixMS: state.CreatedAtUnixMS, UpdatedAtUnixMS: state.UpdatedAtUnixMS, Armed: service.armed[sessionID]}
+	return &View{Goal: snapshot, RoundsStarted: state.RoundsStarted, CreatedAtUnixMS: state.CreatedAtUnixMS, UpdatedAtUnixMS: state.UpdatedAtUnixMS, Armed: service.armed[sessionID] == snapshot.Ref()}
 }

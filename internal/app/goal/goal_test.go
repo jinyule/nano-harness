@@ -66,6 +66,80 @@ func (journal *memoryJournal) raw(records ...session.Record) {
 
 type memoryJournals struct{ journals map[string]*memoryJournal }
 
+// settlementJournals fences the second lookup: Settle has read the old
+// ending and is about to apply its Pause through the normal mutation path.
+type settlementJournals struct {
+	Journals
+	mu      sync.Mutex
+	lookups int
+	read    chan struct{}
+	apply   chan struct{}
+}
+
+func (journals *settlementJournals) Journal(id string) (agent.Journal, error) {
+	journals.mu.Lock()
+	journals.lookups++
+	fence := journals.lookups == 2
+	journals.mu.Unlock()
+	if fence {
+		close(journals.read)
+		<-journals.apply
+	}
+	return journals.Journals.Journal(id)
+}
+
+func TestService_SettlePreservesLaterHumanAuthorization(t *testing.T) {
+	for _, replacement := range []bool{false, true} {
+		t.Run(map[bool]string{false: "pause-resume", true: "clear-create"}[replacement], func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			fixture := startService(t)
+			view := fixture.create(t, "old goal", nil)
+			message := RoundMessage(*view)
+			fixture.journal.raw(session.Record{Type: session.RecordTurnStart, Turn: 1}, session.Record{Type: session.RecordUserMessage, Turn: 1, Message: &message}, session.Record{Type: session.RecordTurnEnd, Turn: 1, Outcome: session.OutcomeCanceled})
+			barrier := &settlementJournals{Journals: fixture.service.journals, read: make(chan struct{}), apply: make(chan struct{})}
+			fixture.service.journals = barrier
+			done := make(chan struct{})
+			var settleErr error
+			var release sync.Once
+			go func() { _, settleErr = fixture.service.Settle(ctx, "root", 0); close(done) }()
+			t.Cleanup(func() { release.Do(func() { close(barrier.apply) }); <-done })
+			select {
+			case <-barrier.read:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			var authorized *View
+			var err error
+			if replacement {
+				if err := fixture.service.Clear(t.Context(), "root", view.Goal.Ref(), ActorHost); err != nil {
+					t.Fatal(err)
+				}
+				authorized, err = fixture.service.Create(t.Context(), "root", "new goal", nil, ActorHost)
+			} else {
+				paused, pauseErr := fixture.service.Pause(t.Context(), "root", view.Goal.Ref(), ActorHost)
+				if pauseErr != nil {
+					t.Fatal(pauseErr)
+				}
+				authorized, err = fixture.service.Resume(t.Context(), "root", paused.Goal.Ref(), ActorHost)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			release.Do(func() { close(barrier.apply) })
+			<-done
+			err = settleErr
+			if err != nil && codeOf(err) != CodeStaleRevision {
+				t.Fatal(err)
+			}
+			current, err := fixture.service.Get(t.Context(), "root")
+			if err != nil || current.Goal.Ref() != authorized.Goal.Ref() || !current.Armed || current.Goal.Phase != session.GoalActive {
+				t.Fatalf("old settlement revoked human authorization: %+v, %v", current, err)
+			}
+		})
+	}
+}
+
 func (journals memoryJournals) Journal(sessionID string) (agent.Journal, error) {
 	journal, ok := journals.journals[sessionID]
 	if !ok {
@@ -553,6 +627,17 @@ func TestService_SettlePausesCancelledRoundsAndDisarmsOtherStops(t *testing.T) {
 		fixture := startService(t)
 		fixture.create(t, "ship", nil)
 		turn(fixture.journal, 1, agentText("work"), session.OutcomeCanceled)
+		if _, err := fixture.service.Settle(ctx, "root", 0); err != nil {
+			t.Fatal(err)
+		}
+		if current, _ := fixture.service.Get(ctx, "root"); current.Goal.Phase != session.GoalActive || current.Armed {
+			t.Fatalf("current = %+v", current)
+		}
+	})
+	t.Run("output limit disarms without pausing", func(t *testing.T) {
+		fixture := startService(t)
+		view := fixture.create(t, "ship", nil)
+		turn(fixture.journal, 1, RoundMessage(*view), session.TurnOutcome("max_tokens"))
 		if _, err := fixture.service.Settle(ctx, "root", 0); err != nil {
 			t.Fatal(err)
 		}

@@ -244,12 +244,18 @@ func (provider *Provider) consumeChat(body io.Reader, emit llm.Emit) (llm.Comple
 			}
 			if choice.FinishReason != "" {
 				state.stop = choice.FinishReason
+				if state.stop == "length" {
+					state.stop = llm.StopMaxTokens
+				}
 			}
 		}
 		return nil
 	})
 	if err != nil {
 		return llm.Completion{}, err
+	}
+	if state.stop == llm.StopMaxTokens {
+		clear(state.calls)
 	}
 	indexes := make([]int, 0, len(state.calls))
 	for index := range state.calls {
@@ -270,7 +276,7 @@ func (provider *Provider) consumeChat(body io.Reader, emit llm.Emit) (llm.Comple
 	if state.stop == "" {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("stream ended without finish reason")}
 	}
-	if state.text.Len() == 0 && len(calls) == 0 {
+	if state.text.Len() == 0 && len(calls) == 0 && state.stop != llm.StopMaxTokens {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorEmptyResponse, Provider: provider.id}
 	}
 	return llm.Completion{Message: assistantMessage(state.text.String()), Calls: calls, Usage: state.usage, Stop: state.stop}, nil

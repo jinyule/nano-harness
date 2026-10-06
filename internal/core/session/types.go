@@ -84,6 +84,8 @@ type TurnOutcome string
 const (
 	// OutcomeCompleted identifies a turn that reached a provider completion without tool calls.
 	OutcomeCompleted TurnOutcome = "completed"
+	// OutcomeMaxTokens identifies a response truncated by its output token limit.
+	OutcomeMaxTokens TurnOutcome = "max_tokens"
 	// OutcomeCanceled identifies a turn stopped through context cancellation.
 	OutcomeCanceled TurnOutcome = "canceled"
 	// OutcomeError identifies a turn stopped by a non-cancellation failure.
