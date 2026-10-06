@@ -87,7 +87,7 @@
 |---|---|---|---|
 | 工具执行期间打断时，已取出的通知与 steer 丢失，turn 记成 `error` | Blocker | WP3 | 已合入 `da492ca`（含 step 上限与截断时通知留队列、测试替身对齐 ctx） |
 | 前台 `bash` 的 job 先于 Wait 结束时发出多余完成通知并写入会话 | Blocker | Codex-C（自 WP3 改派） | 修复中 |
-| fork 子代理继承父会话 `plan/mode`，在规划模式下运行且无法退出 | Blocker | WP8 | 修复中 |
+| fork 子代理继承父会话 `plan/mode`，在规划模式下运行且无法退出 | Blocker | WP8 | 已合入：规划投影只看会话自身事件；锁改为按会话（S7） |
 | `web_fetch` 对 IPv6 字面量跳过 NAT64 校验（SSRF） | Blocker | WP5 | 已合入 `6d3322c` |
 | 关闭时工具先于在途 turn 撤销，前台 `bash` 可能在临时目录删除后才取消 | Suggestion | WP1 | 已合入 `2fa6aa7`：agent 层最后启动、先关闭，registry 一次性取消并等待全部在途 turn |
 | job 上限回退路径不归 Scope；超时交接竞态；macOS 进程组回收承诺 | Suggestion | Codex-C（自 WP3 改派） | 修复中 |
