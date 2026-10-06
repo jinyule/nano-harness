@@ -128,16 +128,3 @@ func writeAtomic(ctx context.Context, target string, data []byte, mode fs.FileMo
 	_ = removeFile(staged.Name()) // the target is published; private residue cannot undo it
 	return nil
 }
-
-// checkEscalation accepts upstream's escalation fields but keeps file tools
-// inside the workspace: repeating the standing mode is allowed and wider
-// modes are refused before approval.
-func checkEscalation(mode, justification *string) error {
-	if err := workspace.ValidateEscalation(mode, justification); err != nil {
-		return err
-	}
-	if mode != nil && *mode == workspace.ModeDangerFullAccess {
-		return errors.New(`sandbox escalation to "danger-full-access" is not available for file operations; file tools only modify paths inside the workspace`)
-	}
-	return nil
-}

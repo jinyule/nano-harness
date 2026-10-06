@@ -13,6 +13,8 @@
 
 ## Decision
 
+会话 sandbox 三档、策略上下文、文件 host 边界与 Linux 联网的当前实施由[WP14 Note](2026-10-06-session-sandbox-modes.md)拥有；本 Note 保留原组件/定义/运行时建立的证据。
+
 搜索 Unicode 参数、JSON framing、诊断预算及取消偏离的补充证据见[对齐 Note](2026-10-06-search-spill-query-parity.md)；本 Note 保留工具定义与运行前提的建立证据。
 
 工具并发预算、参数超限恢复与 Safety 文件策略提示的补充实施见[工具运行时修复](2026-10-06-tool-runtime-upstream-alignment.md)；本 Note 保留定义建立、工具映射与原始验证证据。

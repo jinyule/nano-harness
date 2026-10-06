@@ -308,6 +308,9 @@ func (log *Log) appendLocked(record coresession.Record) (coresession.Event, erro
 	if _, err := validateOrder(candidate, false); err != nil {
 		return coresession.Event{}, err
 	}
+	if err := validateSandboxOwner(log.header, candidate); err != nil {
+		return coresession.Event{}, err
+	}
 	encoded, err := marshalJSON(event)
 	if err != nil {
 		return coresession.Event{}, fmt.Errorf("encode session event: %w", err)
@@ -609,6 +612,9 @@ func readSession(file durableFile, compositionID string) (coresession.Header, []
 		events = append(events, event)
 	}
 	if _, err := validateOrder(events, false); err != nil {
+		return coresession.Header{}, nil, 0, err
+	}
+	if err := validateSandboxOwner(header.Header, events); err != nil {
 		return coresession.Header{}, nil, 0, err
 	}
 	return header.Header, events, info.Size(), nil

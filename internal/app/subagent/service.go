@@ -228,7 +228,7 @@ func (*Service) StepContext(_ context.Context, request agent.ContextRequest) ([]
 		return nil, err
 	}
 	if slices.ContainsFunc(surface, func(node session.SurfaceNode) bool {
-		return node.Message != nil && node.Message.Source.Kind == SourceRuntimeContext
+		return node.Message != nil && node.Message.Source.Kind == SourceRuntimeContext && session.Text(*node.Message) == delegationContext
 	}) {
 		return nil, nil
 	}
@@ -426,7 +426,7 @@ func (service *Service) create(ctx context.Context, request StartRequest, mode s
 		}()
 	}
 	created, err := service.registry.Create(ctx, agent.CreateRequest{
-		ParentID: request.ParentID, Label: label, Mode: mode, Provider: provider, Route: route, Seed: seed, Depth: depth, Create: true,
+		ParentID: request.ParentID, Label: label, Mode: mode, Provider: provider, Route: route, Seed: seed, Sandbox: session.SandboxOverride(events), Depth: depth, Create: true,
 	})
 	if err != nil {
 		return nil, err

@@ -19,7 +19,7 @@ func (model model) command(value string) (tea.Model, tea.Cmd) {
 		model.quitting = true
 		return model, tea.Quit
 	case "/help":
-		model.addLine("commands> /attach PATH · /accounts · /login PROVIDER METHOD · /logout PROVIDER · /models PROVIDER · /model PROVIDER MODEL · /compact · /permission ask|never · /plan [off|TEXT] · /goal [OBJECTIVE|edit OBJECTIVE|pause|resume|clear] · /agents · /interrupt · /steer TEXT · /SKILL TEXT · /quit")
+		model.addLine("commands> /attach PATH · /accounts · /login PROVIDER METHOD · /logout PROVIDER · /models PROVIDER · /model PROVIDER MODEL · /compact · /permission ask|never · /sandbox read-only|workspace-write|danger-full-access · /plan [off|TEXT] · /goal [OBJECTIVE|edit OBJECTIVE|pause|resume|clear] · /agents · /interrupt · /steer TEXT · /SKILL TEXT · /quit")
 		return model, nil
 	case "/interrupt":
 		model.app.agent.Interrupt()
@@ -71,6 +71,14 @@ func (model model) command(value string) (tea.Model, tea.Cmd) {
 		return model, func() tea.Msg {
 			err := model.app.config.Registry.SetPolicy(model.ctx, model.app.agent.Status().SessionID, session.ApprovalPolicy(fields[1]))
 			return operationMessage{text: "permission policy=" + fields[1], err: err}
+		}
+	case "/sandbox":
+		if len(fields) != 2 || !session.SandboxMode(fields[1]).Valid() {
+			return model.withError("usage: /sandbox read-only|workspace-write|danger-full-access")
+		}
+		return model, func() tea.Msg {
+			err := model.app.config.Registry.SetSandboxMode(model.ctx, model.app.agent.Status().SessionID, session.SandboxMode(fields[1]))
+			return operationMessage{text: "sandbox mode=" + fields[1], err: err}
 		}
 	case "/plan":
 		return model.planCommand(strings.TrimSpace(strings.TrimPrefix(value, name)))

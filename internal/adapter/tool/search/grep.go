@@ -68,7 +68,7 @@ func (provider *Provider) grepTool() *appTool.Tool {
 	})
 }
 
-func checkGrep(_ appTool.Invocation, arguments grepArgs) error {
+func checkGrep(_ context.Context, _ appTool.Invocation, arguments grepArgs) error {
 	if arguments.Pattern == "" {
 		return errors.New("pattern must be a non-empty string")
 	}

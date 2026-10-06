@@ -67,7 +67,7 @@ func (provider *Provider) readTool() *appTool.Tool {
 	})
 }
 
-func checkRead(_ appTool.Invocation, arguments readArgs) error {
+func checkRead(_ context.Context, _ appTool.Invocation, arguments readArgs) error {
 	if strings.TrimSpace(arguments.FilePath) == "" {
 		return errors.New("file_path must be a non-empty string")
 	}

@@ -27,7 +27,7 @@ func TestRuntime_LimitsConcurrentCallsThroughCheckApprovalAndExecution(t *testin
 		read := Define(Spec[noArguments]{
 			Name: "read", Description: "blocked concurrent read",
 			Concurrent: func(noArguments) bool { return true },
-			Check: func(Invocation, noArguments) error {
+			Check: func(context.Context, Invocation, noArguments) error {
 				mu.Lock()
 				active++
 				peak = max(peak, active)

@@ -58,9 +58,11 @@ type CreateRequest struct {
 	Route     session.SubagentRoute
 	Persona   string
 	Tools     []string
-	Seed      []session.Event
-	Depth     int
-	Create    bool
+	// Sandbox is the parent override captured at delegation, never a one-shot grant.
+	Sandbox session.SandboxMode
+	Seed    []session.Event
+	Depth   int
+	Create  bool
 }
 
 // Controller is the live-agent boundary consumed by TUI and subagent tools.

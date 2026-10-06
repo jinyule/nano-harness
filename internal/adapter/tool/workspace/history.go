@@ -27,11 +27,23 @@ type spillJournal interface {
 	Events(context.Context) ([]session.Event, error)
 }
 
-// ReadableFrom extends Readable with the exact historical spill files named
-// in this invocation's committed tool results. It grants no directories or
-// sibling files, rejects links and non-private artifacts, and never changes
-// the workspace mutation boundary. A missing or unreadable log grants nothing.
+// ReadableFrom applies the standing file policy: full access allows host
+// reads; otherwise Readable also admits exact historical spill files named
+// in committed tool results, with no directories or sibling allowances.
+// A missing log grants no history; an unreadable log fails the read.
 func (root Root) ReadableFrom(ctx context.Context, path string, invocation appTool.Invocation) (lexical, resolved string, err error) {
+	var events []session.Event
+	if journal, ok := invocation.Journal.(interface {
+		Events(context.Context) ([]session.Event, error)
+	}); ok {
+		events, err = journal.Events(ctx)
+		if err != nil {
+			return "", "", fmt.Errorf("read file policy for %s: %w", invocation.SessionID, err)
+		}
+		if mode := session.EffectiveSandbox(events); mode == session.SandboxDangerFullAccess {
+			return root.ExistingIn(path, mode)
+		}
+	}
 	lexical, resolved, err = root.Readable(path)
 	if !errors.Is(err, ErrOutsideRoot) || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return lexical, resolved, err
@@ -39,10 +51,6 @@ func (root Root) ReadableFrom(ctx context.Context, path string, invocation appTo
 	journal, ok := invocation.Journal.(spillJournal)
 	if !ok || invocation.SessionID == "" || journal.Header().SessionID != invocation.SessionID || journal.Header().Cwd != root.path || !root.spillShape(path) {
 		return lexical, resolved, err
-	}
-	events, readErr := journal.Events(ctx)
-	if readErr != nil {
-		return "", "", fmt.Errorf("read spill history for %s: %w", invocation.SessionID, readErr)
 	}
 	for _, event := range events {
 		if event.Record.Type == session.RecordToolResult && mentionsSpill(event.Record.Result.Output, path) {

@@ -17,6 +17,8 @@
 
 ## Decision
 
+会话三档的实际 launch mode 文案与 read-only runner 失败优先级由[WP14 Note](2026-10-06-session-sandbox-modes.md)补充；本 Note 保留诊断字节、TERM 宽限、管道排空与 job 文案的证据。
+
 权威描述在 [ADR-0009](../../../docs/decisions/0009-background-jobs.md) 的 job 工具、bash 与固定预算三节，逐项对照见[参考分析](../../../docs/reference-deepseek-harness.md#shell-与-job-边界复核)。
 
 - `process.ErrSandboxUnavailable` 的文本改为上游 workspace-write 模式的原文，runner 失败追加 ` Runner failure: <匹配行>`。匹配行只去掉行尾 CR，与上游 `/\r?\n/` 分行一致，不再 `TrimSpace`。runner 启动失败追加 Go 的启动错误；Node 的 `String(error)` 无法复现，这是唯一的文字差异。文本放在 platform：它对应上游 sandbox provider 这一层，shell 适配器直接渲染 `Error: <message>`。`SANDBOX_UNAVAILABLE` 不再出现在模型可见文本中，与上游一致，调用方用 `errors.Is` 识别。

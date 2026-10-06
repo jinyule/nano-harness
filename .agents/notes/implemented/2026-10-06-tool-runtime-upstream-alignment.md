@@ -13,6 +13,8 @@
 
 ## Decision
 
+会话 sandbox 三档、策略上下文、文件 host 边界与 Linux 联网的当前实施由[WP14 Note](2026-10-06-session-sandbox-modes.md)拥有；本 Note 保留原组件/定义/运行时建立的证据。
+
 长期契约更新 [ADR-0002](../../../docs/decisions/0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败) 与 [ADR-0007](../../../docs/decisions/0007-upstream-base-tool-definitions.md)，当前行为同步[架构](../../../docs/architecture.md)、[安全](../../../docs/security.md)和[测试](../../../docs/testing.md)。
 
 - 既有 tools 插件通过同一真实 `cmd` composition 提供 runtime。并发安全组的 Check、Approval 和 Execute 合计至多 10 个在途调用，槽位结束立即补位，整个组 join 后才跨越 barrier；结果按输入索引收集。临时槽位与 goroutine 归 ExecuteBatch 调用方所有，返回前全部等待，未新增后台 effect、插件或全局 semaphore。

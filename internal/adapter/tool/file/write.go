@@ -35,22 +35,22 @@ func (provider *Provider) writeTool() *appTool.Tool {
 			appTool.Required("file_path", appTool.String("Path to write, resolved by the filesystem backend. Provide `file_path` before `content` in the arguments.")),
 			appTool.Required("content", appTool.String("Full UTF-8 text content to write.")),
 		}, workspace.EscalationProperties("operation", "file operation")...),
-		Check: func(invocation appTool.Invocation, arguments writeArgs) error {
+		Check: func(ctx context.Context, invocation appTool.Invocation, arguments writeArgs) error {
 			if strings.TrimSpace(arguments.FilePath) == "" {
 				return errors.New("file_path must be a non-empty string")
 			}
-			if err := checkEscalation(arguments.SandboxPermissions, arguments.Justification); err != nil {
+			mode, err := mutationMode(ctx, invocation, arguments.SandboxPermissions, arguments.Justification)
+			if err != nil {
 				return err
 			}
 			// Refuse unsafe or unobserved targets before asking; execution
-			// re-checks both under the target's lock. Check has no context,
-			// so it hashes only files edit could load and leaves larger ones
-			// to the cancellable execution-point check.
-			target, err := provider.root.Writable(arguments.FilePath)
+			// re-checks both under the target's lock. Larger existing files
+			// are hashed only at the execution point.
+			target, err := provider.root.WritableIn(arguments.FilePath, mode)
 			if err != nil {
 				return fmt.Errorf("cannot write %q: %w", arguments.FilePath, err)
 			}
-			_, _, err = provider.admitWrite(invocation.SessionID, target, maxEditBytes, func() error { return nil })
+			_, _, err = provider.admitWrite(invocation.SessionID, target, maxEditBytes, ctx.Err)
 			return err
 		},
 		Guidance: appTool.Guidance{Order: appTool.OrderWrite, Text: func(visible func(string) bool) string {
@@ -60,8 +60,10 @@ func (provider *Provider) writeTool() *appTool.Tool {
 			}
 			return text + "."
 		}},
-		Approval: func(arguments writeArgs) string { return fmt.Sprintf("write file %q", arguments.FilePath) },
-		Execute:  provider.write,
+		Approval: func(arguments writeArgs) string {
+			return mutationReason("write", arguments.FilePath, arguments.SandboxPermissions, arguments.Justification)
+		},
+		Execute: provider.write,
 	})
 }
 
@@ -76,7 +78,14 @@ func (provider *Provider) write(ctx context.Context, invocation appTool.Invocati
 	if err := ctx.Err(); err != nil {
 		return appTool.Result{}, fmt.Errorf("write aborted: %w", err)
 	}
-	target, err := provider.root.Writable(arguments.FilePath)
+	if invocation.Delegated {
+		return appTool.Result{}, errors.New("subagents cannot obtain file approval")
+	}
+	mode, err := mutationMode(ctx, invocation, arguments.SandboxPermissions, arguments.Justification)
+	if err != nil {
+		return appTool.Result{}, err
+	}
+	target, err := provider.root.WritableIn(arguments.FilePath, mode)
 	if err != nil {
 		return appTool.Result{}, fmt.Errorf("cannot write %q: %w", arguments.FilePath, err)
 	}
@@ -85,15 +94,15 @@ func (provider *Provider) write(ctx context.Context, invocation appTool.Invocati
 	if err != nil {
 		return appTool.Result{}, err
 	}
-	mode, operation := newFileMode, "Created"
+	permissions, operation := newFileMode, "Created"
 	if exists {
-		mode, operation = info.Mode().Perm(), "Updated"
+		permissions, operation = info.Mode().Perm(), "Updated"
 	}
 	if err := makeDirs(filepath.Dir(target), newDirectoryMode); err != nil {
 		return appTool.Result{}, fmt.Errorf("cannot write %q: %w", target, err)
 	}
 	content := []byte(arguments.Content)
-	if err := writeAtomic(ctx, target, content, mode, !exists); err != nil {
+	if err := writeAtomic(ctx, target, content, permissions, !exists); err != nil {
 		if _, statErr := lstatFile(target); !exists && statErr == nil {
 			return appTool.Result{}, errNotRead(target)
 		}

@@ -39,7 +39,7 @@
 
 ### 工具运行时限值与文件策略提示
 
-固定参考提交的 `packages/core/agent-loop/src/constants.ts` 和 `tool-calls.ts` 对每个 agent 的并发安全调用设 10 个在途上限；本仓在 tool runtime 采纳这一固定上限，组间 barrier、调用轮次和结果顺序保持既有契约。上游文件工具没有本仓的序列化参数预算；本仓保留有界准入并提高到 768 KiB，越界以显式省略调用和错误结果让模型重试，限值理由、字段和旧会话策略见 [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败)。system prompt 说明本 workspace spill 分区的只读例外，沿用 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md#路径) 的收紧文件策略。本项不修改参考指针，也不采纳共享图片转换限额或新的会话权限预设。
+固定参考提交的 `packages/core/agent-loop/src/constants.ts` 和 `tool-calls.ts` 对每个 agent 的并发安全调用设 10 个在途上限；本仓在 tool runtime 采纳这一固定上限，组间 barrier、调用轮次和结果顺序保持既有契约。上游文件工具没有本仓的序列化参数预算；本仓保留有界准入并提高到 768 KiB，越界以显式省略调用和错误结果让模型重试，限值理由、字段和旧会话策略见 [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败)。Safety 与动态文件策略的当前内容由 [ADR-0021](decisions/0021-session-sandbox-modes.md) 拥有。本项不修改参考指针，共享图片转换限额仍暂缓。
 
 ### 插件、能力与应用启动
 
@@ -171,9 +171,15 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 
 | 上游行为 | 本仓处理 |
 |---|---|
-| `sandbox/src/index.ts:132-145` 的 `SandboxUnavailableError` 文案与 `Runner failure: <行>` | 采纳原文，mode 固定为 `workspace-write`；runner 启动失败时 `Runner failure:` 之后是 Go 启动错误，而不是 Node 的 `String(error)` |
+| `sandbox/src/index.ts:132-145` 的 `SandboxUnavailableError` 文案与 `Runner failure: <行>` | 采纳原文，mode 按实际 launch profile 填写；runner 启动失败时 `Runner failure:` 之后是 Go 启动错误，而不是 Node 的 `String(error)` |
 | `tool-bash/src/background.ts:50-54` 的 `exit code: N; [sandbox: …]` | 采纳 detail（未启动时为 `killed before exit; `），状态仍是本仓 `failed` |
 | `spawn.ts:409-415` 以 `graceMs`（bash 3 s）作命令退出后的管道排空窗口 | bash/job 采纳 3 s；零宽限的搜索保留 1 s 排空 |
 | `jobs-local/src/index.ts:584-587` 的显式空 reason 渲染为 `; ` | 采纳，包括 producer 无 detail 时的 `[status: killed, ]` |
 | `tool-jobs/src/index.ts:183-188` 的 delta（含丢失提示）→ 值结果 → 状态 | 采纳；只有丢失提示时不显示 `(no new output)` |
 | `diagnostics.ts:65-87` 只按 stderr 行内前缀判定 runner 失败 | 判定相同；普通命令打印该前缀会被误判，记为已知限制，见 ADR-0009 |
+
+## 2026-10-06：Base 会话 sandbox 与 Linux 联网
+
+参考 `packages/sandbox/sandbox-policy`、`sandbox-local/src/profiles.ts`、`sandbox/roots.ts`、fs/bash sandbox 与 Base 权限预设，采纳三档闭合模式、workspace-write 默认、立即持久化的 `sandbox/mode`、委派时显式 override 捕获及 `sandbox:policy`（上游 order 110 的 runtime-context 段落，在用户输入之后、step 之前；本仓依注册顺序早于 skill）。read-only→workspace-write 作为一次性窄升级，full access 等同 host。Linux 采纳 `--unshare-pid` 与 root/dev/proc 挂载，放开网络，与 macOS 联网一致。不会修改或复制参考源码，指针保持不变。
+
+本仓继续对每次 write/edit/bash 请求一次性 approval，并固定 delegated `never`，比上游 Base 严格；默认文件读/搜索仍保留 workspace/spill 边界，host 文件修改保留先读后写、原子发布与 symlink 禁写。Web 权限 UI 与平台特有 ACL 后端暂缓。本仓 session v2 与 fingerprint 拒绝旧 composition 的策略、恢复路径与实现证据见 [ADR-0021](decisions/0021-session-sandbox-modes.md) 和[实施 Note](../.agents/notes/implemented/2026-10-06-session-sandbox-modes.md)。

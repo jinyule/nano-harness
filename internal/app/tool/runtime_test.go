@@ -273,7 +273,7 @@ func TestRuntime_ContainsApprovalFailuresPanicsAndLargeOutput(t *testing.T) {
 			return Result{}, errors.New(strings.Repeat("界", session.MaxTextBytes))
 		}),
 		Define(Spec[noArguments]{Name: "check_panic", Description: "panics while classifying", Concurrent: func(noArguments) bool { panic("classifier") }, Execute: never2}),
-		Define(Spec[noArguments]{Name: "checked", Description: "semantic error", Check: func(Invocation, noArguments) error { return errors.New("semantic") }, Execute: never2}),
+		Define(Spec[noArguments]{Name: "checked", Description: "semantic error", Check: func(context.Context, Invocation, noArguments) error { return errors.New("semantic") }, Execute: never2}),
 	}
 	for _, candidate := range tools {
 		if err := runtime.Register(candidate, scope); err != nil {
@@ -347,7 +347,7 @@ func TestRuntime_ChecksEachCallAfterEarlierCallsInTheBatch(t *testing.T) {
 	})
 	use := Define(Spec[noArguments]{
 		Name: "use", Description: "needs the created state",
-		Check: func(invocation Invocation, _ noArguments) error {
+		Check: func(_ context.Context, invocation Invocation, _ noArguments) error {
 			// Check sees the call's context but never an approval grant.
 			if invocation.SessionID != "s" || invocation.CallID == "" || invocation.Turn != 1 || invocation.Approved {
 				return fmt.Errorf("check invocation = %+v", invocation)
@@ -405,7 +405,7 @@ func TestRuntime_CancellationStopsDispatchAndSupersedesSuccess(t *testing.T) {
 			})
 			if stage == "during check" {
 				send = Define(Spec[noArguments]{Name: "send", Description: "test",
-					Check: func(Invocation, noArguments) error { cancel(); return nil },
+					Check: func(context.Context, Invocation, noArguments) error { cancel(); return nil },
 					Execute: func(context.Context, Invocation, noArguments) (Result, error) {
 						invoked++
 						return Text("delivered"), nil

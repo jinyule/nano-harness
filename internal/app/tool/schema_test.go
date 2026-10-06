@@ -169,7 +169,7 @@ func TestDefine_PreparesTypedArguments(t *testing.T) {
 		},
 	})
 	prepared, err := tool.prepare(json.RawMessage(`{"file_path":"a","limit":3,"todos":[{"content":"c","status":"completed"}],"meta":{"note":"n","extra":1}}`))
-	if err != nil || prepared.concurrent || prepared.check(Invocation{}) != nil || prepared.reason() != "" {
+	if err != nil || prepared.concurrent || prepared.check(context.Background(), Invocation{}) != nil || prepared.reason() != "" {
 		t.Fatalf("prepared = %+v, %v", prepared, err)
 	}
 	if result, err := prepared.execute(context.Background(), Invocation{}); err != nil || result.Text != "done" {

@@ -35,6 +35,8 @@ func (approver *recordingApprover) Decide(_ context.Context, request appTool.App
 
 type nopJournal struct{}
 
+func (nopJournal) Events(context.Context) ([]session.Event, error) { return nil, nil }
+
 func (nopJournal) Append(context.Context, session.Record) (session.Event, error) {
 	return session.Event{}, nil
 }
@@ -330,9 +332,9 @@ func TestBash_MapsArgumentsToSandboxedRequests(t *testing.T) {
 		cwd       string
 		reason    string
 	}{
-		{map[string]any{"description": "List files", "command": "ls"}, platformProcess.ModeWorkspace, h.root.Path(), "run a shell command in the workspace sandbox: List files"},
-		{map[string]any{"description": "Sub", "command": "pwd", "workdir": "sub", "timeoutMs": 1500.5, "justification": "  ", "run_in_background": false}, platformProcess.ModeWorkspace, filepath.Join(h.root.Path(), "sub"), "run a shell command in the workspace sandbox: Sub"},
-		{map[string]any{"description": "Repeat", "command": "ls", "sandbox_permissions": "workspace-write", "workdir": filepath.Join(h.root.Path(), "sub")}, platformProcess.ModeWorkspace, filepath.Join(h.root.Path(), "sub"), "run a shell command in the workspace sandbox: Repeat"},
+		{map[string]any{"description": "List files", "command": "ls"}, platformProcess.ModeWorkspace, h.root.Path(), "run a shell command: List files"},
+		{map[string]any{"description": "Sub", "command": "pwd", "workdir": "sub", "timeoutMs": 1500.5, "justification": "  ", "run_in_background": false}, platformProcess.ModeWorkspace, filepath.Join(h.root.Path(), "sub"), "run a shell command: Sub"},
+		{map[string]any{"description": "Repeat", "command": "ls", "sandbox_permissions": "workspace-write", "workdir": filepath.Join(h.root.Path(), "sub")}, platformProcess.ModeWorkspace, filepath.Join(h.root.Path(), "sub"), "run a shell command: Repeat"},
 		{map[string]any{"description": "Host", "command": "id", "sandbox_permissions": "danger-full-access", "justification": "needs host keychain"}, platformProcess.ModeHost, h.root.Path(), "escalate sandbox to danger-full-access: needs host keychain"},
 	} {
 		result := h.call(t, test.arguments)
@@ -379,7 +381,7 @@ func TestBash_RunsInBackgroundAndNotifiesCompletion(t *testing.T) {
 	if result.IsError || result.Output != "started background job bash-1" {
 		t.Fatalf("background = %#v", result)
 	}
-	if reason := h.approver.reasons[0]; reason != "run a background shell command in the workspace sandbox: Build" {
+	if reason := h.approver.reasons[0]; reason != "run a background shell command: Build" {
 		t.Fatalf("reason = %q", reason)
 	}
 	// No timeout applies: the job is still running long after timeoutMs.
@@ -435,7 +437,7 @@ func TestBash_AbortKillsForegroundJob(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := h.provider.bash(ctx, appTool.Invocation{SessionID: "session-1", Approved: true}, bashArgs{Description: "d", Command: "sleep"})
+		_, err := h.provider.bash(ctx, appTool.Invocation{SessionID: "session-1", Approved: true, Journal: nopJournal{}}, bashArgs{Description: "d", Command: "sleep"})
 		done <- err
 	}()
 	for runner.count() == 0 {
@@ -454,7 +456,7 @@ func TestBash_AbortKillsForegroundJob(t *testing.T) {
 
 	// Shutdown kills a waiting foreground command the same way.
 	go func() {
-		_, err := h.provider.bash(context.Background(), appTool.Invocation{SessionID: "session-1", Approved: true}, bashArgs{Description: "d", Command: "sleep"})
+		_, err := h.provider.bash(context.Background(), appTool.Invocation{SessionID: "session-1", Approved: true, Journal: nopJournal{}}, bashArgs{Description: "d", Command: "sleep"})
 		done <- err
 	}()
 	for runner.count() < 2 {
@@ -504,7 +506,7 @@ func TestBash_FallsBackToDeadlineAtJobLimit(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := h.provider.bash(ctx, appTool.Invocation{SessionID: "session-1", Approved: true}, bashArgs{Description: "d", Command: "c"}); err == nil || err.Error() != "tool call aborted" {
+	if _, err := h.provider.bash(ctx, appTool.Invocation{SessionID: "session-1", Approved: true, Journal: nopJournal{}}, bashArgs{Description: "d", Command: "c"}); err == nil || err.Error() != "tool call aborted" {
 		t.Fatalf("canceled fallback = %v", err)
 	}
 }
@@ -513,7 +515,7 @@ func TestBash_ExecutionPointGuardsAndFailures(t *testing.T) {
 	restoreHooks(t)
 	runner := &fakeRunner{}
 	h := newHarness(t, runner)
-	approved := appTool.Invocation{SessionID: "session-1", Approved: true}
+	approved := appTool.Invocation{SessionID: "session-1", Approved: true, Journal: nopJournal{}}
 	valid := bashArgs{Description: "d", Command: "c"}
 	background := true
 	if _, err := h.provider.bash(context.Background(), appTool.Invocation{}, valid); err == nil || !strings.Contains(err.Error(), "approval was not granted") {

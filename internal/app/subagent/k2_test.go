@@ -187,16 +187,19 @@ func TestService_DelegationContextReappearsOnlyWhenHidden(t *testing.T) {
 	task := session.Event{Sequence: 2, Record: session.Record{Type: session.RecordUserMessage, Turn: 1, Message: &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: SourceDelegation}, Content: []session.ContentBlock{{Type: session.ContentText, Text: "task"}}}}}
 	committed := textMessage(SourceRuntimeContext, "", delegationContext)
 	contextEvent := session.Event{Sequence: 3, Record: session.Record{Type: session.RecordUserMessage, Turn: 1, Message: &committed}}
+	policy := session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: SourceRuntimeContext, Plugin: "sandbox:policy"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: session.SandboxPolicyText(session.SandboxReadOnly, "/work")}}}
+	policyEvent := session.Event{Sequence: 3, Record: session.Record{Type: session.RecordUserMessage, Turn: 1, Message: &policy}}
 	summary := session.Event{Sequence: 4, Record: session.Record{Type: session.RecordCompactionSummary, Turn: 1, Compaction: &session.CompactionData{ID: "c", ShadowedSeqs: []uint64{2, 3}, ShadowedTokenCount: 1, Summary: []session.ContentBlock{{Type: session.ContentText, Text: "summary"}}, Provider: "openai", Model: "m"}}}
 	broken := session.Event{Sequence: 4, Record: session.Record{Type: session.RecordCompactionSummary, Turn: 1, Compaction: &session.CompactionData{ID: "c", ShadowedSeqs: []uint64{99}, ShadowedTokenCount: 1, Summary: []session.ContentBlock{{Type: session.ContentText, Text: "summary"}}, Provider: "openai", Model: "m"}}}
 	for name, test := range map[string]struct {
 		events []session.Event
 		want   int
 	}{
-		"root session":         {[]session.Event{task}, 0},
-		"first step":           {[]session.Event{descriptor, task}, 1},
-		"visible after resume": {[]session.Event{descriptor, task, contextEvent}, 0},
-		"hidden by compaction": {[]session.Event{descriptor, task, contextEvent, summary}, 1},
+		"root session":                    {[]session.Event{task}, 0},
+		"first step":                      {[]session.Event{descriptor, task}, 1},
+		"sandbox snapshot is independent": {[]session.Event{descriptor, task, policyEvent}, 1},
+		"visible after resume":            {[]session.Event{descriptor, task, contextEvent}, 0},
+		"hidden by compaction":            {[]session.Event{descriptor, task, contextEvent, summary}, 1},
 	} {
 		messages, err := h.service.StepContext(context.Background(), agent.ContextRequest{Events: test.events})
 		if err != nil || len(messages) != test.want {

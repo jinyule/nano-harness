@@ -300,7 +300,7 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 		result.Output, result.IsError, result.Error = "Error: tool call aborted before dispatch", true, new(abortedBeforeDispatch)
 		return result
 	}
-	if err := validated.call.check(invocation); err != nil {
+	if err := validated.call.check(ctx, invocation); err != nil {
 		result.Output, result.Error = failureText(candidate.Name, err)
 		result.IsError = true
 		return result

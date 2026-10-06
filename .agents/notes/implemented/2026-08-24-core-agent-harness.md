@@ -13,6 +13,8 @@
 
 [compaction 摘要截断修补](2026-10-06-compaction-truncated-summary.md)补齐摘要发布前的停止检查；本 Note 继续拥有基础 harness、compaction 事务与插件组装。
 
+会话 sandbox 三档、策略上下文、文件 host 边界与 Linux 联网的当前实施由[WP14 Note](2026-10-06-session-sandbox-modes.md)拥有；本 Note 保留原组件/定义/运行时建立的证据。
+
 新增 v2 `core/session` 事件与 replay surface，以 strict、owner-only、append/fsync JSONL 作为模型上下文权威来源。日志记录 request header、text/reasoning/tool chunks、assistant/call/result、approval、retry、compaction、图片和 subagent descriptor；resume 对有效的 interrupted tail 追加结算事实，不猜测 torn 或未知格式。composition fingerprint 绑定 workspace 和 tool/session 语义，每次 request header 单独冻结热切换后的 route。
 
 在 `internal/app` 新增 settings、LLM、approval、tool、prompt、retry、compaction、agent 和 subagent 用例。LLM runtime 在 provider 准备后解析账户，并在 owner-only credential store 的跨进程事务中刷新即将过期的 OAuth grant。OpenAI adapter 实现 Responses、ChatGPT Codex Responses、browser/device OAuth 和 Codex import；Anthropic 实现 Messages/browser OAuth；OpenRouter 实现 Chat Completions/browser OAuth。provider 拥有 catalog、auth、refresh、wire 与 stable error mapping，agent 只消费统一 request/stream/completion。

@@ -20,6 +20,8 @@ func (model *model) applyEvent(event session.Event, live bool) {
 		text := session.Text(*record.Message)
 		_ = model.goal.Apply(record)
 		switch source := record.Message.Source; source.Kind {
+		case "runtime-context":
+			return
 		case skill.SourceCatalog:
 			model.addLine("skill> catalog updated")
 			return
@@ -121,7 +123,7 @@ func (model *model) applyEvent(event session.Event, live bool) {
 		model.layout()
 	case session.RecordStepStart, session.RecordApprovalDecided,
 		session.RecordApprovalPolicy, session.RecordRetryStarted, session.RecordCompactionSummary,
-		session.RecordSubagentDescriptor, session.RecordSubagentCatalog, session.RecordWebSearchRequest, session.RecordStepEnd,
+		session.RecordSubagentDescriptor, session.RecordSubagentCatalog, session.RecordWebSearchRequest, session.RecordSandboxMode, session.RecordStepEnd,
 		session.RecordNoticeQueued:
 		// These facts affect replay or lifecycle state but have no standalone TUI line;
 		// a queued notice is shown when its user/message delivers it.

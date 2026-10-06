@@ -320,13 +320,30 @@ func TestComposition_SubagentsEndToEnd(t *testing.T) {
 	if childHeader == nil || childHeader.System != rootHeader.System || childHeader.Provider != rootHeader.Provider || childHeader.Model != rootHeader.Model {
 		t.Errorf("child request header differs from the root's: %+v", childHeader)
 	}
-	if contexts := notices(childRecords, appSubagent.SourceRuntimeContext); len(contexts) != 1 || !strings.Contains(contexts[0], "do not retry the denied operation") {
+	if contexts := notices(childRecords, appSubagent.SourceRuntimeContext); len(contexts) != 2 || !strings.Contains(contexts[0], "Current DSH file policy:") || !strings.Contains(contexts[1], "do not retry the denied operation") {
 		t.Errorf("child runtime context = %q", contexts)
 	}
 	forkEvents := readTranscript(t, filepath.Join(data, "sessions", review.SessionID+".jsonl"))
 	own := session.OwnEvents(forkEvents)
 	if descriptor := own[0].Record.Subagent; descriptor == nil || descriptor.Provider != session.SubagentFork || descriptor.Inherited == 0 || forkEvents[0].Record.Type != session.RecordApprovalPolicy {
 		t.Errorf("fork transcript starts %#v, own %#v", forkEvents[0], own[0])
+	}
+	parentEvents := readTranscript(t, filepath.Join(data, "sessions", subagentRoot+".jsonl"))
+	inherited := own[0].Record.Subagent.Inherited
+	parentPrefix, _ := json.Marshal(parentEvents[:inherited])
+	forkPrefix, _ := json.Marshal(forkEvents[:inherited])
+	if string(parentPrefix) != string(forkPrefix) {
+		t.Fatal("sandbox context changed the inherited fork prefix")
+	}
+	var ownRecords []session.Record
+	for _, event := range own {
+		ownRecords = append(ownRecords, event.Record)
+		if event.Record.Header != nil && event.Record.Header.System != rootHeader.System {
+			t.Error("fork system prompt differs from its parent's")
+		}
+	}
+	if contexts := notices(ownRecords, appSubagent.SourceRuntimeContext); len(contexts) != 1 || !strings.Contains(contexts[0], "do not retry the denied operation") {
+		t.Errorf("fork must retain its inherited sandbox snapshot and add delegation context: %q", contexts)
 	}
 
 	// A later message cold-resumes the settled child; the root interrupts it.

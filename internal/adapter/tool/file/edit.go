@@ -42,7 +42,7 @@ func (provider *Provider) editTool() *appTool.Tool {
 			appTool.Required("new_string", appTool.String("Literal replacement text. Use an empty string to delete the match.")),
 			appTool.Optional("replace_all", appTool.Boolean("Replace all matches. Defaults to false; when false, old_string must appear exactly once.")),
 		}, workspace.EscalationProperties("operation", "file operation")...),
-		Check: func(invocation appTool.Invocation, arguments editArgs) error {
+		Check: func(ctx context.Context, invocation appTool.Invocation, arguments editArgs) error {
 			switch {
 			case strings.TrimSpace(arguments.FilePath) == "":
 				return errors.New("file_path must be a non-empty string")
@@ -51,12 +51,13 @@ func (provider *Provider) editTool() *appTool.Tool {
 			case arguments.OldString == arguments.NewString:
 				return errors.New("old_string and new_string must differ")
 			}
-			if err := checkEscalation(arguments.SandboxPermissions, arguments.Justification); err != nil {
+			mode, err := mutationMode(ctx, invocation, arguments.SandboxPermissions, arguments.Justification)
+			if err != nil {
 				return err
 			}
 			// Refuse unsafe, unobserved, or stale targets before asking;
 			// execution re-checks them under the target's lock.
-			target, err := provider.root.Writable(arguments.FilePath)
+			target, err := provider.root.WritableIn(arguments.FilePath, mode)
 			if err != nil {
 				return fmt.Errorf("cannot edit %q: %w", arguments.FilePath, err)
 			}
@@ -65,8 +66,10 @@ func (provider *Provider) editTool() *appTool.Tool {
 		},
 		Guidance: appTool.StaticGuidance(appTool.OrderEdit,
 			"Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session."),
-		Approval: func(arguments editArgs) string { return fmt.Sprintf("edit file %q", arguments.FilePath) },
-		Execute:  provider.edit,
+		Approval: func(arguments editArgs) string {
+			return mutationReason("edit", arguments.FilePath, arguments.SandboxPermissions, arguments.Justification)
+		},
+		Execute: provider.edit,
 	})
 }
 
@@ -80,7 +83,14 @@ func (provider *Provider) edit(ctx context.Context, invocation appTool.Invocatio
 	if err := ctx.Err(); err != nil {
 		return appTool.Result{}, fmt.Errorf("edit aborted: %w", err)
 	}
-	target, err := provider.root.Writable(arguments.FilePath)
+	if invocation.Delegated {
+		return appTool.Result{}, errors.New("subagents cannot obtain file approval")
+	}
+	mode, err := mutationMode(ctx, invocation, arguments.SandboxPermissions, arguments.Justification)
+	if err != nil {
+		return appTool.Result{}, err
+	}
+	target, err := provider.root.WritableIn(arguments.FilePath, mode)
 	if err != nil {
 		return appTool.Result{}, fmt.Errorf("cannot edit %q: %w", arguments.FilePath, err)
 	}

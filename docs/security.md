@@ -63,14 +63,14 @@
 
 ### 附件存储
 
-- 根目录由 `--attachment-root` 配置，加载时解析为绝对路径，与 workspace 互不包含（判断前解析已存在前缀上的链接），因此 `glob`/`grep`、`write`/`edit` 与 sandbox 中的 `bash` 都碰不到它。根可以是链接，但解析后必须是 owner-only 目录；`v1`、`v1/objects`、`v1/tmp` 与两位前缀目录必须是 `0700` 的真实目录，链接或权限过宽时启动或写入失败。
+- 根目录由 `--attachment-root` 配置，加载时解析为绝对路径，与 workspace 互不包含（判断前解析已存在前缀上的链接），因此默认文件工具不能访问它，read-only/workspace-write 的 bash 不能改写它；OS sandbox 不限制读取，danger-full-access 也不提供写入隔离。根可以是链接，但解析后必须是 owner-only 目录；`v1`、`v1/objects`、`v1/tmp` 与两位前缀目录必须是 `0700` 的真实目录，链接或权限过宽时启动或写入失败。
 - 写入在 `v1/tmp` 以 `O_EXCL`、`0600` 创建随机名称的暂存文件，`fsync` 后以排他硬链接发布到 `v1/objects/<sha256[:2]>/<sha256>`；目标已存在时先校验其内容，不一致即拒绝；对象设为只读 `0400`，再同步目录项。失败时删除暂存文件，不留下部分对象。存储从不自动删除对象。
 - 读取不跟随链接：对象和前缀目录必须分别是普通文件和真实目录。长度、SHA-256、类型或宽高任一与引用不符都按损坏处理，字节绝不发给 provider；缺失或损坏的图片在该请求中换成占位文本，TUI 显示一次只含图片名称与 ID 前缀的 `attachment>` 提示，不显示路径。取消、存储停止和 I/O 错误使请求失败。
 - `/attach` 在消息提交前写入对象，未发送的附件不进入存储。会话文件不再自包含：备份会话时必须同时备份附件根，否则其中的图片在请求中变为占位文本。存储、保留与缺失处理见 [ADR-0017](decisions/0017-content-addressed-image-attachments.md)。
 
 ## Workspace 文件边界
 
-所有模型路径由 `internal/adapter/tool/workspace.Root` 统一约束。root 在启动时解析 symlink 并固定：
+模型文件路径由 `internal/adapter/tool/workspace.Root` 按当前模式解析。以下是 read-only/workspace-write 的默认路径边界；danger-full-access 将 read/read_image/grep 显式路径、write/edit 与 bash workdir 扩展到 host，glob 仍限工作区。相对路径仍以 workspace 为基址，物理遍历、普通文件要求、写入 symlink 禁止与先读后写保护保持有效。root 在启动时解析 symlink 并固定：
 
 - 相对路径按 workspace 解析。绝对路径只有在词法上位于已解析 root 内时才接受，必须使用提示词显示的 root 拼写。`..` 逃逸和 root 外的绝对路径一律拒绝；上游描述中的 “resolved by the filesystem backend” 在本仓即指这一约束。
 - 路径逐段解析，词法清理只用于边界预检，不用于选择目标。遇到 `..` 时先确认当前物理路径是存在的目录，再取其物理父目录；任何一步离开当前授权根都拒绝，即使后续段能返回根内。不存在目录或普通文件不能被后续 `..` 消去。写入允许创建没有 `..` 的缺失后缀，但已经走过的 symlink 不会因 `..` 被消去。含 `..` 的路径在物理身份已确定时以物理绝对路径显示，搜索也从该身份生成相对路径；不存在目标的观察使用已解析前缀加缺失后缀，后续 edit 不会因拼写不同误判为未读。
@@ -118,17 +118,17 @@ skill 正文是交给模型的指令。项目根 `<project>/.nano-harness/skills
 - 单个文件最多 128 KiB，必须是不含 NUL 的有效 UTF-8；每个根最多 1024 个条目；去重后最多 100 个 skill。
 - 根不存在视为空。配置的用户根已存在但不是目录时启动失败。运行中根不可读、条目或 skill 数超限、文件 I/O 失败都使本次发现不完整：不更新模型已看到的目录，`skill` 工具返回错误。frontmatter 或文本无效的单个 skill 被跳过。
 
-`skill` 不需要 approval，subagent（包括 `never` 策略）也能加载 skill，但只能得到满足上述规则的 instruction 文件。工具结果给出 skill 的基址目录，不扩大 workspace 文件工具的路径约束：目录在 workspace 外时，root 只能通过受 approval 约束的 `bash` 访问其中的资源；delegated agent 固定为 `never`，没有 bash 访问路径，只能加载正文，不能读取 workspace 外的 skill 资源。加载或注入的正文进入会话日志，transcript 因此可能包含 skill 内容。
+`skill` 不需要 approval，subagent（包括 `never` 策略）也能加载 skill，但只能得到满足上述规则的 instruction 文件。工具结果给出 skill 的基址目录，不授予更宽文件权限：workspace 外资源需要现有模式/单次升级允许的路径，修改和 shell 仍受 approval 约束。加载或注入的正文进入会话日志，transcript 因此可能包含 skill 内容。
 
 ## Spill 文件
 
 超出内联预算的工具结果和 `glob`/`grep` 的完整结果保存在 `--spill-root` 下：
 
-- spill 根目录与 workspace 不得互相包含（对 spill 根目录已存在的最长前缀解析链接后判断），否则启动失败，因此 spill 文件不会出现在 `glob`/`grep` 结果中，也不能被 `write`、`edit` 或 sandbox 内的 `bash` 改写。
+- spill 根目录与 workspace 不得互相包含（对 spill 根目录已存在的最长前缀解析链接后判断），否则启动失败。默认遍历不会列出 spill，read-only/workspace-write 不能改写它；danger-full-access 允许 host 访问，不保护 spill 文件免受已批准的修改。
 
 - 根目录为 `0700`，可以是链接但解析后必须是 owner-only 目录；workspace 分区与会话目录为 `0700` 的真实目录，两者复用同一私有目录校验：分区启动时检查，会话目录每次创建文件前以 `Lstat` 检查；链接、非目录或 group/other 权限非零都被拒绝。Windows 不用 Unix 权限位判断私有性。
 - 文件名是随机前缀加只含 `[A-Za-z0-9._-]` 的名称提示，以 `O_EXCL`、`0600` 创建，已存在的条目（包括预置链接）一律拒绝；提交前 `fsync`，失败删除部分文件；单个文件最多 64 MiB。
-- 当前 root 只有本 workspace 的分区可被 `read`/`read_image`/`grep` 读取，其他 workspace 的输出不可见。分区内指向外部的链接被拒绝。更换 root 后，只允许调用方原始 transcript 的 `tool/result` 标准尾注记录过的精确历史文件：核对日志 session/workspace 身份、当前 workspace 分区哈希、`session-<12 位十六进制>` 与 `<12 位随机十六进制>-<名称提示>` 布局，拒绝相对或非规范路径、目录、兄弟文件与跨 workspace 分区。历史 root、分区、会话目录与文件均须私有，前三者须为真实目录，最后须为普通文件，四者的链接全部拒绝；root 祖先的 OS 路径别名仍按文件系统解析。日志读取失败或无可读日志时不授予权限。fork 的继承记录及 compaction 遮蔽的原始结果参与判定，用户消息和 tool 参数不参与；这不是尾注来源的密码学认证。同一用户制造 TOCTOU 的限制仍见下段与 ADR-0008。历史权限只授予只读工具，不扩大 `glob`、写工具或 shell 边界。
+- read-only/workspace-write 下，当前 root 只有本 workspace 的分区可被 `read`/`read_image`/`grep` 读取，其他 workspace 的输出不可见。分区内指向外部的链接被拒绝。更换 root 后，只允许调用方原始 transcript 的 `tool/result` 标准尾注记录过的精确历史文件：核对日志 session/workspace 身份、当前 workspace 分区哈希、`session-<12 位十六进制>` 与 `<12 位随机十六进制>-<名称提示>` 布局，拒绝相对或非规范路径、目录、兄弟文件与跨 workspace 分区。历史 root、分区、会话目录与文件均须私有，前三者须为真实目录，最后须为普通文件，四者的链接全部拒绝；root 祖先的 OS 路径别名仍按文件系统解析。日志读取失败或无可读日志时不授予权限。fork 的继承记录及 compaction 遮蔽的原始结果参与判定，用户消息和 tool 参数不参与；这不是尾注来源的密码学认证。同一用户制造 TOCTOU 的限制仍见下段与 ADR-0008。历史权限只授予只读工具，不扩大 `glob`、写工具或 shell 边界。
 - 启动清理只进入私有的 `workspace-*`/`session-*` 目录，只删除 30 天前的普通文件，不跟随或删除链接与无关条目，失败时保留现场。
 
 会话目录检查与文件打开由 `layout` 锁排序，阻止本进程启动清理在两者之间删除目录；该锁不约束其他进程。当前使用路径 API，`Lstat` 与 `OpenFile` 之间仍有 TOCTOU 窗口：同一用户的恶意进程可替换分区、会话目录或更改权限。预置的不安全会话目录被拒绝，但不宣称抵御这种并发替换。标准库 `os.Root` 的 descriptor 相对打开已评估，采用条件与限制见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md#读回与安全边界)。
@@ -139,11 +139,15 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 
 - `write`、`edit` 和 `bash` 在真正执行操作的位置请求一次性 approval，原因由类型化参数生成（目标路径、命令描述或升级理由）。问题与结果均写入 session；UI 不存在、取消、unknown outcome 或持久化失败都不会授权。参数无效或路径不安全的调用不会进入审批。
 - root policy 默认 `ask`，可切换为 `never`。delegated agent 的 policy 持久化为 `never`，approval service 不向 broker 提问，因此 subagent 无法写文件或运行 shell；授权矩阵见 [Subagent 与生命周期](#subagent-与生命周期)。
-- `bash` 默认通过 macOS `sandbox-exec` 或 Linux `bwrap` 执行。sandbox 只允许写 workspace 和 provider 拥有的临时目录；Linux 使用只读 root bind、workspace 可写 bind、独立 namespace、`--die-with-parent`。sandbox executable 缺失时拒绝执行。runner 非零退出且 stderr 命中当前后端的致命前缀时，优先返回 sandbox 不可用错误（上游 `SandboxUnavailableError` 原文加 `Runner failure: <行>`）；后台说明 command did not run，不建议升级。这一判定与上游相同，普通命令自己打印含该前缀的 stderr 行并非零退出时也会被当作 sandbox 故障，见 [ADR-0009](decisions/0009-background-jobs.md#bash) 的已知限制。没有 runner 失败证据且失败命令的 stderr 命中当前后端的拒绝签名时，结果追加 `[sandbox: file access denied under workspace-write mode]` 和一次性升级提示。
-- 模型参数沿用上游 `sandbox_permissions` 与 `justification`，按上游规则校验：`write`/`edit` 要求两者成对出现；`bash` 重复 `workspace-write` 时可省略 justification，未给模式时空白 justification 被忽略。`workspace-write` 等同默认模式。`danger-full-access` 只对 `bash` 有效：需要非空 justification，approval 原因为 `escalate sandbox to danger-full-access: <justification>`，批准后仅这一条命令在 host 上运行；delegated request 在执行点无条件拒绝。`write` 和 `edit` 在审批前拒绝 `danger-full-access`，文件工具从不离开 workspace。
+- standing sandbox 默认 workspace-write，人类可用 `/sandbox read-only|workspace-write|danger-full-access` 切换；模式立即持久化，后续执行点读最新值，已启动命令保留原 profile。root 与 delegated 的模式恢复、fork 继承、strict 字段与旧 composition 拒绝见 [ADR-0021](decisions/0021-session-sandbox-modes.md)。模式不改变 approval；delegated 即使继承 full access 也不能运行 bash/write/edit。
+- read-only 的 bash 只读；write/edit 默认拒绝并返回窄升级指引。workspace-write 的 bash 可写 workspace/owned temp，文件写入限定 workspace。danger-full-access 的 bash 等同 host，文件工具可操作整机路径，但仍保留普通文件、先读后写、内容摘要、symlink 禁写、原子发布与取消保护。
+- confined bash 通过 macOS `sandbox-exec` 或 Linux `bwrap` 执行，sandbox executable 缺失时拒绝。macOS 使用 `allow default` 和按档位限制文件写入（允许 `/dev/null`）；Linux 使用 `--ro-bind / /`、`--dev /dev`、`--unshare-pid`、`--proc /proc`、`--die-with-parent`，workspace-write 另 bind workspace 与 owned temp，read-only 不增加可写 bind。两平台现在都允许联网。runner 非零退出且 stderr 命中当前后端的致命前缀时，优先返回 sandbox 不可用错误（按实际 launch mode 填写的上游 `SandboxUnavailableError` 原文加 `Runner failure: <行>`）；后台说明 command did not run，不建议升级。这一判定与上游相同，普通命令自己打印含该前缀的 stderr 行并非零退出时也会被当作 sandbox 故障，见 [ADR-0009](decisions/0009-background-jobs.md#bash) 的已知限制。没有 runner 失败证据且失败命令的 stderr 命中后端拒绝签名时，追加实际 launch mode 的 denial marker 与升级提示。
+- 模型参数沿用上游 `sandbox_permissions` 与 `justification`：只允许重复当前模式或严格向更宽模式重试；read-only→workspace-write 是 workspace 内的窄升级，更宽目标可为 danger-full-access。write/edit 要求两者成对且理由非空；bash 重复当前模式可省略理由，未给模式时空白理由被忽略，更宽目标需要非空理由。每次仍需一次性 approval，理由为 `escalate sandbox to <mode>: <justification>`；升级只影响本调用，不写 standing 事件、不被子代理继承。executor 在审批后重新读取模式，缺少/不可读 journal 失败关闭，直接 `Approved` 不能绕过 read-only 或 delegated 拒绝。
+- Linux 删除 `--unshare-all` 后共享宿主网络，与 macOS 一致；文件 sandbox 不是网络或读取隔离。已批准 bash 可以连接公网、loopback、私网与本机服务，将可读文件经网络发出；read-only 仅限制本机文件修改，不阻止远端写入或数据外传。shell 不继承 web_fetch 的 SSRF/public-address 限制。full access 还允许修改凭据、会话、附件或 spill 所在的 host 路径；owner-only 权限不抵御同用户已批准命令。需要网络/整机读取隔离时使用独立容器、VM 或外部网络策略。
+
 - `bash` 运行 `bash -c`。每次调用在审批之后作为后台任务注册表中的 job 运行，进程没有 runner 截止时间，只在自行结束、`job_kill` 或关闭时停止；停止时向整个进程组发 SIGTERM，最多等 3 s 再 SIGKILL，并等待退出与最多 3 s 的管道排空（命令正常退出后，仍持有管道的后代输出同样最多排空 3 s）；关闭同时取消各执行，宽限不按 job 数累加。命令结束后同一进程组中残留的后台进程也会被终止。`run_in_background: true` 立即返回 job ID，审批原因注明 background；前台调用等待 `timeoutMs`（默认 60 s、上限 10 min，超过上限按上限，非正值拒绝），到期后命令继续作为后台 job 运行而不是被终止。前台结果中 stdout 与 stderr 各保留最后 64,000 字节，超出的流另存为 [spill 文件](#spill-文件)（单个最多 64 MiB）；非零退出码和信号以 `[exit code: N]`、`[killed by signal: S]` 标记返回，不是 tool error；取消调用会终止该 job 并返回 `tool call aborted`。owner 已有 10 个活动 job 时，后台调用被拒，前台调用退回到期即终止的执行方式，超时以 `[timed out after Nms]` 标记。
 - job 只能由启动它的 session 读取、等待和终止，其他 session 得到 `belongs to another session`；ID 可预测，边界是所有权。每个 job 的输出环按解码后的 UTF-8 文本字节计量，运行中最多保留 128 KiB，结束后第一次读取裁到 16 KiB，丢失的字节以提示标出。插件关闭时先拒绝新 job，再取消并等待全部 producer；shell provider 另外取消并等待 job 上限回退执行及输出收尾，然后删除临时目录。完成通知只包含 job ID、种类、标签（命令文本）和状态；前台收集与超时交接的通知规则见 [ADR-0009](decisions/0009-background-jobs.md)。
-- 进程回收有平台和模式边界：Linux workspace sandbox 的 `bwrap --unshare-all --die-with-parent` 使用 PID namespace，namespace 内的后代不能通过 `setsid()` 逃到宿主，namespace 结束时由内核回收。macOS `sandbox-exec` 没有 PID namespace，runner 的 `killpg` 只能终止原进程组；调用 `setsid()` 或离开该组的后代可能在 harness 退出后继续运行。`danger-full-access` 的 host 执行同样没有 PID namespace，不承诺回收脱离进程组的后代；非 Unix runner 只终止直接子进程。需要完整后代回收保证时使用独立容器或 VM；Scope 的 join 只证明受管 runner 与输出收尾已结束。
+- 进程回收有平台和模式边界：Linux read-only/workspace-write sandbox 的 `bwrap --unshare-pid --die-with-parent` 使用 PID namespace，namespace 内的后代不能通过 `setsid()` 逃到宿主，namespace 结束时由内核回收。macOS `sandbox-exec` 没有 PID namespace，runner 的 `killpg` 只能终止原进程组；调用 `setsid()` 或离开该组的后代可能在 harness 退出后继续运行。`danger-full-access` 的 host 执行同样没有 PID namespace，不承诺回收脱离进程组的后代；非 Unix runner 只终止直接子进程。需要完整后代回收保证时使用独立容器或 VM；Scope 的 join 只证明受管 runner 与输出收尾已结束。
 - 子进程环境在固定 allowlist 之外只增加 `NO_COLOR=1`、`TERM=dumb`、`PAGER=cat`、`GIT_PAGER=cat`、`DSH_SHELL=1` 和当前 `DSH_SESSION_ID`。
 - `glob`/`grep` 以 argv 直接运行构造时从 PATH 解析的 `rg`，不经过 shell。它们不需要 approval，也不进入 workspace sandbox：ripgrep 只读取文件，OS sandbox 只限制写入，不限制读取，进入 sandbox 不会缩小可见范围，反而会让没有 sandbox 可执行文件的主机失去搜索能力。每次调用前置 `--no-config`，`RIPGREP_CONFIG_PATH` 和配置文件无法注入 `--pre` 等预处理命令；模型提供的 pattern、include 和路径只以 `--regexp=`、`--glob=` 或 `--` 之后的单个参数传入。环境使用同一 allowlist，不传 `HOME`，因此不会读取用户的全局 git excludes；stdin 是空设备，cwd 是 workspace root。stdout 保留上限为 20,000,000 字节，超出时失败而不解析部分结果；stderr 只保留最后 65,536 字节作为错误摘要；超时或取消时立即终止进程组并等待退出。与上游 SIGTERM 后等待 3 s 再 SIGKILL 的偏离及静止理由见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)。
 - 进程使用 argv 启动；只有 `bash` 工具才由 `bash -c` 解释文本。启动错误、sandbox 不可用、exit status、signal、timeout 和 output truncation 保持独立可诊断语义。
@@ -155,7 +159,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 - `ask_user_question` 与 `exit_plan_mode` 的问题来自模型参数，属于不可信输入。提问服务在呈现前限制为最多 16 题、每题最多 32 个选项，id 为无换行的 1–128 字节且唯一，问题与标签不能为空白，标签在题内唯一；文本总量受[网络边界](#网络边界)的参数预算约束。
 - 答案在进入模型前逐题校验：每题恰好一条，只能选择该题提供的标签，单选至多一个，自由回答不超过 16 KiB 且为合法 UTF-8。broker 返回后先检查调用 context，已取消时无论是否返回合法答案或错误都按 aborted 处理；broker 缺失、取消、失败或非法答案都失败关闭为错误结果，不会被当作默认选择或批准。delegated agent 不能提问。
 - 答案是用户提供的数据，不是授权：它不改变 approval policy、sandbox 或工具 allowlist，写类工具仍在执行点请求一次性 approval。
-- 规划模式是提示词约束，不是授权边界：它不过滤工具，也不读取或改变 approval、sandbox 与 allowlist。需要强制只读时使用 `never` policy。评估与理由见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)。
+- 规划模式是提示词约束，不是授权边界：它不过滤工具，也不读取或改变 approval、sandbox 与 allowlist。需要文件只读 profile 时使用 read-only sandbox；需要禁止全部 bash/write/edit 时使用 `never` policy。评估与理由见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)。
 - 只有恰好选择 `Approve` 且没有自由回答、提问未被取消且退出选择检查时 context 仍有效的审查结果才会退出规划模式；退出在下一个 step 边界持久化为 `plan/mode`。
 
 ## 长期目标
@@ -175,7 +179,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 - 参数超限时只提交显式 `arguments_omitted:true` 与空 arguments，runtime 在任何工具回调或 approval 之前返回错误；模型可缩小参数后重试。持久化校验拒绝省略调用携带非空参数、approval、todo 副作用或成功结果，原始超限内容不成为可执行事实。预算不预留会话的剩余空间：整个 64 MiB session 写满仍需新会话。
 - `notice/queued` 只由 owner agent 在 job 完成通知入队前写入，内容是之后投递给模型的同一条通知（job ID、种类、标签即命令文本、状态），不含输出正文。decoder 拒绝重复 ID、投递未入队或已投递的 ID，以及与入队内容不同的投递；欠着的通知在恢复后投递一次。
 - `todo/write` 只由调用方 session 中尚未得到 result 的 `todo_write` call 写入，最多 256 项、每项 `content` 2048 字节。decoder 拒绝未知字段、未知状态、未去空白或重复的内容，以及不引用 pending `todo_write` call 的记录。
-- `subagent/descriptor` 只接受 v2、`spawn`/`fork` provider 与已知 mode，且必须紧跟继承前缀、位于 turn 之外；`subagent/catalog` 必须位于活动 step，同一日志内 child id 唯一。fork 种子必须是从 1 开始连续、schema 有效且 turn 闭合的前缀，与 header 一次写入，校验失败时不创建文件。
+- `subagent/descriptor` 只接受 v3（含继承 route）、`spawn`/`fork` provider 与已知 mode，且必须紧跟继承前缀、位于 turn 之外；`subagent/catalog` 必须位于活动 step，同一日志内 child id 唯一。fork 种子必须是从 1 开始连续、schema 有效且 turn 闭合的前缀，与 header 一次写入，校验失败时不创建文件。
 
 ## Subagent 与生命周期
 

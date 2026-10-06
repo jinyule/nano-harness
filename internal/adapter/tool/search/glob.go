@@ -32,7 +32,7 @@ func (provider *Provider) globTool() *appTool.Tool {
 			appTool.Optional("path", appTool.String("Directory to search in. Defaults to the session workspace; a relative path resolves against it.")),
 		},
 		Guidance: appTool.StaticGuidance(appTool.OrderGlob, "Use the glob tool — not shell find — to discover files by path pattern."),
-		Check: func(_ appTool.Invocation, arguments globArgs) error {
+		Check: func(_ context.Context, _ appTool.Invocation, arguments globArgs) error {
 			if appTool.IsBlank(arguments.Pattern) {
 				return errors.New("pattern must be a non-empty string")
 			}

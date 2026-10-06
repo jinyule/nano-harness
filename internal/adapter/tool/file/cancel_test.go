@@ -72,7 +72,7 @@ func testCanceledPublication(t *testing.T, tool string, present bool) {
 	})
 	go func() {
 		defer close(exited)
-		invocation := appTool.Invocation{SessionID: "session", Approved: true}
+		invocation := appTool.Invocation{SessionID: "session", Approved: true, Journal: nopJournal{}}
 		var err error
 		if tool == "write" {
 			_, err = h.provider.write(ctx, invocation, writeArgs{FilePath: "picked.txt", Content: "after"})

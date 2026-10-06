@@ -80,8 +80,10 @@ func (provider *Provider) outputTool() *appTool.Tool {
 			appTool.Optional("timeout_ms", appTool.Number("Max wait in milliseconds with wait: true. Defaults to and is capped by configuration.")),
 		},
 		Guidance: appTool.StaticGuidance(appTool.OrderJobs, guidance),
-		Check:    func(_ appTool.Invocation, arguments outputArgs) error { return checkJobID(arguments.JobID) },
-		Execute:  provider.output,
+		Check: func(_ context.Context, _ appTool.Invocation, arguments outputArgs) error {
+			return checkJobID(arguments.JobID)
+		},
+		Execute: provider.output,
 	})
 }
 
@@ -160,7 +162,9 @@ func (provider *Provider) killTool() *appTool.Tool {
 			appTool.Required("job_id", appTool.String(jobIDText)),
 			appTool.Optional("reason", appTool.String("Optional short reason, recorded in the log and forwarded to the job.")),
 		},
-		Check: func(_ appTool.Invocation, arguments killArgs) error { return checkJobID(arguments.JobID) },
+		Check: func(_ context.Context, _ appTool.Invocation, arguments killArgs) error {
+			return checkJobID(arguments.JobID)
+		},
 		Execute: func(_ context.Context, invocation appTool.Invocation, arguments killArgs) (appTool.Result, error) {
 			view, requested, err := provider.jobs.Kill(invocation.SessionID, arguments.JobID, arguments.Reason)
 			if err != nil {

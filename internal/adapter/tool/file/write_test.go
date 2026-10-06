@@ -41,7 +41,7 @@ func TestWrite_CreatesAndReplacesFilesAtomically(t *testing.T) {
 	if readFixture(t, h.path("untouched.txt")) != "same" {
 		t.Fatal("unrelated file changed")
 	}
-	if strings.Join(h.approver.reasons, "|") != `write file "nested/dir/new.txt"|write file "`+h.path("existing.txt")+`"` {
+	if strings.Join(h.approver.reasons, "|") != `write file "nested/dir/new.txt"|escalate sandbox to workspace-write: repeat the standing mode` {
 		t.Fatalf("approval reasons = %q", h.approver.reasons)
 	}
 	entries, _ := os.ReadDir(h.root.Path())
@@ -71,7 +71,6 @@ func TestWrite_RejectsUnsafeTargetsWithoutTouchingFiles(t *testing.T) {
 	}{
 		{map[string]any{"file_path": "x"}, `missing required property "content"`},
 		{map[string]any{"file_path": "\t", "content": "x"}, "file_path must be a non-empty string"},
-		{map[string]any{"file_path": "x", "content": "x", "sandbox_permissions": "danger-full-access", "justification": "outside"}, `"danger-full-access" is not available for file operations`},
 		{map[string]any{"file_path": "x", "content": "x", "sandbox_permissions": "workspace-write"}, "requires a justification"},
 		{map[string]any{"file_path": "x", "content": "x", "justification": "why"}, "only valid together"},
 		{map[string]any{"file_path": "x", "content": "x", "sandbox_permissions": "root", "justification": "why"}, `"sandbox_permissions" must be one of`},
@@ -107,7 +106,7 @@ func TestWrite_RejectsUnsafeTargetsWithoutTouchingFiles(t *testing.T) {
 func TestWrite_ExecutionPointGuardsAndFilesystemFailures(t *testing.T) {
 	restoreHooks(t)
 	h := newHarness(t)
-	approved := appTool.Invocation{Approved: true}
+	approved := appTool.Invocation{Approved: true, Journal: nopJournal{}}
 	if _, err := h.provider.write(context.Background(), appTool.Invocation{}, writeArgs{FilePath: "x"}); err == nil || !strings.Contains(err.Error(), "approval was not granted") {
 		t.Fatalf("unapproved = %v", err)
 	}
@@ -203,7 +202,6 @@ func TestEdit_RejectsInvalidAndUnsafeEdits(t *testing.T) {
 		{map[string]any{"file_path": "file.txt", "old_string": "", "new_string": "b"}, "old_string must be a non-empty string"},
 		{map[string]any{"file_path": "file.txt", "old_string": "same", "new_string": "same"}, "old_string and new_string must differ"},
 		{map[string]any{"file_path": "file.txt", "old_string": "a", "new_string": "b", "replace_all": "yes"}, `"replace_all" must be a boolean`},
-		{map[string]any{"file_path": "file.txt", "old_string": "a", "new_string": "b", "sandbox_permissions": "danger-full-access", "justification": "x"}, "not available for file operations"},
 		{map[string]any{"file_path": "file.txt", "old_string": "dup", "new_string": "x"}, fmt.Sprintf("old_string matched 2 times in %q; provide a more specific old_string or set replace_all to true", h.path("file.txt"))},
 		{map[string]any{"file_path": "file.txt", "old_string": "absent", "new_string": "x"}, fmt.Sprintf("old_string was not found in %q", h.path("file.txt"))},
 		{map[string]any{"file_path": "missing.txt", "old_string": "a", "new_string": "b"}, fmt.Sprintf("cannot modify %q: file has not been read — read the file, then retry", h.path("missing.txt"))},
@@ -229,7 +227,7 @@ func TestEdit_ExecutionPointGuardsAndFilesystemFailures(t *testing.T) {
 	restoreHooks(t)
 	h := newHarness(t)
 	writeFixture(t, h.path("file.txt"), "old")
-	approved := appTool.Invocation{SessionID: "s", Approved: true}
+	approved := appTool.Invocation{SessionID: "s", Approved: true, Journal: nopJournal{}}
 	h.provider.observed.record("s", h.path("file.txt"), observed([]byte("old")))
 	arguments := editArgs{FilePath: "file.txt", OldString: "old", NewString: "new"}
 	if _, err := h.provider.edit(context.Background(), appTool.Invocation{}, arguments); err == nil || !strings.Contains(err.Error(), "approval was not granted") {

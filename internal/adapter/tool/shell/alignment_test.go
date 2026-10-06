@@ -139,7 +139,7 @@ func TestBash_CancellationAndShutdownRunTERMTrap(t *testing.T) {
 			callDone := make(chan error, 1)
 			go func() {
 				background, mode, justification := action == "kill" || action == "shutdown", "danger-full-access", "test"
-				_, err := h.provider.bash(ctx, appTool.Invocation{SessionID: "session-1", Approved: true}, bashArgs{Description: "Hold with trap", Command: command, RunInBackground: &background, SandboxPermissions: &mode, Justification: &justification})
+				_, err := h.provider.bash(ctx, appTool.Invocation{SessionID: "session-1", Approved: true, Journal: nopJournal{}}, bashArgs{Description: "Hold with trap", Command: command, RunInBackground: &background, SandboxPermissions: &mode, Justification: &justification})
 				callDone <- err
 			}()
 			select {

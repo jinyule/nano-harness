@@ -15,10 +15,12 @@
 
 ## Decision
 
+委派说明与 sandbox 快照共存、fork 前缀一致性的补充由[WP14 Note](2026-10-06-session-sandbox-modes.md)拥有；本 Note 继续拥有固定 route、统一 system prompt、委派说明与发送者身份的契约和证据。
+
 契约写入 [ADR-0013](../../../docs/decisions/0013-background-continuable-subagents.md) 第 3、4、5、7 节，当前事实同步到[架构](../../../docs/architecture.md#subagent)、[安全](../../../docs/security.md#subagent-与生命周期)与[测试](../../../docs/testing.md)文档。
 
 - **继承 route**：`core/session` 新增 `SubagentRoute{Provider, Model, Effort}`，descriptor 升为 v3 并要求 `route`；`subagent.Service.create` 从 parent 最新的 `request/header` 取 route（没有请求时以 `INVALID_REQUEST` 拒绝），经 `agent.CreateRequest.Route` 写入 descriptor，`restoreRequest` 冷恢复时读回。`Agent` 持有 route，engine 的 `requestRoute` 对 delegated agent 使用它，root 仍取热设置 route 与目录 effort；request header、system prompt 的 route 行、`PrepareCall`、retry 键、工具 route 与 assistant source 都取自同一 route。`llm.Request.Effort`（指针，nil 表示沿用目录）携带 header 冻结的 effort，provider 的 `prepared.Stream` 用它替换目录 effort，因此 header 与 wire 一致，省略的 effort 也被保留。
-- **runtime context**：删除 `prompt.Input.Delegated` 与 child 专属段落。`subagent.Service` 实现 `agent.ContextProvider` 并在 `Start` 中注册到 engine（`New` 增加 `Contexts` 依赖，cmd 传入 engine）：有 descriptor 的会话在 replay surface 中没有可见的 `runtime-context` 消息时，提交一条上游文本的快照；恢复后可见副本不重复，compaction 隐藏后重新贡献，root 不受影响。测试与 PTY fixture 的模型路由跳过 runtime context，因为它位于任务消息之后。
+- **runtime context**：删除 `prompt.Input.Delegated` 与 child 专属段落。`subagent.Service` 实现 `agent.ContextProvider` 并在 `Start` 中注册到 engine（`New` 增加 `Contexts` 依赖，cmd 传入 engine）：有 descriptor 的会话在 replay surface 中没有可见的委派说明副本时，提交一条上游文本的快照；恢复后可见副本不重复，compaction 隐藏后重新贡献，root 不受影响。测试与 PTY fixture 的模型路由跳过 runtime context，因为它位于任务消息之后。
 - **发送者身份**：`MessageSource.SenderSessionID`（`sender_session_id`）。`agent-message` 写发送方，`subagent-settled` 写结算的 child；严格 decoder 要求这两种 kind 必须带、其他 kind 与 assistant 消息不得带。`form`/`summary` 只服务展示，不持久化（理由见 ADR-0013）。
 - composition token 升为 `subagent-tools-v4`；固定样本 `session-v2-subagent.jsonl` 改为 descriptor v3 与带发送者的 `agent-message`，并增加反例。
 

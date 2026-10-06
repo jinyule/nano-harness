@@ -52,7 +52,7 @@ func TestRuntime_KeepInlineErrorsStayInline(t *testing.T) {
 	large := strings.Repeat("x", 60000)
 	for _, phase := range []string{"schema", "check", "execute"} {
 		candidate := Define(Spec[noArguments]{Name: phase, Description: phase, KeepInline: true,
-			Check: func(Invocation, noArguments) error {
+			Check: func(context.Context, Invocation, noArguments) error {
 				if phase == "check" {
 					return errors.New(large)
 				}
@@ -88,7 +88,7 @@ func TestRuntime_SpillsErrorsBeforeDurableTruncation(t *testing.T) {
 	large := "SEARCH_FAILED: " + strings.Repeat("x", session.MaxTextBytes+100)
 	for _, phase := range []string{"check", "execute"} {
 		candidate := Define(Spec[noArguments]{Name: phase, Description: phase,
-			Check: func(Invocation, noArguments) error {
+			Check: func(context.Context, Invocation, noArguments) error {
 				if phase == "check" {
 					return errors.New(large)
 				}

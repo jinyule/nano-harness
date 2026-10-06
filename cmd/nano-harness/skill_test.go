@@ -259,7 +259,7 @@ func TestComposition_SkillCatalogToolAndGesture(t *testing.T) {
 		t.Fatalf("resumed request does not carry exactly the two durable catalogs:\n%s", server.request(t, 3))
 	}
 	for turn, want := range map[uint64][]string{
-		1: {"user", coreskill.SourceCatalog},
+		1: {"user", "runtime-context", coreskill.SourceCatalog},
 		2: {"user", coreskill.SourceCatalog, coreskill.SourceInvocation},
 		3: {"user"},
 	} {

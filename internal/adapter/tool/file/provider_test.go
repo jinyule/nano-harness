@@ -38,6 +38,8 @@ func (approver *recordingApprover) Decide(_ context.Context, request appTool.App
 
 type nopJournal struct{}
 
+func (nopJournal) Events(context.Context) ([]session.Event, error) { return nil, nil }
+
 func (nopJournal) Append(context.Context, session.Record) (session.Event, error) {
 	return session.Event{}, nil
 }

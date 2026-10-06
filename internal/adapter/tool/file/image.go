@@ -59,7 +59,7 @@ func (provider *Provider) readImageTool() *appTool.Tool {
 // image extension or none, and a calling route that declares image input.
 // The route gate is stricter than a provider refusal: an image the calling
 // model cannot inspect must never enter the session.
-func checkReadImage(invocation appTool.Invocation, arguments readImageArgs) error {
+func checkReadImage(_ context.Context, invocation appTool.Invocation, arguments readImageArgs) error {
 	if strings.TrimSpace(arguments.FilePath) == "" {
 		return errors.New("file_path must be a non-empty string")
 	}

@@ -135,8 +135,8 @@
   {
     "id": "process-unavailable-upstream-text",
     "file": "internal/platform/process/runner.go",
-    "before": "return result, fmt.Errorf(\"%w Runner failure: %s\", ErrSandboxUnavailable, line)",
-    "after": "return result, fmt.Errorf(\"%w: %s\", ErrSandboxUnavailable, strings.TrimSpace(line))",
+    "before": "return result, fmt.Errorf(\"%w Runner failure: %s\", sandboxUnavailableError{request.Mode}, line)",
+    "after": "return result, fmt.Errorf(\"%w: %s\", sandboxUnavailableError{request.Mode}, strings.TrimSpace(line))",
     "test": "^TestRunnerRun_RunnerFailureOutranksDenial$"
   },
   {
@@ -709,8 +709,8 @@
   {
     "id": "sandbox-runner-failure-priority",
     "file": "internal/platform/process/runner.go",
-    "before": "if request.Mode == ModeWorkspace && result.ExitCode > 0 {",
-    "after": "if false && request.Mode == ModeWorkspace && result.ExitCode > 0 {",
+    "before": "if request.Mode != ModeHost && result.ExitCode > 0 {",
+    "after": "if false && request.Mode != ModeHost && result.ExitCode > 0 {",
     "test": "^TestRunnerRun_RunnerFailureOutranksDenial$"
   },
   {
@@ -957,5 +957,47 @@
     "before": "if call == nil || call.Name != \"web_search\" || call.ArgumentsOmitted {",
     "after": "if call == nil || call.Name != \"web_search\" {",
     "test": "^TestSessionV2WebSearch_FrozenContract$|^TestLog_WebSearchAuditRejectsOmittedArguments$"
+  },
+  {
+    "id": "sandbox-read-only-mutation",
+    "file": "internal/adapter/tool/file/sandbox.go",
+    "before": "if mode == session.SandboxReadOnly {",
+    "after": "if false && mode == session.SandboxReadOnly {",
+    "test": "^TestProvider_ReadOnlyEnforcedAtMutation$"
+  },
+  {
+    "id": "sandbox-after-approval",
+    "file": "internal/adapter/tool/file/write.go",
+    "before": "mode, err := mutationMode(ctx, invocation, arguments.SandboxPermissions, arguments.Justification)\n\tif err != nil {\n\t\treturn appTool.Result{}, err\n\t}",
+    "after": "mode, err := invocation.SandboxMode(ctx)\n\tif err != nil {\n\t\treturn appTool.Result{}, err\n\t}",
+    "test": "^TestProvider_ModeChangeDuringApprovalAndDirectDenial$"
+  },
+  {
+    "id": "sandbox-delegation-capture",
+    "file": "internal/app/subagent/service.go",
+    "before": "Sandbox: session.SandboxOverride(events)",
+    "after": "Sandbox: \"\"",
+    "test": "^TestService_SandboxCapturedAtDelegationAndRestored$"
+  },
+  {
+    "id": "sandbox-linux-network",
+    "file": "internal/platform/process/runner.go",
+    "before": "\"--die-with-parent\", \"--unshare-pid\",",
+    "after": "\"--die-with-parent\", \"--unshare-all\",",
+    "test": "^TestRunnerCommand_SandboxModesShareNetwork$"
+  },
+  {
+    "id": "sandbox-delegation-ownership",
+    "file": "internal/adapter/session/jsonl/sandbox.go",
+    "before": "if event.Record.Sandbox != nil &&",
+    "after": "if false && event.Record.Sandbox != nil &&",
+    "test": "^TestSandboxOrder_DelegationOwnership$"
+  },
+  {
+    "id": "sandbox-delegation-context-independent",
+    "file": "internal/app/subagent/service.go",
+    "before": " && session.Text(*node.Message) == delegationContext",
+    "after": "",
+    "test": "^TestService_DelegationContextReappearsOnlyWhenHidden$"
   }
 ]

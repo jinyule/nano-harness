@@ -62,7 +62,7 @@ make build
 
 以 `/name` 开头、但不是上面命令的输入按普通消息发送；`name` 是允许用户调用的 skill 时，它的完整说明随这条消息注入。
 
-`/attach` 接受 PNG、JPEG、WebP 或 GIF；图片会缩放、规范化并随下一条消息持久化。模型使用支持图片输入的模型时，也可以用 `read_image` 读取 workspace 中的图片。`/permission ask` 是默认策略：`write`、`edit` 和 `bash` 在实际执行前请求一次性授权。`bash` 默认在 workspace sandbox 中运行；模型可以用 `sandbox_permissions: danger-full-access` 和理由请求让单条命令离开 sandbox，这仍需一次性授权，subagent 不能请求。
+`/attach` 接受 PNG、JPEG、WebP 或 GIF；图片会缩放、规范化并随下一条消息持久化。模型使用支持图片输入的模型时，也可以用 `read_image` 读取 workspace 中的图片。`/permission ask` 是默认策略：`write`、`edit` 和 `bash` 在实际执行前请求一次性授权。`/sandbox read-only|workspace-write|danger-full-access` 切换并持久化当前会话文件策略，默认 workspace-write；full access 允许 host 访问，每次执行仍需授权。模型可用 `sandbox_permissions` 和理由请求一次性窄升级，subagent 固定 `never`，不能写文件或运行 shell。macOS/Linux shell sandbox 都允许联网，详见[安全边界](docs/security.md#approvalshell-与进程)。
 
 `/plan` 进入规划模式，`/plan TEXT` 进入后把文本作为下一条输入，`/plan off` 离开。规划模式期间请求带上游 Base 的规划指引，模型用 `exit_plan_mode` 提交计划，由你批准或带反馈继续规划；它只是指引，写入与 shell 仍需一次性授权。模型用 `ask_user_question` 提问时，输入选项编号（多选用逗号分隔）、直接输入文字作答，或留空跳过；推荐选项会预先填入，Ctrl+C 取消。
 
@@ -97,7 +97,7 @@ model 必须在该 provider 的模型目录中，否则设置加载失败。未�
 
 ## 终端验证与 GoLand 调试
 
-`make tui-e2e` 使用真实二进制和 PTY，配合本地模型协议 fixture，验证文件工具与 `read_image`、任务计划、后台任务通知、前台 one-shot spawn/fork 子代理、审批、提问、规划审查、`/goal` 自动轮次与完成、粘贴、窗口缩放与换行、打断和恢复，无需模型账户。需要 Python 3、Unix PTY、ripgrep 和本机 workspace sandbox；完整场景与证据范围见[测试策略](docs/testing.md#tui-与真实-cmd)。
+`make tui-e2e` 使用真实二进制和 PTY，配合本地模型协议 fixture，验证文件工具与 `read_image`、任务计划、后台任务通知、前台 one-shot spawn/fork 子代理、审批、会话模式切换、提问、规划审查、`/goal` 自动轮次与完成、粘贴、窗口缩放与换行、打断和恢复，无需模型账户。需要 Python 3、Unix PTY、ripgrep 和本机 workspace sandbox；完整场景与证据范围见[测试策略](docs/testing.md#tui-与真实-cmd)。
 
 GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点。需要把 TUI 输入保留在 Codex 或其他终端中时，使用 `Nano TUI Remote`；完整步骤见[终端与断点调试](docs/debugging.md)。
 

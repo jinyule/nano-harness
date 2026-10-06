@@ -16,7 +16,7 @@ func TestRuntime_OversizedArgumentsNeverReachToolCallbacks(t *testing.T) {
 	candidate := Define(Spec[noArguments]{
 		Name: "tool", Description: "reject oversized calls",
 		Concurrent: func(noArguments) bool { callback(); return true },
-		Check:      func(Invocation, noArguments) error { callback(); return nil },
+		Check:      func(context.Context, Invocation, noArguments) error { callback(); return nil },
 		Approval:   func(noArguments) string { callback(); return "approval" },
 		Execute:    func(context.Context, Invocation, noArguments) (Result, error) { callback(); return Text("wrong"), nil },
 	})

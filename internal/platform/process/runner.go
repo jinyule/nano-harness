@@ -29,9 +29,8 @@ const (
 var (
 	// ErrInvalidConfig identifies a process request the runner cannot execute safely.
 	ErrInvalidConfig = errors.New("invalid process configuration")
-	// ErrSandboxUnavailable identifies a missing or failed workspace sandbox
-	// runner. Its text is upstream's SandboxUnavailableError for the
-	// workspace-write mode; a runner failure appends " Runner failure: <detail>".
+	// ErrSandboxUnavailable identifies a missing or failed confined sandbox.
+	// Returned errors preserve this sentinel and describe the requested mode.
 	ErrSandboxUnavailable = errors.New(`sandbox mode "workspace-write" is requested but no sandbox backend is usable on this host; ` + //nolint:staticcheck // ST1005: upstream's model-facing message ends with a period and is reproduced byte for byte
 		"refusing to run the command unconfined. Install bubblewrap or run a Landlock-enforcing kernel (Linux), " +
 		"ensure sandbox-exec is usable (macOS), or ensure the ACL restricted-token runner can start (Windows) " +
@@ -40,6 +39,17 @@ var (
 	findExecutable  = exec.LookPath
 	processAbs      = filepath.Abs
 )
+
+type sandboxUnavailableError struct{ mode Mode }
+
+func (failure sandboxUnavailableError) Error() string {
+	if failure.mode == ModeReadOnly {
+		return strings.Replace(ErrSandboxUnavailable.Error(), "workspace-write", "read-only", 1)
+	}
+	return ErrSandboxUnavailable.Error()
+}
+
+func (sandboxUnavailableError) Unwrap() error { return ErrSandboxUnavailable }
 
 // denialSignatures are the case-insensitive stderr fragments each sandbox
 // backend produces when it refuses a file effect.
@@ -52,6 +62,8 @@ var denialSignatures = map[string]string{
 type Mode string
 
 const (
+	// ModeReadOnly denies file writes except device access.
+	ModeReadOnly Mode = "read-only"
 	// ModeWorkspace requires the configured OS filesystem sandbox.
 	ModeWorkspace Mode = "workspace"
 	// ModeHost runs directly on the host. Callers choose it only for an
@@ -65,7 +77,7 @@ type Request struct {
 	Args []string
 	// Root is the only directory tree workspace mode may write.
 	Root string
-	// Cwd is the working directory and must lie inside Root.
+	// Cwd is the working directory; confined modes require it inside Root.
 	Cwd string
 	// TempDir is the private TMPDIR and must lie inside Root. Workspace mode
 	// requires it; an empty value in host mode leaves TMPDIR unset.
@@ -107,11 +119,13 @@ type Result struct {
 	Signal string
 	// TimedOut reports that the request timeout requested group termination.
 	TimedOut bool
-	// SandboxDenied reports a failed workspace-mode run whose stderr carries
+	// SandboxDenied reports a failed confined run whose stderr carries
 	// the active sandbox's file-denial signature.
 	SandboxDenied bool
 	// RunnerFailed distinguishes sandbox infrastructure failure from a command exit.
 	RunnerFailed bool
+	// SandboxMode is the launch profile, retained for accurate denial markers.
+	SandboxMode Mode
 }
 
 // Runner resolves sandbox support once and owns no process beyond Run.
@@ -136,7 +150,7 @@ func New() *Runner {
 // group is killed and reaped. Exit status, signals, and timeouts are facts
 // in Result; errors mean the process could not run or the caller canceled.
 func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) {
-	if request.Path == "" || request.Root == "" || request.Cwd == "" || request.TempDir == "" && request.Mode != ModeHost || request.Mode != ModeWorkspace && request.Mode != ModeHost || request.Timeout < 0 || request.Timeout > 10*time.Minute || request.TerminationGrace < 0 || request.TerminationGrace > 3*time.Second || request.StdoutLimit < 0 || request.StderrLimit < 0 {
+	if request.Path == "" || request.Root == "" || request.Cwd == "" || request.TempDir == "" && request.Mode != ModeHost || request.Mode != ModeReadOnly && request.Mode != ModeWorkspace && request.Mode != ModeHost || request.Timeout < 0 || request.Timeout > 10*time.Minute || request.TerminationGrace < 0 || request.TerminationGrace > 3*time.Second || request.StdoutLimit < 0 || request.StderrLimit < 0 {
 		return Result{}, ErrInvalidConfig
 	}
 	paths := make([]string, 3)
@@ -151,7 +165,7 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 		paths[index] = absolute
 	}
 	root, cwd, temporary := paths[0], paths[1], paths[2]
-	if !within(root, cwd) || temporary != "" && !within(root, temporary) {
+	if request.Mode != ModeHost && !within(root, cwd) || temporary != "" && !within(root, temporary) {
 		return Result{}, ErrInvalidConfig
 	}
 	path, args, err := runner.command(root, cwd, temporary, request)
@@ -178,8 +192,8 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 	stdout, stderr := tailBuffer{limit: request.StdoutLimit}, tailBuffer{limit: request.StderrLimit}
 	command.Stdout, command.Stderr = observed(&stdout, request.Stdout), observed(&stderr, request.Stderr)
 	if err = command.Start(); err != nil {
-		if request.Mode == ModeWorkspace && runnerSpawnFailure(err, path, cwd) {
-			return Result{RunnerFailed: true}, fmt.Errorf("%w Runner failure: %w", ErrSandboxUnavailable, err)
+		if request.Mode != ModeHost && runnerSpawnFailure(err, path, cwd) {
+			return Result{RunnerFailed: true, SandboxMode: request.Mode}, fmt.Errorf("%w Runner failure: %w", sandboxUnavailableError{request.Mode}, err)
 		}
 		return Result{}, fmt.Errorf("start process: %w", err)
 	}
@@ -213,24 +227,24 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 	killProcessGroup(command)
 	result := Result{
 		Stdout: stdout.output(), Stderr: stderr.output(),
-		ExitCode: command.ProcessState.ExitCode(), Signal: exitSignal(command.ProcessState),
+		ExitCode: command.ProcessState.ExitCode(), Signal: exitSignal(command.ProcessState), SandboxMode: request.Mode,
 	}
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
 	result.TimedOut = killed.Load()
-	if request.Mode == ModeWorkspace && result.ExitCode > 0 {
+	if request.Mode != ModeHost && result.ExitCode > 0 {
 		prefix := map[string]string{"darwin": "sandbox-exec: ", "linux": "bwrap: "}[runner.goos]
 		for line := range strings.SplitSeq(result.Stderr.Text, "\n") {
 			// Like upstream's /\r?\n/ split, the matched line is otherwise unchanged.
 			if line = strings.TrimSuffix(line, "\r"); prefix != "" && strings.Contains(strings.ToLower(line), prefix) {
 				result.RunnerFailed = true
-				return result, fmt.Errorf("%w Runner failure: %s", ErrSandboxUnavailable, line)
+				return result, fmt.Errorf("%w Runner failure: %s", sandboxUnavailableError{request.Mode}, line)
 			}
 		}
 	}
 	signature, ok := denialSignatures[runner.goos]
-	result.SandboxDenied = request.Mode == ModeWorkspace && ok && result.ExitCode > 0 && strings.Contains(strings.ToLower(result.Stderr.Text), signature)
+	result.SandboxDenied = request.Mode != ModeHost && ok && result.ExitCode > 0 && strings.Contains(strings.ToLower(result.Stderr.Text), signature)
 	return result, nil
 }
 
@@ -251,21 +265,26 @@ func (runner *Runner) command(root, cwd, temporary string, request Request) (str
 		return request.Path, request.Args, nil
 	}
 	if runner.sandboxPath == "" {
-		return "", nil, ErrSandboxUnavailable
+		return "", nil, sandboxUnavailableError{request.Mode}
 	}
 	switch runner.goos {
 	case "darwin":
-		profile := `(version 1)(allow default)(deny file-write*)(allow file-write* (subpath "` + escapeSandbox(root) + `") (literal "/dev/null"))`
+		profile := `(version 1)(allow default)(deny file-write*)(allow file-write* (literal "/dev/null"))`
+		if request.Mode == ModeWorkspace {
+			profile += `(allow file-write* (subpath "` + escapeSandbox(root) + `"))`
+		}
 		return runner.sandboxPath, append([]string{"-p", profile, request.Path}, request.Args...), nil
 	case "linux":
 		arguments := []string{
-			"--die-with-parent", "--unshare-all", "--ro-bind", "/", "/",
-			"--bind", root, root, "--bind", temporary, "/tmp", "--dev", "/dev", "--proc", "/proc",
-			"--chdir", cwd, "--", request.Path,
+			"--die-with-parent", "--unshare-pid", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
 		}
+		if request.Mode == ModeWorkspace {
+			arguments = append(arguments, "--bind", root, root, "--bind", temporary, "/tmp")
+		}
+		arguments = append(arguments, "--chdir", cwd, "--", request.Path)
 		return runner.sandboxPath, append(arguments, request.Args...), nil
 	default:
-		return "", nil, ErrSandboxUnavailable
+		return "", nil, sandboxUnavailableError{request.Mode}
 	}
 }
 

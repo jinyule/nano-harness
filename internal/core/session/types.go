@@ -74,6 +74,8 @@ const (
 	RecordTodoWrite RecordType = "todo/write"
 	// RecordWebSearchRequest commits a log-only auxiliary request before dispatch.
 	RecordWebSearchRequest RecordType = "web/search-request"
+	// RecordSandboxMode commits the standing file policy for subsequent operations.
+	RecordSandboxMode RecordType = "sandbox/mode"
 	// RecordPlanMode commits the plan mode in force from this point on.
 	RecordPlanMode RecordType = "plan/mode"
 	// RecordGoalChange commits one goal mutation or clear tombstone.
@@ -392,6 +394,7 @@ type Record struct {
 	Catalog    *SubagentCatalog    `json:"catalog,omitempty"`
 	Todo       *TodoWrite          `json:"todo,omitempty"`
 	Search     *WebSearchRequest   `json:"search,omitempty"`
+	Sandbox    *SandboxModeChange  `json:"sandbox,omitempty"`
 	Plan       *PlanMode           `json:"plan,omitempty"`
 	Goal       *GoalChange         `json:"goal,omitempty"`
 	Prune      *ToolResultPrune    `json:"prune,omitempty"`

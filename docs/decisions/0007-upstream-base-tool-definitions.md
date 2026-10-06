@@ -54,11 +54,15 @@ subagent 工具名称不变；它们的 schema 改用共享子集表达，去掉
 
 ### Sandbox、approval 与 host 模式
 
+> 后续决定：[ADR-0021](0021-session-sandbox-modes.md) 以三档会话模式、立即持久化切换、文件工具窄升级/host 路径和 Linux 联网取代本节的固定 workspace 与只允许 bash host 规则。每次 write/edit/bash 的一次性 approval 继续有效。下文保留原决定。
+
 移除非上游的 `host` 参数，改用上游升级模型：`bash` 携带 `sandbox_permissions: danger-full-access` 和非空 `justification` 时，以 `escalate sandbox to danger-full-access: <justification>` 请求一次性 approval，批准后仅该命令在 host 上运行；delegated request 在执行点无条件拒绝。`workspace-write` 等同默认模式。上游只在升级时询问，本仓保留 `write`、`edit`、`bash` 每次执行都需要一次性 approval 的规则。
 
 `write` 和 `edit` 为保持 schema 一致而声明升级字段，但在审批前拒绝 `danger-full-access`。上游 fs-sandbox 允许升级后写任意路径；本仓文件工具始终不离开 workspace。
 
 ### 路径
+
+> 当前权限边界：[ADR-0021](0021-session-sandbox-modes.md) 允许 danger-full-access 访问 host；以下 workspace 与 spill 边界适用于 read-only/workspace-write。物理遍历和 symlink 禁写仍有效。
 
 相对路径按启动时解析的 workspace root 解析。描述中的 “resolved by the filesystem backend” 在本仓指 `internal/adapter/tool/workspace.Root`：绝对路径只在词法上位于已解析 root 内时接受，其余一律拒绝。读取和搜索可以经过解析后仍在 root 内的 symlink；`write` 与 `edit` 拒绝 root 到目标之间任何已存在的 symlink 组件。上游读取和搜索不限制在 workspace 内，且写入会更新 symlink 目标；本仓保持更严格的既有规则。`read`、`write`、`edit` 像上游一样显示绝对路径；`glob`、`grep` 显示 workspace 相对路径。
 
@@ -68,7 +72,7 @@ subagent 工具名称不变；它们的 schema 改用共享子集表达，去掉
 
 含 `..` 的成功路径显示解析后的物理绝对路径，供现有搜索 consumer 安全生成相对搜索根；上游 POSIX 显示保留原始父目录段。这是显示拼写的有意差异，目标身份一致。没有 `..` 时仍保留根内链接的显示拼写。Windows 也使用逐段规则，本仓不静默采用上游 Windows 的提前归一化行为；原生平台证据单独记录。
 
-system prompt 的 Safety 段落同时说明 [ADR-0008](0008-tool-output-spill-and-observation-policy.md#读回与安全边界) 的本 workspace spill 分区只读例外：`read`、`grep`、`read_image` 可读该分区的绝对路径，其他 workspace 分区不可见；更换 spill root 后，本会话已提交工具结果中的精确历史定位符仍可只读访问，历史存储内的目录与文件必须私有且不能是链接；`glob`、`write`、`edit` 与 `bash` workdir 仍在 workspace 内。模型提示不改变执行点策略；`bash` 离开 workspace-write sandbox 仍需一次性批准的 `danger-full-access`。
+system prompt 的 Safety 段落描述各档文件策略、默认 workspace/spill 边界与独立 approval；当前策略由 [ADR-0021](0021-session-sandbox-modes.md) 的 `sandbox:policy` runtime-context 提供。模型提示不改变执行点策略，host 与窄升级仍需一次性 approval。
 
 ### 搜索实现
 

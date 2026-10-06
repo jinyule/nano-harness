@@ -132,7 +132,7 @@ func (registry *Registry) Create(ctx context.Context, request CreateRequest) (*A
 	if request.Mode == "" {
 		request.Mode = "continuable"
 	}
-	if request.Mode != "one-shot" && request.Mode != "continuable" || request.Depth < 0 || request.Depth > 16 || request.ParentID == "" && (request.Depth != 0 || request.Provider != "" || request.Route != (session.SubagentRoute{}) || len(request.Seed) > 0) || request.ParentID != "" && request.Depth == 0 {
+	if request.Mode != "one-shot" && request.Mode != "continuable" || request.Depth < 0 || request.Depth > 16 || request.ParentID == "" && (request.Depth != 0 || request.Provider != "" || request.Route != (session.SubagentRoute{}) || len(request.Seed) > 0 || request.Sandbox != "") || request.ParentID != "" && request.Depth == 0 || request.Sandbox != "" && !request.Sandbox.Valid() {
 		return nil, ErrInvalidConfig
 	}
 	registry.mu.Lock()
@@ -164,6 +164,12 @@ func (registry *Registry) Create(ctx context.Context, request CreateRequest) (*A
 			if _, err := ownedJournal.Append(ctx, session.Record{Type: session.RecordSubagentDescriptor, Subagent: descriptor}); err != nil {
 				_ = ownedJournal.Close(context.WithoutCancel(ctx))
 				return nil, err
+			}
+			if request.Sandbox != "" {
+				if _, err := ownedJournal.Append(ctx, session.Record{Type: session.RecordSandboxMode, Sandbox: &session.SandboxModeChange{Mode: request.Sandbox, Source: "delegation"}}); err != nil {
+					_ = ownedJournal.Close(context.WithoutCancel(ctx))
+					return nil, err
+				}
 			}
 			if _, err := ownedJournal.Append(ctx, session.Record{Type: session.RecordApprovalPolicy, Approval: &session.ApprovalData{Policy: session.ApprovalNever, Source: "delegation"}}); err != nil {
 				_ = ownedJournal.Close(context.WithoutCancel(ctx))

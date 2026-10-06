@@ -186,7 +186,7 @@ func TestProvider_ShutdownCancelsAndJoinsFallbackBeforeRemovingTemporary(t *test
 	callContext, cancelCall := context.WithCancel(t.Context())
 	defer cancelCall()
 	go func() {
-		_, err := h.provider.bash(callContext, appTool.Invocation{SessionID: "session-1", Approved: true}, bashArgs{Description: "hold", Command: "hold"})
+		_, err := h.provider.bash(callContext, appTool.Invocation{SessionID: "session-1", Approved: true, Journal: nopJournal{}}, bashArgs{Description: "hold", Command: "hold"})
 		callDone <- err
 	}()
 	request := <-started

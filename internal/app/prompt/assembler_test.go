@@ -36,10 +36,12 @@ func TestAssemblerLifecycleAndSections(t *testing.T) {
 		t.Fatalf("prompt=%q err=%v", prompt, err)
 	}
 	for _, policy := range []string{
+		"In read-only and workspace-write modes",
+		"danger-full-access permits host file paths",
 		"read, grep, and read_image may also read absolute paths in this workspace's spill partition",
 		"Exact historical spill files named in committed tool results remain readable after a spill-root change",
 		"glob, write, edit, and bash workdir remain confined to the workspace",
-		"bash can leave its workspace-write sandbox only with an approved danger-full-access request",
+		"Every write, edit, and bash call still requires local approval, including danger-full-access",
 	} {
 		if !strings.Contains(prompt, policy) {
 			t.Errorf("Safety section lacks %q", policy)

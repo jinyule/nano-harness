@@ -68,7 +68,7 @@ composition ID 绑定 workspace 与工具/会话语义，不绑定可热切换 r
 
 workspace provider 安装 `read_file`、`list_files`、`search_files`、`apply_patch` 和 `run_shell`。只读工具声明 parallel，写与 shell 声明 exclusive；scheduler 并行相邻 parallel call，并把 exclusive call 作为 barrier，同时保持 result 顺序。
 
-> 已被取代：本节的工具清单、patch 行为与 shell 参数由 [ADR-0007](0007-upstream-base-tool-definitions.md) 的 Base 工具映射、`write`/`edit` 与 sandbox 升级字段取代；`bash` 后台变体见 [ADR-0009](0009-background-jobs.md)。下文保留原决定。
+> 已被取代：本节的工具清单、patch 行为与 shell 参数由 [ADR-0007](0007-upstream-base-tool-definitions.md) 的 Base 工具映射、`write`/`edit` 与 sandbox 升级字段取代；`bash` 后台变体见 [ADR-0009](0009-background-jobs.md)。会话三档模式、文件工具 host 与 Linux 联网由 [ADR-0021](0021-session-sandbox-modes.md) 取代固定 workspace 策略。下文保留原决定。
 
 模型生成的 arguments strict decode。所有文件操作限定解析后的 workspace；patch 拒绝 binary/rename/copy/symlink 并先 check。写入和 shell 在实际执行点请求一次性 approval；无 broker、取消、policy never、非法决定或 journal failure 都拒绝。
 

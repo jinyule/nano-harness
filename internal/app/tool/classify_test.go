@@ -43,7 +43,7 @@ func TestRuntime_ClassifiesItsOwnFailuresOnly(t *testing.T) {
 		simpleTool("approved", false, "needs approval", func(context.Context, Invocation) (Result, error) { return Text("ok"), nil }),
 		simpleTool("plain", false, "", func(context.Context, Invocation) (Result, error) { return Result{}, errors.New("plain failure") }),
 		simpleTool("panics", false, "", func(context.Context, Invocation) (Result, error) { panic("boom") }),
-		Define(Spec[noArguments]{Name: "checked", Description: "test", Check: func(Invocation, noArguments) error { return errors.New("semantic") }, Execute: never2}),
+		Define(Spec[noArguments]{Name: "checked", Description: "test", Check: func(context.Context, Invocation, noArguments) error { return errors.New("semantic") }, Execute: never2}),
 	} {
 		if err := runtime.Register(candidate, scope); err != nil {
 			t.Fatal(err)
@@ -79,7 +79,7 @@ func TestRuntime_RecordsDeclaredFailureClassifications(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	for _, candidate := range []*Tool{
-		Define(Spec[noArguments]{Name: "check", Description: "test", Check: func(Invocation, noArguments) error {
+		Define(Spec[noArguments]{Name: "check", Description: "test", Check: func(context.Context, Invocation, noArguments) error {
 			return &classifiedError{"cannot read \"a\": not found", notFound}
 		}, Execute: never2}),
 		simpleTool("wrapped", false, "", func(context.Context, Invocation) (Result, error) {

@@ -109,10 +109,17 @@ type fakePolicyRegistry struct {
 	mu         sync.Mutex
 	session    string
 	policy     session.ApprovalPolicy
+	sandbox    session.SandboxMode
 	err        error
 	planActive []bool
 	planChange plan.Change
 	planErr    error
+}
+
+func (registry *fakePolicyRegistry) SetSandboxMode(_ context.Context, id string, mode session.SandboxMode) error {
+	registry.session = id
+	registry.sandbox = mode
+	return registry.err
 }
 
 func (registry *fakePolicyRegistry) SetPolicy(_ context.Context, id string, policy session.ApprovalPolicy) error {

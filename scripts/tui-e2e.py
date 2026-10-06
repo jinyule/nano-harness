@@ -298,6 +298,8 @@ def verify(binary):
                 terminal.resize(100, 32)
                 terminal.send("/agents\r")
                 terminal.expect("no subagents")
+                terminal.send("/sandbox read-only\r")
+                terminal.expect("sandbox mode=read-only")
                 terminal.send("/plan\r")
                 terminal.expect("Plan mode on.")
                 terminal.send("PLAN_TASK\r")
@@ -374,6 +376,10 @@ def verify(binary):
             todos = [entry["todo"] for entry in root_records if entry["type"] == "todo/write"]
             assert todos == [{"call_id": "call-0", "items": [{"content": "inspect workspace", "status": "in_progress"},
                                                              {"content": "report tools", "status": "pending"}]}], todos
+            sandbox_modes = [entry["sandbox"]["mode"] for entry in root_records if entry["type"] == "sandbox/mode"]
+            assert sandbox_modes == ["read-only"], sandbox_modes
+            snapshots = [entry["message"]["content"][0]["text"] for entry in root_records if entry["type"] == "user/message" and entry["message"]["source"]["kind"] == "runtime-context"]
+            assert len(snapshots) == 2 and "workspace-write" in snapshots[0] and "read-only" in snapshots[1], snapshots
             modes = [(entry["plan"]["active"], entry.get("turn", 0)) for entry in root_records if entry["type"] == "plan/mode"]
             assert modes == [(True, 0), (False, 3)], modes
             planned = [(count, "You are in plan mode." in system) for task, count, system in server.instructions if "PLAN_TASK" in task]
@@ -435,7 +441,7 @@ def verify(binary):
                 terminal.close()
             assert not list((directory / "sessions").glob("*.lock"))
             assert "attachment>" not in transcript.read_text(), "attachment notices must not be persisted"
-            print("PASS: real binary/PTY, 19 root tool calls, /attach and read_image through the attachment store, conflicting reference placeholder and TUI notice, todo plan, background job notice, question answers, plan review, /goal round completion, spawn/fork children, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
+            print("PASS: real binary/PTY, 19 root tool calls, /attach and read_image through the attachment store, conflicting reference placeholder and TUI notice, todo plan, background job notice, question answers, sandbox mode switch, plan review, /goal round completion, spawn/fork children, approvals, files, bracketed paste, resize, wrap, interrupt, resume, cleanup")
 
 
 def main():

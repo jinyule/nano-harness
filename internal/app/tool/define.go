@@ -126,7 +126,7 @@ type Spec[A any] struct {
 	// never follow, and state can change while approval is pending, so
 	// Execute re-checks everything it relies on. Nil accepts every
 	// schema-valid value.
-	Check func(Invocation, A) error
+	Check func(context.Context, Invocation, A) error
 	// Concurrent opts a call into overlap with adjacent concurrent calls. It
 	// classifies every schema-valid call before the batch runs, so it must be
 	// pure and total. Nil, invalid arguments, and unknown tools are exclusive.
@@ -151,7 +151,7 @@ type Tool struct {
 // call is one schema-valid invocation bound to its typed arguments.
 type call struct {
 	concurrent bool
-	check      func(Invocation) error
+	check      func(context.Context, Invocation) error
 	reason     func() string
 	execute    func(context.Context, Invocation) (Result, error)
 }
@@ -184,11 +184,11 @@ func Define[A any](spec Spec[A]) *Tool {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}
 		prepared := &call{
-			check: func(invocation Invocation) error {
+			check: func(ctx context.Context, invocation Invocation) error {
 				if spec.Check == nil {
 					return nil
 				}
-				return spec.Check(invocation, arguments)
+				return spec.Check(ctx, invocation, arguments)
 			},
 			reason: func() string {
 				if spec.Approval == nil {

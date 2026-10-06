@@ -13,6 +13,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
 	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
+	"github.com/jinyule/nano-harness/internal/core/session"
 	platformProcess "github.com/jinyule/nano-harness/internal/platform/process"
 )
 
@@ -49,11 +50,6 @@ func (arguments bashArgs) background() bool {
 	return arguments.RunInBackground != nil && *arguments.RunInBackground
 }
 
-// escalated reports a validated request to leave the workspace sandbox.
-func (arguments bashArgs) escalated() bool {
-	return arguments.SandboxPermissions != nil && *arguments.SandboxPermissions == workspace.ModeDangerFullAccess
-}
-
 func (provider *Provider) bashTool() *appTool.Tool {
 	return appTool.Define(appTool.Spec[bashArgs]{
 		Name:        "bash",
@@ -67,22 +63,26 @@ func (provider *Provider) bashTool() *appTool.Tool {
 			appTool.Optional("run_in_background", appTool.Boolean("Run in the background and return a job id immediately (collect with job_output, stop with job_kill). No timeout applies.")),
 		}, workspace.EscalationProperties("command", "command")...),
 		Guidance: appTool.StaticGuidance(appTool.OrderBash, "Check the [exit code: N] marker on every bash result; investigate failures before moving on."),
-		Check: func(_ appTool.Invocation, arguments bashArgs) error {
+		Check: func(ctx context.Context, invocation appTool.Invocation, arguments bashArgs) error {
 			if err := checkBash(arguments); err != nil {
 				return err
 			}
 			// Refuse an unusable workdir before asking; execution re-checks it.
-			_, err := provider.workdir(arguments.Workdir)
+			mode, err := bashMode(ctx, invocation, arguments)
+			if err != nil {
+				return err
+			}
+			_, err = provider.workdirIn(arguments.Workdir, mode)
 			return err
 		},
 		Approval: func(arguments bashArgs) string {
-			if arguments.escalated() {
-				return "escalate sandbox to " + workspace.ModeDangerFullAccess + ": " + *arguments.Justification
+			if arguments.SandboxPermissions != nil && arguments.Justification != nil {
+				return "escalate sandbox to " + *arguments.SandboxPermissions + ": " + *arguments.Justification
 			}
 			if arguments.background() {
-				return "run a background shell command in the workspace sandbox: " + arguments.Description
+				return "run a background shell command: " + arguments.Description
 			}
-			return "run a shell command in the workspace sandbox: " + arguments.Description
+			return "run a shell command: " + arguments.Description
 		},
 		Execute: provider.bash,
 	})
@@ -100,21 +100,14 @@ func checkBash(arguments bashArgs) error {
 	if arguments.TimeoutMS != nil && *arguments.TimeoutMS <= 0 {
 		return fmt.Errorf("invalid timeoutMs: expected a positive number, got %s", formatMS(*arguments.TimeoutMS))
 	}
-	if arguments.SandboxPermissions != nil && *arguments.SandboxPermissions == workspace.ModeWorkspaceWrite {
-		return nil
-	}
-	justification := arguments.Justification
-	if arguments.SandboxPermissions == nil && justification != nil && strings.TrimSpace(*justification) == "" {
-		justification = nil
-	}
-	return workspace.ValidateEscalation(arguments.SandboxPermissions, justification)
+	return nil
 }
 
 func (provider *Provider) bash(ctx context.Context, invocation appTool.Invocation, arguments bashArgs) (appTool.Result, error) {
 	if !invocation.Approved {
 		return appTool.Result{}, errors.New("shell approval was not granted")
 	}
-	if arguments.escalated() && invocation.Delegated {
+	if invocation.Delegated {
 		return appTool.Result{}, errors.New("subagents cannot request sandbox escalation")
 	}
 	if provider.bashPath == "" {
@@ -124,7 +117,11 @@ func (provider *Provider) bash(ctx context.Context, invocation appTool.Invocatio
 	if temporary == "" {
 		return appTool.Result{}, errors.New("shell tools are not running")
 	}
-	workdir, err := provider.workdir(arguments.Workdir)
+	policy, err := bashMode(ctx, invocation, arguments)
+	if err != nil {
+		return appTool.Result{}, err
+	}
+	workdir, err := provider.workdirIn(arguments.Workdir, policy)
 	if err != nil {
 		return appTool.Result{}, err
 	}
@@ -132,9 +129,14 @@ func (provider *Provider) bash(ctx context.Context, invocation appTool.Invocatio
 	if arguments.TimeoutMS != nil {
 		timeoutMS = min(*arguments.TimeoutMS, maxTimeoutMS)
 	}
-	mode := platformProcess.ModeWorkspace
-	if arguments.escalated() {
+	var mode platformProcess.Mode
+	switch policy {
+	case session.SandboxDangerFullAccess:
 		mode = platformProcess.ModeHost
+	case session.SandboxReadOnly:
+		mode = platformProcess.ModeReadOnly
+	case session.SandboxWorkspaceWrite:
+		mode = platformProcess.ModeWorkspace
 	}
 	environment := map[string]string{"DSH_SHELL": "1", "DSH_SESSION_ID": invocation.SessionID}
 	maps.Copy(environment, terminalEnvironment)
@@ -181,6 +183,7 @@ func (provider *Provider) job(invocation appTool.Invocation, command string, req
 		}
 		request.Stdout, request.Stderr = streams[0], streams[1]
 		run.result, run.err = provider.runner.Run(ctx, request)
+		run.result.SandboxMode = request.Mode
 		run.spills = finishAll(streams)
 		return outcome(run.result, run.err)
 	}}
@@ -210,6 +213,7 @@ func (provider *Provider) foreground(ctx context.Context, invocation appTool.Inv
 		}
 		request.Timeout, request.Stdout, request.Stderr = timeout, streams[0], streams[1]
 		run.result, run.err = provider.runner.Run(fallback, request)
+		run.result.SandboxMode = request.Mode
 		run.spills = finishAll(streams)
 		return finish(fallback, *run, timeoutMS)
 	}
@@ -280,7 +284,7 @@ func outcome(result platformProcess.Result, err error) appJob.Outcome {
 		if result.ExitCode > 0 {
 			base = "exit code: " + strconv.Itoa(result.ExitCode)
 		}
-		return appJob.Outcome{Status: appJob.StatusFailed, Detail: base + "; [sandbox: the sandbox runner itself failed under workspace-write mode — the command did not run; this is a sandbox problem, not a command failure]"}
+		return appJob.Outcome{Status: appJob.StatusFailed, Detail: base + "; [sandbox: the sandbox runner itself failed under " + sandboxMode(result) + " mode — the command did not run; this is a sandbox problem, not a command failure]"}
 	case err != nil && !errors.Is(err, context.Canceled):
 		return appJob.Outcome{Status: appJob.StatusFailed, Detail: err.Error()}
 	case result.Signal != "":
@@ -290,7 +294,7 @@ func outcome(result platformProcess.Result, err error) appJob.Outcome {
 	}
 	detail := "exit code: " + strconv.Itoa(result.ExitCode)
 	if result.SandboxDenied {
-		detail += "; " + workspace.DenialMarker(workspace.ModeWorkspaceWrite) + " " + workspace.EscalationHint("command")
+		detail += "; " + sandboxMarker(result) + " " + workspace.EscalationHint("command")
 	}
 	return appJob.Outcome{Status: appJob.StatusCompleted, Detail: detail}
 }
@@ -305,13 +309,13 @@ func promoted(output, id string, timeoutMS float64) string {
 		"The command keeps running in the background. You will be notified when it finishes; read newer output with job_output, stop it with job_kill."
 }
 
-// workdir resolves the optional working directory to an existing directory
-// inside the workspace; the default is the workspace root.
-func (provider *Provider) workdir(requested *string) (string, error) {
+// workdirIn resolves an existing directory under the operation file policy;
+// relative paths and the default use the session workspace.
+func (provider *Provider) workdirIn(requested *string, mode session.SandboxMode) (string, error) {
 	if requested == nil {
 		return provider.root.Path(), nil
 	}
-	_, resolved, err := provider.root.Existing(*requested)
+	_, resolved, err := provider.root.ExistingIn(*requested, mode)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return "", fmt.Errorf("invalid workdir %q: not found", *requested)
@@ -345,7 +349,7 @@ func render(result platformProcess.Result, spills [2]string, timeoutMS float64) 
 	}
 	var markers []string
 	if result.SandboxDenied {
-		markers = append(markers, workspace.DenialMarker(workspace.ModeWorkspaceWrite), workspace.EscalationHint("command"))
+		markers = append(markers, sandboxMarker(result), workspace.EscalationHint("command"))
 	}
 	if result.TimedOut {
 		markers = append(markers, "[timed out after "+formatMS(timeoutMS)+"ms]")
@@ -381,3 +385,32 @@ func stream(output platformProcess.Output, spill string) string {
 // formatMS prints a millisecond count the way JavaScript stringifies numbers
 // for ordinary magnitudes.
 func formatMS(value float64) string { return strconv.FormatFloat(value, 'f', -1, 64) }
+
+func bashMode(ctx context.Context, invocation appTool.Invocation, arguments bashArgs) (session.SandboxMode, error) {
+	mode, err := invocation.SandboxMode(ctx)
+	if err != nil {
+		return "", err
+	}
+	if arguments.SandboxPermissions == nil || *arguments.SandboxPermissions != string(mode) {
+		justification := arguments.Justification
+		if arguments.SandboxPermissions == nil && justification != nil && strings.TrimSpace(*justification) == "" {
+			justification = nil
+		}
+		if err := workspace.ValidateEscalation(arguments.SandboxPermissions, justification); err != nil {
+			return "", err
+		}
+	}
+	return workspace.ResolveEscalation(mode, arguments.SandboxPermissions)
+}
+
+func sandboxMarker(result platformProcess.Result) string {
+	return workspace.DenialMarker(sandboxMode(result))
+}
+
+func sandboxMode(result platformProcess.Result) string {
+	mode := workspace.ModeWorkspaceWrite
+	if result.SandboxMode == platformProcess.ModeReadOnly {
+		mode = "read-only"
+	}
+	return mode
+}

@@ -54,6 +54,7 @@ type RootSource interface {
 // and plan mode.
 type PolicyRegistry interface {
 	SetPolicy(context.Context, string, session.ApprovalPolicy) error
+	SetSandboxMode(context.Context, string, session.SandboxMode) error
 	SetPlanMode(context.Context, string, bool) (plan.Change, error)
 }
 

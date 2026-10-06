@@ -176,7 +176,7 @@ func TestObservation_BatchOrderAndOwnMutationsCount(t *testing.T) {
 
 func TestObservation_SessionlessCallsCannotOverwrite(t *testing.T) {
 	h := newHarness(t)
-	approved := appTool.Invocation{Approved: true}
+	approved := appTool.Invocation{Approved: true, Journal: nopJournal{}}
 	writeFixture(t, h.path("existing.txt"), "x")
 	if _, err := h.provider.read(context.Background(), appTool.Invocation{}, readArgs{FilePath: "existing.txt"}); err != nil {
 		t.Fatal(err)
@@ -226,7 +226,7 @@ func TestObservation_ConcurrentCreatorsNeverClobberEachOther(t *testing.T) {
 func TestObservation_GuardFailures(t *testing.T) {
 	restoreHooks(t)
 	h := newHarness(t)
-	approved := appTool.Invocation{SessionID: "s", Approved: true}
+	approved := appTool.Invocation{SessionID: "s", Approved: true, Journal: nopJournal{}}
 	writeFixture(t, h.path("file.txt"), "old")
 	h.provider.observed.record("s", h.path("file.txt"), observed([]byte("old")))
 	failure := errors.New("io failure")
@@ -391,13 +391,13 @@ func TestObservation_WriteVerificationIsCancellableAndPerPath(t *testing.T) {
 	mu.Unlock()
 	done := make(chan error, 1)
 	go func() {
-		_, err := h.provider.write(context.Background(), appTool.Invocation{SessionID: "a", Approved: true}, writeArgs{FilePath: "big.txt", Content: "x"})
+		_, err := h.provider.write(context.Background(), appTool.Invocation{SessionID: "a", Approved: true, Journal: nopJournal{}}, writeArgs{FilePath: "big.txt", Content: "x"})
 		done <- err
 	}()
 	<-stalled.entered
 	edited := make(chan error, 1)
 	go func() {
-		_, err := h.provider.edit(context.Background(), appTool.Invocation{SessionID: "b", Approved: true}, editArgs{FilePath: "other.txt", OldString: "other", NewString: "else"})
+		_, err := h.provider.edit(context.Background(), appTool.Invocation{SessionID: "b", Approved: true, Journal: nopJournal{}}, editArgs{FilePath: "other.txt", OldString: "other", NewString: "else"})
 		edited <- err
 	}()
 	select {
@@ -418,7 +418,7 @@ func TestObservation_WriteVerificationIsCancellableAndPerPath(t *testing.T) {
 	mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		_, err := h.provider.write(ctx, appTool.Invocation{SessionID: "a", Approved: true}, writeArgs{FilePath: "big.txt", Content: "x"})
+		_, err := h.provider.write(ctx, appTool.Invocation{SessionID: "a", Approved: true, Journal: nopJournal{}}, writeArgs{FilePath: "big.txt", Content: "x"})
 		done <- err
 	}()
 	<-spinning.started
@@ -445,7 +445,7 @@ func TestObservation_SizeChangesAreStaleWithoutReading(t *testing.T) {
 		t.Errorf("opened %s although its size already proved it changed", path)
 		return nil, errors.New("unexpected open")
 	}
-	approved := appTool.Invocation{SessionID: "s", Approved: true}
+	approved := appTool.Invocation{SessionID: "s", Approved: true, Journal: nopJournal{}}
 	if _, err := h.provider.write(context.Background(), approved, writeArgs{FilePath: "file.txt", Content: "x"}); err == nil || !strings.Contains(err.Error(), "file changed since it was read") {
 		t.Fatalf("write = %v", err)
 	}

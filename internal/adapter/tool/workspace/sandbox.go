@@ -2,19 +2,33 @@ package workspace
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
+	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
 const (
-	// ModeWorkspaceWrite is the standing mode: writes are confined to the
+	// ModeWorkspaceWrite is the default mode: writes are confined to the
 	// workspace and the shell's owned temporary directory.
 	ModeWorkspaceWrite = "workspace-write"
-	// ModeDangerFullAccess runs one approved shell command without the
-	// filesystem sandbox. File tools never leave the workspace.
+	// ModeDangerFullAccess removes the filesystem sandbox, independently of approval.
 	ModeDangerFullAccess = "danger-full-access"
 )
+
+// ResolveEscalation accepts a repeated or strictly wider policy for one call.
+// The caller must validate justification and obtain approval before executing.
+func ResolveEscalation(standing session.SandboxMode, requested *string) (session.SandboxMode, error) {
+	if requested == nil {
+		return standing, nil
+	}
+	mode := session.SandboxMode(*requested)
+	if mode == standing || standing == session.SandboxReadOnly && (mode == session.SandboxWorkspaceWrite || mode == session.SandboxDangerFullAccess) || standing == session.SandboxWorkspaceWrite && mode == session.SandboxDangerFullAccess {
+		return mode, nil
+	}
+	return "", fmt.Errorf("sandbox escalation to %q is not strictly wider than this call's current %q mode", mode, standing)
+}
 
 // EscalationProperties returns the upstream sandbox_permissions and
 // justification parameters. subject names the denied action in the mode

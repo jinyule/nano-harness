@@ -195,7 +195,7 @@ func (provider *Provider) skillTool() *appTool.Tool {
 		Parameters: appTool.Parameters{
 			appTool.Required("name", appTool.String("The exact skill name from the available skills list.")),
 		},
-		Check: func(_ appTool.Invocation, arguments skillArgs) error {
+		Check: func(_ context.Context, _ appTool.Invocation, arguments skillArgs) error {
 			if !coreskill.ValidName(arguments.Name) {
 				return errors.New(`invalid skill name "` + arguments.Name + `"`)
 			}

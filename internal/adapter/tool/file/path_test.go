@@ -190,7 +190,7 @@ func TestFileTools_PhysicalPathsAreRecheckedAtExecution(t *testing.T) {
 		})
 	}
 	// Calling the execution function directly cannot bypass missing-directory denial.
-	invocation := appTool.Invocation{SessionID: "session", Approved: true}
+	invocation := appTool.Invocation{SessionID: "session", Approved: true, Journal: nopJournal{}}
 	if _, err := h.provider.write(context.Background(), invocation, writeArgs{FilePath: "missing/../picked.txt", Content: "after"}); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("direct write = %v", err)
 	}

@@ -1,6 +1,6 @@
 # 架构规则
 
-本文定义 `nano-harness` 的当前产品架构和依赖规则。composition 已包含设置、账户、三个 LLM provider、图片、agent、会话、工具、后台任务、任务列表、approval、用户提问、规划模式、compaction、subagent、web 检索/抓取、运行时 skill、长期目标与 TUI；新增运行时能力必须扩展这些已记录接缝。
+本文定义 `nano-harness` 的当前产品架构和依赖规则。composition 已包含设置、账户、三个 LLM provider、图片、agent、会话、工具、后台任务、任务列表、approval、用户提问、规划模式、compaction、subagent、web 检索/抓取、运行时 skill、长期目标、会话 sandbox 策略与 TUI；新增运行时能力必须扩展这些已记录接缝。
 
 ## 设计目标
 
@@ -47,7 +47,7 @@ internal/platform
 settings → settings file → credential store → attachments → LLM runtime
 → OpenAI/Anthropic/OpenRouter providers → approval → user questions
 → tool runtime → spill store → prompt → plan mode → retry → compaction → web
-→ sessions → agent engine → subagents → goals
+→ sessions → agent engine → sandbox policy context → subagents → goals
 → file/search/shell tools → jobs → job/subagent/todo/web/question/plan/skill/goal tools
 → agent registry → root bootstrap → goal driver → TUI
 ```
@@ -140,7 +140,7 @@ Submit user message
 
 - 一个 agent 串行处理 turn；一个 turn 最多 256 个 step，产品默认 32。一个 step 是一次模型调用与其产生的全部工具执行。
 - 每个 step 在 `step/start` 之前经过规划模式边界：提交待生效的 `plan/mode` 选择、必要时追加用户切换提示，并取得本 step 的规划段落，见[用户提问与规划模式](#用户提问与规划模式)。
-- 规划模式边界之后、`step/start` 之前运行 step 上下文扩展点：`Engine.RegisterContext` 注册的 `ContextProvider` 随注册方 Scope 存在，按注册顺序收到该 step 可见的工具名和已提交日志，返回的消息作为本 turn 的 `user/message`（step 为 0）先提交再进入请求。provider 错误结束 turn，取消映射为 `canceled`。当前唯一的 provider 是运行时 skill；后台任务通知仍由 engine 在 turn 开始和工具 step 边界直接提交。
+- 规划模式边界之后、`step/start` 之前运行 step 上下文扩展点：`Engine.RegisterContext` 注册的 `ContextProvider` 随注册方 Scope 存在，按注册顺序收到该 step 可见的工具名和已提交日志，返回的消息作为本 turn 的 `user/message`（step 为 0）先提交再进入请求。provider 错误结束 turn，取消映射为 `canceled`。当前 provider 按组合顺序为 sandbox 策略、委派说明与运行时 skill；后台任务通知仍由 engine 在 turn 开始和工具 step 边界直接提交。
 - 每个 step 从权威 log 重新折叠 model surface。request header 在调用前固定 provider、model、effort、system、tool schema 和 context window；provider 请求携带 header 冻结的 effort，不再另读当时的模型目录。root 跟随热切换的设置 route，delegated child 使用它继承的 route（见 [Subagent](#subagent)），包括其 compaction 的阈值与摘要调用；compaction summary 同样记录其冻结的 provider、model 和 effort。
 - streaming chunk 按 provider 顺序持久化。完成的 assistant message 和全部 tool call 先提交，工具才能执行；每个 call 最终得到唯一 tool result。
 - 超出参数预算的提案先转换为保留 ID/名称、`arguments:{}` 和 `arguments_omitted:true` 的调用，再提交日志；runtime 为其产生错误结果，turn 继续。provider 越界后停止累积与提交该调用的参数 delta，继续消费有界响应；普通参数仍按原顺序提交。限值与持久化策略见 [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败)。
@@ -155,19 +155,19 @@ Submit user message
 
 ## 工具、approval 与调度
 
-`internal/app/tool` 拥有工具定义抽象和运行时。工具用 `tool.Spec[A]` 声明名称、描述、按模型可见顺序排列的 `Parameters`、可选 prompt guidance，以及基于类型化参数 `A` 的 `Check`、`Concurrent`、`Approval` 和 `Execute`；`Check` 与 `Execute` 还接收调用上下文 `Invocation`。`tool.Define` 编译 schema，并检查 `A` 的导出字段与声明成员一一对应、Go 类型兼容；无效定义在 `Runtime.Register` 被拒绝。
+`internal/app/tool` 拥有工具定义抽象和运行时。工具用 `tool.Spec[A]` 声明名称、描述、按模型可见顺序排列的 `Parameters`、可选 prompt guidance，以及基于类型化参数 `A` 的 `Check`、`Concurrent`、`Approval` 和 `Execute`；`Check` 与 `Execute` 还接收 `context.Context` 与调用上下文 `Invocation`，策略日志读取继承调用取消。`tool.Define` 编译 schema，并检查 `A` 的导出字段与声明成员一一对应、Go 类型兼容；无效定义在 `Runtime.Register` 被拒绝。
 
 - schema 采用上游 `defineTool` 子集中本仓用到的部分：可带 enum 的 string、number、boolean、必须声明 items 的 array，以及显式声明开放性的嵌套 object。序列化键序与上游编译器一致；根对象只输出 `type`、`properties` 和 `required`。
 - 批次开始前，runtime 按 schema 校验并解码每个调用，再用 `Concurrent(A)` 分类。缺少必填、类型不符、null、非有限数、`-0`、重复键和未声明成员（包括根对象）都成为 `invalid arguments: ...` 结果，并按上游遍历顺序列出全部违规。上游根对象对未知成员开放，本仓更严格，模型可见 schema 不变。
 - `Concurrent(A)` 为 true 的相邻调用每个 agent 最多同时运行 10 个，槽位覆盖 Check、approval 与执行，任一调用完成即可补位；其余调用、未知工具和无效参数形成独占 barrier。前一组全部退出后才进入下一组，结果顺序始终与原始 call 顺序一致。
-- 每个调用轮到执行时依次运行 `Check(Invocation, A)`、`Approval(A)` 和 `Execute`。`Check` 因此能观察同一批次前序调用的效果和会话范围的状态，并在提问前拒绝语义错误、不安全路径或未读的写入目标。`Check` 收到的 `Invocation.Approved` 恒为 false，且不得产生副作用：之后可能不执行，approval 期间状态也可能变化，所以 `Execute` 必须重新检查它依赖的条件；`Approval` 返回非空原因时请求一次性 approval，原因截断到 1 KiB。执行函数仍须在执行点确认 `Invocation.Approved`。
+- 每个调用轮到执行时依次运行 `Check(ctx, Invocation, A)`、`Approval(A)` 和 `Execute`。`Check` 因此能观察同一批次前序调用的效果和会话范围的状态，并在提问前拒绝语义错误、不安全路径或未读的写入目标。`Check` 收到的 `Invocation.Approved` 恒为 false，且不得产生副作用：之后可能不执行，approval 期间状态也可能变化，所以 `Execute` 必须重新检查它依赖的条件；`Approval` 返回非空原因时请求一次性 approval，原因截断到 1 KiB。执行函数仍须在执行点确认 `Invocation.Approved`。
 - `tool.Result` 由文本和可选的一张规范化图片引用组成。runtime 统一替换非法 UTF-8，对只含文本的结果（含错误）应用 spill 策略，再把完整文本截断到 256 KiB；附件已提交的图片引用原样进入 `session.ToolResult`。
 - spill 策略与上游 Base 相同：估算超过 12,500 token（`ceil(UTF-16 单元/4)+4`）的结果保存到 spill store，模型看到首尾预览和 `(Omitted N bytes. Full formatted result stored at: <locator>. <hint>)`。携带图片的结果和声明 `KeepInline` 的工具（`read`）不进入策略；错误预览保留 `is_error`；没有 store、没有会话或保存失败时保留原结果。
 - `Runtime.Catalog(allow)` 一次冻结按名称排序的 schema 和可见工具贡献的 guidance。guidance 按上游 section order 排序，engine 把它追加在 system prompt 的工具列表之后，与 schema 一起写入 `request/header`。
 - `Invocation` 携带 session、cwd、delegation、approval 结果、本 step 的 route（provider、model 与模型是否声明图片输入），以及当前 tool/call 的 call ID、turn、step 和调用方 durable journal。需要记录会话事实的工具在 tool/result 之前向该 journal 追加；没有 journal 的调用方必须失败关闭。
 - `Runtime.UseSpill` 在插件 Scope 内发布唯一的 `SpillStore`。`Invocation.CreateSpill`/`SaveText` 按调用方会话打开或保存 spill 文件，没有 store 或会话时返回 `ErrSpillUnavailable`，工具据此使用上游的降级文案。
 - 每个调用在轮到调度及即将进入 Execute 时检查取消，截止后返回 `Error: tool call aborted before dispatch`；已进入 Execute 的调用被取消时，成功结果替换为 `Error: tool call aborted`，Execute 返回的错误保留原文本，与上游只在成功时替换的规则一致。未知工具、panic、拒绝、执行错误和取消都成为有界 tool result，文本使用上游的 `Error: <message>` 格式；resume 为未决调用补写的结果同样使用这一格式。runtime 为未知工具、schema 错误、两类取消和 metadata 违规写入上游分类；Check 与 Execute 的错误经消费方接口 `tool.Failure`（`errors.As`）带出领域分类，其余失败不分类。成功结果的 `Result.Meta` 由 runtime 裁剪到预算后校验，成员不属于本工具或校验失败时结果改为 `ToolOutputError/INVALID_TOOL_OUTPUT`；spill 只改文本，保留分类与 metadata。
-- 参数超限的调用不进入 schema 分类、Check、approval 或执行；错误结果为 `Error: tool arguments exceed 786432 bytes; submit a smaller call`。system prompt 明确 workspace 文件策略、`read`/`grep`/`read_image` 对本 workspace spill 分区的只读例外，以及 `bash` 的一次性批准升级。
+- 参数超限的调用不进入 schema 分类、Check、approval 或执行；错误结果为 `Error: tool arguments exceed 786432 bytes; submit a smaller call`。system prompt 说明各档文件策略与独立 approval；当前模式由持久化 runtime-context 提供，见[会话 sandbox](#会话-sandbox)。
 
 内置工具与上游 Base 组合同名同定义（`ask_user_question` 取 Web preset 的默认阻塞定义），映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)，后台任务与 `bash` 后台变体见 [ADR-0009](decisions/0009-background-jobs.md)，提问与规划模式见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)，`read_image` 见 [ADR-0015](decisions/0015-multimodal-tool-results.md)，长期目标见 [ADR-0016](decisions/0016-long-running-goals.md)：
 
@@ -193,7 +193,7 @@ Submit user message
 
 `search-tools` 与 `shell-tools` 共用 `cmd` 构造的同一个 platform process runner。search provider 在构造时从 PATH 解析 `rg`，找不到时组装失败；`Start` 运行 `rg --version`，低于 15.0.0 时启动失败，不注册降级工具。`glob` 与 `grep` 按上游参数调用 ripgrep，并解析它的路径列表或 `--json` 输出；进程边界见[安全工程规则](security.md#approvalshell-与进程)，版本前提见[开发规范](development.md#ripgrep)。search 请求显式选择 65,536 字节 stderr 尾部并使用零终止宽限；bash 使用 3 s TERM 宽限，再 KILL 并等待输出收尾，runner 默认及 bash stderr 仍为 64,000 字节。sandbox runner 致命诊断优先分类为不可用，不与普通命令非零退出或权限拒绝混淆。`glob` 的 pattern/path 与 `grep` 的 path/include 使用 `app/tool.IsBlank`，该入口委托 `core/text.IsSpace`；web 查询、LLM 检索边界、todo、goal、skill 与 durable 文本及 goal 标识校验直接复用 `core/text` 的同一 ECMAScript 空白集合（含 U+FEFF、不含 U+0085），core 不反向依赖 app；grep pattern 只拒绝空字符串。
 
-`read`、`read_image`、`glob`、`grep`、`web_search`、`web_fetch`、`skill`、`subagent`、`subagent_fork` 可并行；`write`、`edit`、`bash` 和 `job_*` 是 exclusive；`write`、`edit`、`bash` 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能获得 elevation。approval 插件 cleanup 先拒绝新的 `SetPolicy` 与 `Decide`，再以停止原因取消进行中的调用，等待全部返回后才撤销 broker 并清空策略：问题尚未提交的决定直接失败；已提交问题的决定无论 broker 如何回答都记为 `cancelled`（来源 `cancellation`），在不可取消、5 秒有界的提交中补齐 `approval/decided`，所以 cleanup 返回前每个已提交的问题都已配对，工具不会在关闭期间获批执行。broker 必须在 context 结束后及时返回。`bash` 的 `sandbox_permissions: danger-full-access` 是唯一离开 workspace sandbox 的方式，规则见[安全工程规则](security.md#approvalshell-与进程)。
+`read`、`read_image`、`glob`、`grep`、`web_search`、`web_fetch`、`skill`、`subagent`、`subagent_fork` 可并行；`write`、`edit`、`bash` 和 `job_*` 是 exclusive；`write`、`edit`、`bash` 在实际执行点调用 approval service。每次问题和决定先后持久化；默认 `ask`，`never` 拒绝；broker 缺失、取消或非法结果都失败关闭。delegated agent 永远不能执行这些需要 approval 的工具。approval 插件 cleanup 先拒绝新的 `SetPolicy` 与 `Decide`，再以停止原因取消进行中的调用，等待全部返回后才撤销 broker 并清空策略：问题尚未提交的决定直接失败；已提交问题的决定无论 broker 如何回答都记为 `cancelled`（来源 `cancellation`），在不可取消、5 秒有界的提交中补齐 `approval/decided`，所以 cleanup 返回前每个已提交的问题都已配对，工具不会在关闭期间获批执行。broker 必须在 context 结束后及时返回。会话模式与单次升级均不能跳过 approval，规则见[安全工程规则](security.md#approvalshell-与进程)。
 
 subagent 工具的名称、描述和参数 schema 与参考 Base 组合逐字节一致，调用进程内 `app/subagent`，不启动 Codex、Claude 或另一个 harness 进程；`subagent` 以 guidance order 2800 贡献上游 `tool:subagent` 段落。行为见 [Subagent](#subagent)。
 
@@ -257,12 +257,20 @@ interrupt_agent            → 取消任一 live 后代当前 turn，不等待
 list_agents                → parent 自己的 subagent/catalog；descendants 深度优先遍历
 ```
 
-- spawn child 从空会话开始；fork child 以 parent 最后一个 `turn/end` 为止的事件为种子（不含进行中的 turn），child 固定使用 parent 委派时最新请求的 provider、model 和 effort，每个 step 与冷恢复都不随之后的热切换改变。child 创建时持久化 parent/depth、带继承 route 的 descriptor v3 与 `never` 策略；parent 在创建它的工具 step 内写 `subagent/catalog`。
-- delegated session 在持久化策略层固定为 `never`，需要 approval 的工具无法执行，`bash` 的 sandbox 升级还在工具执行点再次拒绝。child 与 parent 使用同一 system prompt；委派说明由 subagent 服务的 step context provider 作为 source kind `runtime-context` 的 `user/message` 贡献（审批自动拒绝、不要重试、向委派方说明限制），surface 中没有可见副本时（首个 step、compaction 之后）才提交，恢复后不重复。
+- spawn child 从空会话开始；fork child 以 parent 最后一个 `turn/end` 为止的事件为种子（不含进行中的 turn），child 固定使用 parent 委派时最新请求的 provider、model 和 effort，每个 step 与冷恢复都不随之后的热切换改变。child 创建时持久化 parent/depth、带继承 route 的 descriptor v3、捕获的显式 sandbox override 与 `never` 策略；parent 在创建它的工具 step 内写 `subagent/catalog`。
+- delegated session 在持久化策略层固定为 `never`，需要 approval 的工具无法执行，bash/write/edit 还在工具执行点无条件拒绝 delegated 调用。child 与 parent 使用同一 system prompt；委派说明由 subagent 服务的 step context provider 作为 source kind `runtime-context` 的 `user/message` 贡献（审批自动拒绝、不要重试、向委派方说明限制），surface 中没有可见副本时（首个 step、compaction 之后）才提交，恢复后不重复。
 - 消息只跨越直接父子边，经 `Agent.NotifyContext` 在收件箱锁内检查取消后投递：接收方忙时在下一个 step 边界追加，空闲时开启新 turn。中断前排队的未提交消息使 child 保持驻留；中断后接受的新消息在旧 turn 退出后自动唤醒下一轮，一并处理旧消息。结算通知只在 child 自然结算时发送；服务关闭和 one-shot parent 回收是拆除，不发通知。
 - 每个 continuable 池最多 8 个驻留 child，创建占位与发布后的 handle 原子转交同一个名额，one-shot 不占池；绝对 delegation depth 上限为 4。
 - 释放 child 时先中断它，深度优先释放其 live 子代理，关闭 agent 与 transcript，再以 `job.Service.Release` 结束它拥有的 job。清理失败覆盖成功或取消结局，通知及后台 job 不附成功输出。服务 cleanup 拒绝新操作、停止结算 watcher，再从最深处起释放全部 child。
 - 驻留状态只在内存中；进程重启后，恢复的 root 从目录列出 `inactive` child，并可用 `send_message` 冷恢复它们。
+
+## 会话 sandbox
+
+`session.SandboxMode` 定义 read-only、workspace-write（默认）、danger-full-access。人类 `/sandbox MODE` 经 `Registry.SetSandboxMode` 立即提交 `sandbox/mode`；模型没有切换入口。执行点从调用 journal 读最新模式，审批后再次读取并解析目标。已经启动的进程保留 launch profile；模式与 approval 独立，delegated 永远 `never`。各档 profile、一次性窄升级与 host 路径规则见[安全边界](security.md#approvalshell-与进程)。
+
+`sandbox-policy` 是 `SandboxContext` 插件，由 engine 后的 composition 显式注入 workspace，Scope cleanup 撤销 context 注册。它在用户输入之后、step/start 之前提交 user-role `runtime-context` / `sandbox:policy` 快照，与委派说明共用 step-context 接缝并早于 skill 目录。委派说明只识别自己的内容，其他 runtime-context 不抑制它；fork 继承前缀保持原样。正文沿用 Base 当前文件策略文本与 supersedes 前缀；workspace-write 给出已解析 workspace，read-only 给出拒绝后窄升级指引，full access 说明无文件 sandbox。仅在最后一个保留快照不同或被 compaction 移除时追加；TUI 不将其显示为用户发言。当前模式不进入静态 system prompt，事件与 composition 足以重建上下文。
+
+resume 保留最新模式；spawn/fork 在创建时捕获父会话的显式 override，而非一次性授权。fork 的 child 自有 delegation 记录覆盖已完成历史中的旧模式，父模式后续变化不传播。持久化与取舍由 [ADR-0021](decisions/0021-session-sandbox-modes.md) 拥有。
 
 ## 用户提问与规划模式
 
@@ -326,12 +334,12 @@ assistant/chunk, assistant/message, tool/call,
 approval/asked, approval/decided, approval/policy,
 tool/result, llm/retry, llm/retry-started,
 compaction/start, compaction/summary, compaction/end, compaction/prune,
-subagent/descriptor, subagent/catalog, todo/write, web/search-request, plan/mode, goal/change,
+subagent/descriptor, subagent/catalog, todo/write, web/search-request, sandbox/mode, plan/mode, goal/change,
 notice/queued, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、工具运行时（`tool-runtime-v3`，含结构化错误分类与结果 metadata）、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、持久化的完成通知（`job-tools-v2`）、goal 停止语义（`goal-tools-v2`）、检索请求审计（`web-tools-v2`）、spill 策略、附件引用格式（`attachments-v1`）与工具结果裁剪（`tool-result-prune-v1`）的语义版本和 session v2。工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、工具运行时（`tool-runtime-v3`，含结构化错误分类与结果 metadata）、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、持久化的完成通知（`job-tools-v2`）、goal 停止语义（`goal-tools-v2`）、检索请求审计（`web-tools-v2`）、spill 策略、附件引用格式（`attachments-v1`）与工具结果裁剪（`tool-result-prune-v1`）的语义版本和 session v2。会话 sandbox 使用 `sandbox-policy-v1`、`fs-tools-v4` 与 `shell-tools-v4`；工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。`approval/asked` 的工具名必须等于 pending call 的名称；`approval/decided` 仅通过 approval ID 关联问题，不允许携带 `call_id`。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。
@@ -342,6 +350,7 @@ notice/queued, step/end, turn/end
 - `tool/call.arguments_omitted` 是可选布尔值；为 true 时 arguments 必须为 `{}`，不得请求 approval、提交 `todo/write` 或 `web/search-request`，也不得取得成功结果。原始超限参数不写入 call；越界前已提交的流片段保留为审计事实，surface 只重放省略调用和错误结果。session v2 保留，旧 composition 拒绝且原文件不改写，见 ADR-0002；检索审计约束见 ADR-0022。
 - `todo/write` 必须位于活动 step，引用尚未得到 result 的 `todo_write` call，且每个 call 最多一条。它不进入 surface；模型只从自己的 tool call 参数和 tool result 看到列表。`session.StandingTodos` 把最新一条之后没有更晚 `turn/start` 的 `todo/write` 投影为当前计划。
 - `web/search-request` 必须引用当前 step 尚未结束的 `web_search` call；读取与追加通过 `app/web.ParseQueries` 解析调用参数，查询序号从 1 连续到去重后的数量，query 必须等于该序号的原始查询，call 结束后不能追加。它不进入 surface。resume 保留已提交的意图，只为未决 call 补 interrupted error 并关闭 step/turn，不补造检索审计或重新发送；format 仍为 v2，严格字段与保留策略见 ADR-0022。
+- `sandbox/mode` 是 log-only 整值策略，`turn`/`step` 缺省，可在任意活动 turn/step 中立即追加。严格负载、delegation 归属/顺序、默认、恢复与版本策略见 [ADR-0021](decisions/0021-session-sandbox-modes.md)。
 - `goal/change` 的 `turn` 与 `step` 都缺省，可出现在日志任意位置（人类命令可在 turn 进行中提交）。`session.GoalState.Apply` 校验 revision 连续、阶段迁移合法、时间戳不倒退、计数保持和目标 ID 不复用；`source.kind = "goal"` 的 `user/message` 必须携带 `goal_id`/`goal_revision`/`goal_round`，且恰为当前 active 目标当前 revision 的下一轮、不超过上限，其他来源不得携带这些字段。JSONL 在每次追加与读取时执行同一折叠，非法事实被拒绝且不写入。
 - 后台任务完成通知先提交为会话级的 `notice/queued`（turn 0，携带完整消息和 `notice_id`），投递是内容完全相同、带同一 `notice_id` 的 `user/message`，validator 要求每个 ID 只入队一次、投递一次且内容一致；agent 消息与子代理结算通知分别为 source kind `agent-message` 和 `subagent-settled` 的 `user/message`，source 必须带 `sender_session_id`（发送方会话或结算的 child），其他消息不得带它；没有专用记录类型。无工具调用的 step 之后可以出现 `user/message` 并继续 step。
 - `subagent/descriptor` 为 v3，带必填的继承 `route`（provider、model、可省略的 effort），是 child 自己写的第一条记录：位于 `inherited + 1` 号序列且不在 turn 内，`inherited` 是 fork 种子复制的事件数（spawn 为 0）。种子在创建时与 header 一次写入并整体校验，复制的事件保留原序号。`session.OwnEvents` 以最后一个 descriptor 区分继承前缀。

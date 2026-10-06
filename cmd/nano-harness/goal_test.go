@@ -214,7 +214,7 @@ func trace(events []session.Event) []string {
 				line += " " + reason.Code
 			}
 			lines = append(lines, line)
-		case record.Type == session.RecordUserMessage:
+		case record.Type == session.RecordUserMessage && record.Message.Source.Kind != "runtime-context":
 			source := record.Message.Source
 			if source.Kind == session.GoalSource {
 				lines = append(lines, fmt.Sprintf("turn%d round %d@r%d", record.Turn, source.GoalRound, source.GoalRevision))

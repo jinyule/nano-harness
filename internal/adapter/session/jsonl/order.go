@@ -206,6 +206,13 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 				return state, orderError("max_tokens turn/end has no assistant completion")
 			}
 			state.turn = 0
+		case coresession.RecordSandboxMode:
+			if record.Turn != 0 || record.Step != 0 {
+				return state, orderError("sandbox/mode is session metadata")
+			}
+			if record.Sandbox.Source == "delegation" && (event.Sequence < 2 || events[event.Sequence-2].Record.Type != coresession.RecordSubagentDescriptor) {
+				return state, orderError("sandbox/mode delegation must immediately follow the child descriptor")
+			}
 		case coresession.RecordPlanMode:
 			// A mode change takes effect at a step boundary: between turns
 			// (turn 0) or inside the active turn before its next step. A

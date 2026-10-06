@@ -115,6 +115,14 @@ settings 锁的取消测试使用 channel 固定取得锁期间的取消；`test
 
 credential 锁的永久测试覆盖预先取消的 modify/delete、取得锁与读取期间取消、取消与锁期限同时就绪，以及同进程等待者在 holder 未退出时返回取消。channel 与虚拟时间固定交错；旧 mutex 的不可取消等待在私有测试子进程中成为具名失败，外层拥有子进程与临时目录。独立子进程实际持锁，主测试的取消等待者不得删除它的锁或修改文件，holder 退出后锁可复用。回调开始后的成功刷新完整保存，取消错误保留原文件；真实 `cmd` composition 的 logout 从磁盘字节与无密钥账户列表验证取消不删除账户。负载样本与证据见 [credential 锁调查记录](../.agents/notes/implemented/2026-10-06-credential-lock-cancellation.md)。
 
+## 会话 sandbox 证据
+
+`TestRecord_SandboxModeContract` 与 `session-v2-sandbox.jsonl` 的 frozen writer/reader 测试固定三档枚举、严格字段、零 turn/step、即刻切换、resume 修复保留模式与旧 composition 拒绝。反例覆盖未知/重复/null 字段、非法 source、root/child 归属与 descriptor 后 delegation 的因果顺序。`TestService_SandboxCapturedAtDelegationAndRestored` 比较 spawn/fork 的当前父 override、较旧种子与冷恢复，子会话保持 `never`，父后续切换不传播。
+
+file/shell 的 `SandboxApprovalMatrix` 覆盖 standing mode × 单次升级 × approval 允许/拒绝，观察真实文件与 runner profile，拒绝后无执行。直接 executor 测试覆盖 `Approved` 无法绕过 read-only/delegated、日志缺失/读取错误，以及审批中切换。runner 的跨平台 profile 测试证明 Linux 使用 PID namespace、网络共享、read-only 无 writable bind，macOS read-only 不放行 workspace 写入；host 的实际进程可在 workspace 外目录创建文件。
+
+`TestComposition_SandboxModesAndSwitch` 经真实 composition、SSE 模型、approval 与 JSONL 覆盖三档的 bash/write/edit 效果（full access 文件在 workspace 外）、context 位置、切换与 reopen。`TestComposition_SandboxSwitchWhileApprovalIsPending` 用 channel 屏障固定 asked→mode→decided→result，从文件、日志与下一请求证明 read-only 生效。sandbox context 插件测试贡献、注册回滚、scope cleanup、重复快照抑制、compaction 后重建。定向 mutation 拒绝只读 guard、委派捕获和 Linux namespace 回归；不以 100% 语句执行替代上述行为断言。长期契约见 [ADR-0021](decisions/0021-session-sandbox-modes.md)。
+
 ## TUI 与真实 cmd
 
 TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event forwarding/backpressure、所有 durable presentation event、text/reasoning stream、图片附加、普通/approval/auth 输入模式、全部命令、UI 消失与 cancellation。
@@ -144,6 +152,7 @@ TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event f
 - `todo_write`：终端显示计划，磁盘日志包含完整快照，重启 replay 时后续 turn 已清除计划。
 - 后台 `bash`：job 在首个 turn 结束后才完成，`job>` 通知开启新 turn，模型用 `job_output` 读到输出。
 - 前台 one-shot spawn 与 fork：独立子会话包含目录、descriptor 和 `never` 策略，spawn child 调用 `read`；子代理回收后 `list_agents` 返回空列表，`send_message` 写给目录外 id 返回错误，`interrupt_agent` 对不存在的目标是空操作。
+- 会话 sandbox：真实输入 `/sandbox read-only`，磁盘出现唯一人类 `sandbox/mode`，下一模型请求包含更新的 `sandbox:policy` 快照，resume 保留模式。
 - `ask_user_question` 与规划审查：接受预填推荐项、多选标签与补充自由回答；`/plan` 后通过真实 TUI 批准 `exit_plan_mode`，日志包含 `plan/mode` 与切换提示，规划段落只出现在批准前的请求中。
 - `/goal`：创建目标后 driver 自动开启轮次，模型通过 `get_goal` 与 `update_goal` 完成目标；检查 create/complete 的 `goal/change`、轮次与收尾指令、状态查询和状态栏。
 - 终端输入与生命周期：bracketed paste、窗口缩放、长行末尾可见、打断、重启 replay、私有权限（含 `--spill-root` 与 `--attachment-root` 的 `0700`）与退出后的 lock 清理。
@@ -218,6 +227,8 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 `internal/adapter/session/jsonl/testdata/session-v2.jsonl` 是手写、已审查的合成 v2 协议样本，没有生成器或自动刷新开关。`TestSessionV2_FrozenContract` 从真实 Manager/Inspect/Open 读取、投影并确认关闭会话不改字节；writer 使用独立构造的记录精确比较同一格式，避免 writer/reader 一起改错而 round-trip 仍绿。`TestSessionV2_RejectsChangedContract` 拒绝旧/未来版本、未知字段/记录、序号缺口、非法 step 和 `approval/decided` 多余的 `call_id`。`testdata/session-v2-todo.jsonl` 按同一规则固定 `todo/write`：`TestSessionV2Todo_FrozenContract` 读取、投影计划并比较 writer 字节，`TestSessionV2Todo_RejectsChangedContract` 拒绝未知 todo/item 字段、未知状态、未去空白或重复的内容、缺失或为 null 的 `items`、无 pending call、引用 `read` 调用，以及跨 step/turn 的记录。`testdata/session-v2-subagent.jsonl` 固定一个 fork 的 continuable child：继承前缀含 parent 的 `subagent/catalog`，其后是带继承 route 的 descriptor v3、`never` 策略、委派任务、`send_message` 调用与带 `sender_session_id` 的 `agent-message`。`TestSessionV2Subagent_FrozenContract` 读取并确认继承目录不属于 child、自有事件从 descriptor 开始，writer 以种子路径写继承前缀、以 Append 写自有记录并逐字节比较；`TestSessionV2Subagent_RejectsChangedContract` 拒绝 descriptor v1/v2、缺失或带未知字段的 route、非法 effort、旧 provider、未知字段与 mode、错位的 `inherited`、缺失或多余的发送者，以及目录的未知字段与 mode、空 id 和活动 step 之外的记录。
 
 `testdata/session-v2-goal.jsonl` 冻结 `goal/change` 的全部操作（create、edit、pause、resume、block、complete、clear）、两个带归属的目标轮次（含 `max_tokens` 结局）和收尾指令：`TestSessionV2Goal_FrozenContract` 读取后在多个前缀投影目标状态并比较 writer 字节，`TestSessionV2Goal_RejectsChangedContract` 拒绝未知字段与操作/阶段、缺失负载、带 turn 或 step 的记录、阶段与阻塞原因不一致、未去空白的 objective、跳号 revision、时间倒退、计数不保持、非法迁移、陈旧或跳号轮次、缺失或错置的轮次归属和陈旧的清除与未知停止枚举；`TestValidateOrder_OutputLimitRequiresClosedAssistantStep` 拒绝没有完成的 assistant step、未决 call、活动 step 和跨 turn 借用 completion 的截断结局；另有测试证明陈旧轮次的追加被拒绝且文件字节不变、修复中断尾部不改动已提交目标。
+
+`testdata/session-v2-sandbox.jsonl` 的三档固定样本与反例见[会话 sandbox 证据](#会话-sandbox-证据)。
 
 `testdata/session-v2-plan.jsonl` 以同样方式冻结 `plan/mode`：`TestSessionV2Plan_FrozenContract` 覆盖 turn 之间进入、切换提示、审查调用和 turn 内退出，`TestSessionV2Plan_RejectsChangedContract` 拒绝未知字段、缺失负载、step 内记录、错误 turn 和重复当前模式；resume 测试证明修复中断尾部不改动已提交的模式。
 

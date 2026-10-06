@@ -238,7 +238,7 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 	plugins := []plugin.Plugin{
 		configuration, settingsProvider, credentials, images, modelRuntime,
 		providers[0], providers[1], providers[2], approvalService, questionService, toolRuntime, spillStore,
-		assembler, planMode, retryService, compactionService, webService, sessions, engine,
+		assembler, planMode, retryService, compactionService, webService, sessions, engine, agent.NewSandboxContext(engine, config.workspaceRoot),
 		subagents, goals, fileTools, searchTools, shellTools, jobs, jobTools, subagentTools, todoTools, webTools,
 		questionTools, planTools, skillTools, goalTools, registry, root, goalDriver,
 	}
