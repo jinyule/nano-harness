@@ -936,5 +936,26 @@
     "before": "*arguments.Offset > maxOffset",
     "after": "*arguments.Offset > math.MaxFloat64",
     "test": "^TestRead_RejectsOffsetBeyondSupportedRange$"
+  },
+  {
+    "id": "web-fetch-encoded-network-budget",
+    "file": "internal/adapter/web/fetch/compression.go",
+    "before": "// Empty gzip members consume network bytes without producing final output.\n\tsource = &expansionReader{cappedReader{source: source, remaining: maxResponseBytes}}",
+    "after": "// Empty gzip members consume network bytes without producing final output.",
+    "test": "^TestFetch_(BoundsEncodedNetworkInput|RejectsSingleLayerCompressedNetworkBomb|IdentityNetworkOverflowRequiresEncodingHeader)$"
+  },
+  {
+    "id": "web-search-audit-query-binding",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": " || data.Query != accepted[data.Index-1]",
+    "after": "",
+    "test": "^TestSessionV2WebSearch_(FrozenContract|RejectsChangedContract)$|^TestLog_WebSearchAuditMatchesDistinctCallQueries$"
+  },
+  {
+    "id": "web-search-audit-omitted-arguments",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": "if call == nil || call.Name != \"web_search\" || call.ArgumentsOmitted {",
+    "after": "if call == nil || call.Name != \"web_search\" {",
+    "test": "^TestSessionV2WebSearch_FrozenContract$|^TestLog_WebSearchAuditRejectsOmittedArguments$"
   }
 ]

@@ -13,11 +13,15 @@ WP15 由维护者确定采用上游发送前审计：记录失败不发送。`in
 
 与 [web 工具 Note](2026-10-04-web-search-and-fetch.md) 部分重叠：该 Note 保留 provider/fetch/lifecycle 证据，本 Note 拥有发送前审计和 `web-tools-v2`，双方互链。总体 [工具对齐计划](../proposed/2026-10-04-upstream-tool-parity.md) 将 WP15 标记为已实现，并继续拥有其他未完成工作包；不归档仍有效的 Note，不修改归档记录。`internal/adapter/web/fetch` 和 `internal/adapter/tool/web/html.go` 不在本改动范围。
 
+编码网络输入预算、审计 query 与调用参数的精确绑定，以及 web/LLM 空白 helper 收敛的补充证据见[工具边界修补 Note](2026-10-06-web-input-and-audit-validation.md)；本 Note 保留其余实施证据，二者部分重叠。
+
+查询的共享参数预算与省略调用禁止审计的补充证据见[审计参数边界 Note](2026-10-06-web-search-audit-argument-constraints.md)；本 Note 继续拥有发送前审计与恢复证据。
+
 ## Decision
 
 长期字段、安全、恢复和兼容决定见 [ADR-0022](../../../docs/decisions/0022-web-search-request-audit.md)，它取代 ADR-0011 原先的不新增检索记录决定。
 
-工具显式传递 Journal/Turn/Step/CallID；app 用有序 gate 将每个 distinct query 的 `web/search-request` 追加到调用方日志，provider 在最终发送边界填入冻结 route/effort、endpoint 类别与实际预算。追加失败阻止对应 HTTP 请求，取消并等待其余工作，返回安全的 `WEB_REQUEST_RECORD_FAILED` 并通过错误链保留原因。journal 缺失失败关闭。记录不包含传输 URL、认证 headers、账户标识或完整 prompt，不进入模型 surface。LLM 使用共享 `app/tool.IsBlank`，领域校验使用相同的 ECMAScript 集合，查询原文不变。
+工具显式传递 Journal/Turn/Step/CallID；app 用有序 gate 将每个 distinct query 的 `web/search-request` 追加到调用方日志，provider 在最终发送边界填入冻结 route/effort、endpoint 类别与实际预算。追加失败阻止对应 HTTP 请求，取消并等待其余工作，返回安全的 `WEB_REQUEST_RECORD_FAILED` 并通过错误链保留原因。journal 缺失失败关闭。记录不包含传输 URL、认证 headers、账户标识或完整 prompt，不进入模型 surface。LLM 与领域校验直接复用 `core/text` 的 ECMAScript 集合，查询原文不变。
 
 领域类型及校验、JSONL 严格 decoder/order、CloneEvent 隔离、固定样本和反例同步；resume 保留意图，只补 interrupted result 与 step/turn 结束，不补造审计或重发。format 保持 v2，composition 使用 `web-tools-v2`。原有 `web`、`web-tools` 与 model provider 插件沿 `composeApplication` 组装，不新增组件或 effect；query goroutine 仍由 web 操作取消并等待，Scope cleanup 保持先拒绝新操作、取消、等待的契约。
 

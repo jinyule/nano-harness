@@ -18,11 +18,14 @@ const (
 	decodeChunkBytes    = 32 * 1024
 )
 
-var errDecompressionLimit = errors.New("decompression resource limit exceeded")
+var (
+	errDecompressionLimit   = errors.New("decompression resource limit exceeded")
+	errContentEncodingLimit = fmt.Errorf("response exceeds the maximum of %d content encodings: %w", maxContentEncodings, errDecompressionLimit)
+)
 
-// decompress reverses the declared encoding order and bounds intermediate
-// streams. The caller bounds the final output and closes all returned decoders,
-// including when a later decoder cannot be constructed.
+// decompress reverses the declared encoding order and bounds encoded network
+// input and intermediate streams. The caller bounds the final output and closes
+// all returned decoders, including when a later decoder cannot be constructed.
 func decompress(ctx context.Context, source io.Reader, header string) (io.Reader, []io.Closer, error) {
 	var decoders []io.Closer
 	source = &contextReader{ctx: ctx, source: source}
@@ -31,7 +34,7 @@ func decompress(ctx context.Context, source io.Reader, header string) (io.Reader
 	}
 	codings := strings.Split(header, ",")
 	if len(codings) > maxContentEncodings {
-		return nil, decoders, fmt.Errorf("response exceeds the maximum of %d content encodings: %w", maxContentEncodings, errDecompressionLimit)
+		return nil, decoders, errContentEncodingLimit
 	}
 	// Reject the whole declaration before reading any potentially encoded body.
 	for _, coding := range codings {
@@ -41,6 +44,8 @@ func decompress(ctx context.Context, source io.Reader, header string) (io.Reader
 			return nil, decoders, fmt.Errorf("unsupported content encoding %q", coding)
 		}
 	}
+	// Empty gzip members consume network bytes without producing final output.
+	source = &expansionReader{cappedReader{source: source, remaining: maxResponseBytes}}
 	for _, coding := range slices.Backward(codings) {
 		if strings.EqualFold(strings.TrimSpace(coding), "identity") {
 			continue
@@ -99,14 +104,14 @@ func (reader *contextReader) Read(buffer []byte) (int, error) {
 	return count, err
 }
 
-// expansionReader rejects oversized intermediate streams instead of turning
-// their truncated compressed data into a misleading codec-integrity failure.
+// expansionReader rejects oversized encoded or intermediate streams instead of
+// turning truncated compressed data into a misleading codec-integrity failure.
 type expansionReader struct{ cappedReader }
 
 func (reader *expansionReader) Read(buffer []byte) (int, error) {
 	count, err := reader.cappedReader.Read(buffer)
 	if reader.truncated {
-		return 0, fmt.Errorf("decompressed intermediate response exceeds the maximum of %d bytes: %w", maxResponseBytes, errDecompressionLimit)
+		return 0, fmt.Errorf("response exceeds the maximum of %d bytes: %w", maxResponseBytes, errDecompressionLimit)
 	}
 	return count, err
 }

@@ -245,7 +245,7 @@ func (client *Client) lookup(ctx context.Context, host string) ([]netip.Addr, er
 }
 
 // read classifies, bounds, and decodes the final response body. A declared
-// oversized body fails; a body that grows past the limit is truncated.
+// oversized body or encoded input fails; final output past the limit is truncated.
 func (client *Client) read(ctx context.Context, response *http.Response, final *url.URL) (web.FetchResult, error) {
 	contentType := response.Header.Get("Content-Type")
 	kind, ok := classify(contentType)
@@ -294,8 +294,10 @@ func (client *Client) failure(ctx context.Context, message string, err error) er
 		return &web.Error{Code: web.CodeFetchTimeout, Message: fmt.Sprintf("web fetch timed out after %s", client.timeout), Cause: err}
 	case ctx.Err() != nil:
 		return &web.Error{Code: web.CodeAborted, Message: "web fetch was cancelled", Cause: err}
+	case errors.Is(err, errContentEncodingLimit):
+		return &web.Error{Code: web.CodeFetchTooLarge, Message: fmt.Sprintf("response exceeds the maximum of %d content encodings", maxContentEncodings), Cause: err}
 	case errors.Is(err, errDecompressionLimit):
-		return &web.Error{Code: web.CodeFetchTooLarge, Message: err.Error(), Cause: err}
+		return &web.Error{Code: web.CodeFetchTooLarge, Message: fmt.Sprintf("response exceeds the maximum of %d bytes", maxResponseBytes), Cause: err}
 	default:
 		return &web.Error{Code: web.CodeProviderError, Message: message + ": " + err.Error(), Cause: err}
 	}

@@ -44,6 +44,46 @@ func TestProvider_SearchWithoutJournalFailsClosed(t *testing.T) {
 	}
 }
 
+func TestProvider_SearchUsesSharedArgumentBudget(t *testing.T) {
+	const envelopeBytes = len(`{"queries":[""]}`)
+	for _, test := range []struct {
+		name  string
+		size  int
+		valid bool
+	}{
+		{"above-128-KiB", (128 << 10) + 1, true},
+		{"exact-argument-budget", session.MaxArgumentsBytes - envelopeBytes, true},
+		{"excess-argument-budget", session.MaxArgumentsBytes - envelopeBytes + 1, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			query := strings.Repeat("q", test.size)
+			var wantSearches int32
+			if test.valid {
+				wantSearches = 1
+			}
+			var searches atomic.Int32
+			runtime := startProvider(t, fakeService{search: func(_ context.Context, queries []string, _ appWeb.SearchInvocation) (appWeb.SearchResult, error) {
+				searches.Add(1)
+				if len(queries) != 1 || queries[0] != query {
+					t.Error("query changed before reaching the service")
+				}
+				return appWeb.SearchResult{}, nil
+			}})
+			arguments := json.RawMessage(`{"queries":["` + query + `"]}`)
+			results := runtime.ExecuteBatch(t.Context(), appTool.BatchRequest{
+				SessionID: "s", Turn: 1, Step: 1, Journal: acceptingJournal{},
+				Calls: []session.ToolCall{{ID: "search", Name: "web_search", Arguments: arguments}},
+			})
+			if results[0].IsError == test.valid || searches.Load() != wantSearches {
+				t.Fatalf("arguments=%d bytes searches=%d result=%+v", len(arguments), searches.Load(), results[0])
+			}
+			if !test.valid && !strings.Contains(results[0].Output, "tool arguments exceed") {
+				t.Fatalf("oversize call did not fail the shared budget: %+v", results[0])
+			}
+		})
+	}
+}
+
 func (service fakeService) Search(ctx context.Context, queries []string, invocation appWeb.SearchInvocation) (appWeb.SearchResult, error) {
 	return service.search(ctx, queries, invocation)
 }

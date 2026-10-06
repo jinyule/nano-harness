@@ -9,6 +9,8 @@
 
 本变更与 [todo 初始实现](2026-10-04-todo-write-tool.md)、[skill 初始实现](2026-10-04-runtime-skills.md)、[提问与规划初始实现](2026-10-04-ask-user-question-and-plan-mode.md)、[goal 初始实现](2026-10-05-long-running-goals.md) 部分重叠。它们保留组件组装、生命周期和格式决定，本 Note 拥有此次边界修补证据；没有完整取代或归档旧 Note。结构化错误元数据的持久化不属于本变更。
 
+编码网络输入预算、审计 query 与调用参数的精确绑定，以及 web/LLM 空白 helper 收敛的补充证据见[工具边界修补 Note](2026-10-06-web-input-and-audit-validation.md)；本 Note 保留其余实施证据，二者部分重叠。
+
 ## Decision
 
 - 唯一 ECMAScript 空白集合从 `app/tool.IsBlank` 下沉到纯值包 `core/text.IsSpace`；`tool.IsBlank` 保留公开入口并复用它，todo、goal、skill 使用同源 TrimSpace，durable todo/goal 文本与 goal 标识校验复用该规则。U+FEFF 去除、U+0085 保留。`/goal edit` 解码完整 UTF-8 rune。

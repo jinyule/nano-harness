@@ -2,8 +2,9 @@ package session
 
 import (
 	"strings"
-	"unicode"
 	"unicode/utf8"
+
+	"github.com/jinyule/nano-harness/internal/core/text"
 )
 
 // WebSearchRequest is a log-only request intent, committed before dispatch.
@@ -40,11 +41,7 @@ func (record Record) requireWebSearch() error {
 	if data.Index < 1 || data.Index > 4 || data.TimeoutMS < 1 || data.TimeoutMS > 60000 || data.MaxResults < 1 || data.MaxResults > 8 {
 		return invalid("web/search-request budget or index is invalid")
 	}
-	// ECMAScript adds BOM to Unicode whitespace and excludes NEL. Match the
-	// tool boundary while preserving the exact query sent to the provider.
-	blank := strings.TrimFunc(data.Query, func(char rune) bool {
-		return char == '\ufeff' || char != '\u0085' && unicode.IsSpace(char)
-	}) == ""
+	blank := text.TrimSpace(data.Query) == ""
 	if blank || len(data.Query) > MaxArgumentsBytes || !utf8.ValidString(data.Query) || strings.ContainsRune(data.Query, 0) {
 		return invalid("web/search-request query is invalid")
 	}

@@ -78,6 +78,16 @@ func TestCloneEvent_WebSearchIntentIsLogOnlyAndDetached(t *testing.T) {
 	}
 }
 
+func TestRecord_WebSearchQuerySharesArgumentBudget(t *testing.T) {
+	for _, size := range []int{(128 << 10) + 1, MaxArgumentsBytes} {
+		record := searchRecord()
+		record.Search.Query = strings.Repeat("q", size)
+		if err := record.Validate(); err != nil {
+			t.Fatalf("query of %d bytes rejected: %v", size, err)
+		}
+	}
+}
+
 func TestRecord_WebSearchQueryUsesECMAScriptBlankSet(t *testing.T) {
 	for _, test := range []struct {
 		name, query string

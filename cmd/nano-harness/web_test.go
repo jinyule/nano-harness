@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -123,6 +124,11 @@ func (server *webModelServer) ServeHTTP(writer http.ResponseWriter, request *htt
 // runWebTurn assembles the real application, submits one task, and returns the durable transcript.
 func runWebTurn(t *testing.T, searchSettings string, queries ...string) ([]session.Record, *webModelServer, int32) {
 	t.Helper()
+	return runWebTurnWithPage(t, searchSettings, nil, queries...)
+}
+
+func runWebTurnWithPage(t *testing.T, searchSettings string, page http.HandlerFunc, queries ...string) ([]session.Record, *webModelServer, int32) {
+	t.Helper()
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	if len(queries) == 0 {
 		queries = []string{"go release"}
@@ -135,6 +141,10 @@ func runWebTurn(t *testing.T, searchSettings string, queries ...string) ([]sessi
 		pageHits.Add(1)
 		if request.Host != "docs.example.test" || request.Header.Get("Authorization") != "" {
 			http.Error(writer, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		if page != nil {
+			page(writer, request)
 			return
 		}
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -302,6 +312,42 @@ func TestComposition_WebSearchUnconfiguredFailsClosed(t *testing.T) {
 	}
 	if len(models.searches) != 0 {
 		t.Fatal("unconfigured search reached a provider")
+	}
+}
+
+func TestComposition_WebFetchRejectsEncodedNetworkBomb(t *testing.T) {
+	var empty bytes.Buffer
+	member := gzip.NewWriter(&empty)
+	if err := member.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data := bytes.Repeat(empty.Bytes(), 5_000_000/empty.Len()+1)
+	var tail bytes.Buffer
+	member = gzip.NewWriter(&tail)
+	if _, err := member.Write([]byte("ok")); err != nil {
+		t.Fatal(err)
+	}
+	if err := member.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, tail.Bytes()...)
+	records, models, hits := runWebTurnWithPage(t, "", func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain")
+		writer.Header().Set("Content-Encoding", "gzip")
+		writer.(http.Flusher).Flush()
+		_, _ = writer.Write(data)
+	})
+	const expected = "Error: WEB_FETCH_TOO_LARGE: response exceeds the maximum of 5000000 bytes"
+	result := toolResults(records)["call-fetch"]
+	if !result.IsError || result.Output != expected || hits != 1 {
+		t.Fatalf("encoded network bomb: result=%+v HTTP requests=%d", result, hits)
+	}
+	if len(models.chatRequests) != 2 {
+		t.Fatalf("model requests=%d", len(models.chatRequests))
+	}
+	input, err := json.Marshal(models.chatRequests[1]["input"])
+	if err != nil || !bytes.Contains(input, []byte(expected)) {
+		t.Fatalf("next model request lacks durable fetch failure: %s err=%v", input, err)
 	}
 }
 

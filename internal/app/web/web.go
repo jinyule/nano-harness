@@ -11,9 +11,9 @@ import (
 
 	"github.com/jinyule/nano-harness/internal/app/llm"
 	"github.com/jinyule/nano-harness/internal/app/settings"
-	"github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
+	"github.com/jinyule/nano-harness/internal/core/text"
 )
 
 const (
@@ -57,7 +57,7 @@ const (
 	CodeBlockedURL Code = "WEB_BLOCKED_URL"
 	// CodeRedirectBlocked means a redirect crossed origins or exceeded the hop limit.
 	CodeRedirectBlocked Code = "WEB_REDIRECT_BLOCKED"
-	// CodeFetchTooLarge means a response declared a body above the fetch byte limit.
+	// CodeFetchTooLarge means a response exceeds a declared, encoded, or intermediate fetch limit.
 	CodeFetchTooLarge Code = "WEB_FETCH_TOO_LARGE"
 	// CodeFetchTimeout means one fetch exceeded its deadline.
 	CodeFetchTimeout Code = "WEB_FETCH_TIMEOUT"
@@ -202,7 +202,7 @@ type SearchInvocation struct {
 // account preparation. Multiple queries run concurrently; the first failure
 // cancels the others and is returned after all have settled.
 func (service *Service) Search(ctx context.Context, queries []string, invocation SearchInvocation) (SearchResult, error) {
-	accepted, err := parseQueries(queries)
+	accepted, err := ParseQueries(queries)
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -238,9 +238,10 @@ func (service *Service) Search(ctx context.Context, queries []string, invocation
 	return mergeResults(accepted, results), nil
 }
 
-// parseQueries rejects empty, oversized, or blank query lists, then collapses
-// exact duplicates in first-occurrence order.
-func parseQueries(queries []string) ([]string, error) {
+// ParseQueries accepts 1–MaxQueries nonblank queries using ECMAScript whitespace,
+// then collapses exact duplicates in first-occurrence order, preserving the text.
+// Search dispatch and durable request validation share this rule.
+func ParseQueries(queries []string) ([]string, error) {
 	switch {
 	case len(queries) == 0:
 		return nil, errors.New("queries must contain at least one query")
@@ -250,7 +251,7 @@ func parseQueries(queries []string) ([]string, error) {
 	accepted := make([]string, 0, len(queries))
 	seen := map[string]struct{}{}
 	for _, query := range queries {
-		if tool.IsBlank(query) {
+		if text.TrimSpace(query) == "" {
 			return nil, errors.New("each query must be a non-empty string")
 		}
 		if _, ok := seen[query]; !ok {

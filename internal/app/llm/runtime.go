@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
+	"github.com/jinyule/nano-harness/internal/core/text"
 )
 
 var (
@@ -308,7 +308,7 @@ func (call *Call) Stream(ctx context.Context, request Request, emit Emit) (Compl
 
 // Search runs one provider-side web search through the frozen provider snapshot.
 func (call *Call) Search(ctx context.Context, request SearchRequest) (SearchResult, error) {
-	if tool.IsBlank(request.Query) || request.MaxResults < 1 {
+	if text.TrimSpace(request.Query) == "" || request.MaxResults < 1 {
 		return SearchResult{}, ErrInvalidConfig
 	}
 	return call.prepared.Search(ctx, call.credential, request)

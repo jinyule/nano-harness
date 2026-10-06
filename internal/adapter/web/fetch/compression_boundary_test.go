@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -35,6 +36,103 @@ func TestFetch_RejectsIntermediateDecompressionBomb(t *testing.T) {
 	expectCode(t, err, web.CodeFetchTooLarge)
 	if result.Content != "" {
 		t.Fatalf("rejected response published %q", result.Content)
+	}
+}
+
+// emptyMemberStream spends the wire budget on valid gzip framing while the
+// decoded body remains "ok". An optional filename pads the final member.
+func emptyMemberStream(t *testing.T, size int) []byte {
+	t.Helper()
+	empty := compressed(t, "gzip", nil)
+	tail := compressed(t, "gzip", []byte("ok"))
+	count := (size - len(tail)) / len(empty)
+	padding := size - count*len(empty) - len(tail)
+	if padding > 0 {
+		tail[3] |= 8 // FNAME, terminated by NUL
+		name := make([]byte, padding)
+		for index := range name[:padding-1] {
+			name[index] = 'a'
+		}
+		tail = append(append(append([]byte(nil), tail[:10]...), name...), tail[10:]...)
+	}
+	return append(bytes.Repeat(empty, count), tail...)
+}
+
+type countedBody struct {
+	source io.Reader
+	bytes  int
+}
+
+func (body *countedBody) Read(buffer []byte) (int, error) {
+	count, err := body.source.Read(buffer)
+	body.bytes += count
+	return count, err
+}
+
+func TestFetch_BoundsEncodedNetworkInput(t *testing.T) {
+	for _, size := range []int{maxResponseBytes, maxResponseBytes + 1, maxResponseBytes * 2} {
+		data := emptyMemberStream(t, size)
+		for _, coding := range []string{"gzip", "x-gzip", "identity, gzip", "gzip, identity"} {
+			t.Run(fmt.Sprintf("%s/%d", coding, size), func(t *testing.T) {
+				body := &countedBody{source: bytesWithEOF{bytes.NewReader(data)}}
+				response := bodyResponse(body, coding)
+				defer func() { _ = response.Body.Close() }()
+				result, err := New(Config{}).read(t.Context(), response, &url.URL{Scheme: "https", Host: "example.com"})
+				if size == maxResponseBytes {
+					if err != nil || result.Content != "ok" || result.Truncated || body.bytes != size {
+						t.Fatalf("exact wire budget: result=%+v bytes=%d err=%v", result, body.bytes, err)
+					}
+					return
+				}
+				expectCode(t, err, web.CodeFetchTooLarge)
+				var failure *web.Error
+				if !errors.As(err, &failure) || failure.Message != "response exceeds the maximum of 5000000 bytes" || !errors.Is(err, errDecompressionLimit) {
+					t.Fatalf("oversized wire error lost message or cause: %v", err)
+				}
+				if result.Content != "" || body.bytes > maxResponseBytes+1 {
+					t.Fatalf("oversized wire published %q after reading %d bytes", result.Content, body.bytes)
+				}
+			})
+		}
+	}
+}
+
+func TestFetch_RejectsSingleLayerCompressedNetworkBomb(t *testing.T) {
+	data := emptyMemberStream(t, maxResponseBytes*2)
+	current := newFixture(t, func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain")
+		writer.Header().Set("Content-Encoding", "gzip")
+		// Flush headers before the body to force chunked transfer, without a
+		// declared Content-Length that could reject the response ahead of reading.
+		writer.(http.Flusher).Flush()
+		_, _ = writer.Write(data)
+	})
+	result, err := current.client.Fetch(t.Context(), "http://docs.example.test/")
+	expectCode(t, err, web.CodeFetchTooLarge)
+	if result.Content != "" || !errors.Is(err, errDecompressionLimit) {
+		t.Fatalf("network bomb: result=%+v err=%v", result, err)
+	}
+}
+
+func TestFetch_IdentityNetworkOverflowRequiresEncodingHeader(t *testing.T) {
+	for _, coding := range []string{"", "identity"} {
+		t.Run(coding, func(t *testing.T) {
+			body := &countedBody{source: bytes.NewReader(make([]byte, maxResponseBytes+1))}
+			response := bodyResponse(body, coding)
+			defer func() { _ = response.Body.Close() }()
+			result, err := New(Config{}).read(t.Context(), response, &url.URL{Scheme: "https", Host: "example.com"})
+			if coding == "identity" {
+				expectCode(t, err, web.CodeFetchTooLarge)
+				if result.Content != "" || !errors.Is(err, errDecompressionLimit) {
+					t.Fatalf("encoded identity overflow: result=%+v err=%v", result, err)
+				}
+			} else if err != nil || !result.Truncated || len(result.Content) != maxBodyUnits {
+				t.Fatalf("unencoded body truncation: result=%+v err=%v", result, err)
+			}
+			if body.bytes != maxResponseBytes+1 {
+				t.Fatalf("read %d bytes, want budget plus one overflow probe", body.bytes)
+			}
+		})
 	}
 }
 

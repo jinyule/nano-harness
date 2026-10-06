@@ -18,12 +18,12 @@ import (
 
 func TestParseQueries_ECMAScriptWhitespace(t *testing.T) {
 	for _, query := range []string{"\ufeff", "\ufeff\t\u2028\u3000"} {
-		if _, err := parseQueries([]string{query}); err == nil || err.Error() != "each query must be a non-empty string" {
+		if _, err := ParseQueries([]string{query}); err == nil || err.Error() != "each query must be a non-empty string" {
 			t.Errorf("blank query %q: %v", query, err)
 		}
 	}
 	for _, query := range []string{"\u0085", "\ufeff query \ufeff", "\u200b"} {
-		got, err := parseQueries([]string{query, query})
+		got, err := ParseQueries([]string{query, query})
 		if err != nil || len(got) != 1 || got[0] != query {
 			t.Errorf("query spelling/dedup %q: %q, %v", query, got, err)
 		}
@@ -293,7 +293,7 @@ func TestService_SearchValidatesQueriesBeforeProviderCalls(t *testing.T) {
 	if len(current.model.requests) != 0 {
 		t.Fatal("invalid queries reached the provider")
 	}
-	accepted, err := parseQueries([]string{"go", "rust", "go", "Go"})
+	accepted, err := ParseQueries([]string{"go", "rust", "go", "Go"})
 	if err != nil || !reflect.DeepEqual(accepted, []string{"go", "rust", "Go"}) {
 		t.Fatalf("deduplicated=%q err=%v", accepted, err)
 	}

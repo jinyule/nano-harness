@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jinyule/nano-harness/internal/core/session"
@@ -97,6 +98,13 @@ func TestSessionV2WebSearch_RejectsChangedContract(t *testing.T) {
 		{"duplicate-index", `"index":2`, `"index":1`},
 		{"index-gap", `"index":2`, `"index":3`},
 		{"duplicate-query", `"query":"rust"`, `"query":"go"`},
+		{"query-outside-call", `"query":"rust"`, `"query":"python"`},
+		{"query-order-differs-from-call", `"queries":["go","rust"]`, `"queries":["rust","go"]`},
+		{"index-exceeds-distinct-queries", `"queries":["go","rust"]`, `"queries":["go","go"]`},
+		{"missing-call-queries", `"queries":["go","rust"]`, `"other":["go","rust"]`},
+		{"wrong-call-query-type", `"queries":["go","rust"]`, `"queries":"go"`},
+		{"blank-call-query", `"queries":["go","rust"]`, `"queries":["go","\ufeff"]`},
+		{"too-many-call-queries", `"queries":["go","rust"]`, `"queries":["go","rust","a","b","c"]`},
 		{"wrong-provider", `"provider":"anthropic"`, `"provider":"openai"`},
 		{"URL-endpoint", `"endpoint":"anthropic-messages"`, `"endpoint":"https://secret.example/key"`},
 		{"unknown-effort", `"effort":"low"`, `"effort":"huge"`},
@@ -174,6 +182,119 @@ func TestLog_WebSearchAuditRepairPreservesIntentWithoutRedispatch(t *testing.T) 
 			t.Fatal("repair changed intents")
 		}
 	}
+}
+
+func TestLog_WebSearchAuditMatchesDistinctCallQueries(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		queries []string
+	}{
+		{"exact-deduplication", []string{"go", "go", "rust", "go"}},
+		{"preserve-whitespace", []string{" go ", "rust"}},
+		{"NEL-is-not-blank", []string{"\u0085", "\u0085", "rust"}},
+		{"query-above-128-KiB", []string{strings.Repeat("q", (128<<10)+1), "rust"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager, scope := startManager(t)
+			t.Cleanup(func() { _ = scope.Close(context.Background()) })
+			log, err := manager.Open(t.Context(), OpenOptions{SessionID: "bound-query", Create: true, Cwd: "/synthetic/workspace"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			prefix := webFixtureRecords()[:6]
+			path := filepath.Join(manager.config.Root, "bound-query.jsonl")
+			arguments, err := json.Marshal(map[string][]string{"queries": test.queries})
+			if err != nil {
+				t.Fatal(err)
+			}
+			prefix[5].Call.Arguments = arguments
+			for _, record := range prefix {
+				appendRecord(t, log, record)
+			}
+			for index, query := range []string{test.queries[0], "rust"} {
+				before, err := os.ReadFile(path) //nolint:gosec // fixed transcript name under the test-owned private session root
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := log.Append(t.Context(), webRequest(index+1, "python")); !errors.Is(err, ErrCorruptSession) {
+					t.Fatalf("unrequested query appended: %v", err)
+				}
+				after, err := os.ReadFile(path) //nolint:gosec // fixed transcript name under the test-owned private session root
+				if err != nil || !bytes.Equal(before, after) {
+					t.Fatalf("rejected audit changed transcript: %v", err)
+				}
+				appendRecord(t, log, webRequest(index+1, query))
+			}
+			if _, err := log.Append(t.Context(), webRequest(3, "other")); !errors.Is(err, ErrCorruptSession) {
+				t.Fatalf("audit exceeded distinct query count: %v", err)
+			}
+			if err := log.Close(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := manager.Inspect(t.Context(), "bound-query"); err != nil {
+				t.Fatalf("valid query order was not recoverable: %v", err)
+			}
+		})
+	}
+}
+
+func TestLog_WebSearchAuditRejectsOmittedArguments(t *testing.T) {
+	const reason = "web/search-request does not name a pending web_search call"
+	requireRejected := func(t *testing.T, err error) {
+		t.Helper()
+		// Omitted calls must fail at the pending-call boundary, before parsing
+		// their empty arguments; a later parse error would hide a missing guard.
+		if !errors.Is(err, ErrCorruptSession) || !strings.Contains(err.Error(), reason) {
+			t.Fatalf("omitted call was not rejected at the call boundary: %v", err)
+		}
+	}
+	t.Run("read", func(t *testing.T) {
+		fixture, err := os.ReadFile("testdata/session-v2-web-search.jsonl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix, _, found := bytes.Cut(fixture, []byte(`{"seq":8,`))
+		if !found {
+			t.Fatal("fixture lacks the second audit")
+		}
+		// Keep the first audit in an otherwise valid interrupted prefix, so a
+		// subsequent successful result cannot mask acceptance of this audit.
+		changed := bytes.Replace(prefix, []byte(`"arguments":{"queries":["go","rust"]}`), []byte(`"arguments":{},"arguments_omitted":true`), 1)
+		if bytes.Equal(changed, prefix) {
+			t.Fatal("omitted-call replacement did not match")
+		}
+		file := temporaryFile(t)
+		if _, err := file.Write(changed); err != nil {
+			t.Fatal(err)
+		}
+		_, _, _, err = readSession(file, testCompositionID)
+		requireRejected(t, err)
+	})
+	t.Run("append", func(t *testing.T) {
+		manager, scope := startManager(t)
+		t.Cleanup(func() { _ = scope.Close(context.Background()) })
+		log, err := manager.Open(t.Context(), OpenOptions{SessionID: "omitted-search", Create: true, Cwd: "/synthetic/workspace"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = log.Close(context.Background()) })
+		prefix := webFixtureRecords()[:6]
+		prefix[5].Call.Arguments, prefix[5].Call.ArgumentsOmitted = json.RawMessage(`{}`), true
+		for _, record := range prefix {
+			appendRecord(t, log, record)
+		}
+		path := filepath.Join(manager.config.Root, "omitted-search.jsonl")
+		before, err := os.ReadFile(path) //nolint:gosec // fixed transcript name under the test-owned private session root
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = log.Append(t.Context(), webRequest(1, "go"))
+		requireRejected(t, err)
+		after, err := os.ReadFile(path) //nolint:gosec // fixed transcript name under the test-owned private session root
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("rejected omitted-call audit changed transcript: %v", err)
+		}
+	})
 }
 
 func eventsFromRecords(records []session.Record) []session.Event {

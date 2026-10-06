@@ -84,6 +84,8 @@ web 工具在 `app/web` 用真实 LLM runtime 与 settings 只替换远端模型
 
 抓取传输对齐测试还要求：gzip、zlib/raw deflate 与逆序叠加返回已知正文，br/zstd/未知编码失败；解压后恰好 5,000,000 字节不误报，超出一字节标记截断，压缩炸弹尾部损坏不能迫使读取越过上限。多层压缩 fixture 用大量空 gzip member 构造“中间超过预算、最终只有 ok”的真实 HTTP 响应，必须以 `WEB_FETCH_TOO_LARGE` 拒绝；5 层可成功，6 个编码声明项必须在读取正文前失败。读取屏障固定首次读取之后的取消和期限已过后返回缓存字节，分别断言 `WEB_ABORTED`/`WEB_FETCH_TIMEOUT` 与错误原因；解码输出已缓冲且网络字节已读尽时，取消也不能继续交付正文。期限测试只用真实 deadline 驱动屏障，耗时上限作退出 watchdog，不用 sleep 或机器解码速度构造交错。URL fixture 比较 IDNA、scheme/端口/路径规范化与最终 URL，映射到私网的 IDNA 输入不得拨号；中文与 emoji 覆盖 URL 的 2048 UTF-16 边界及正文的 100,000 单元边界。并发拨号用可控 tick 和 channel 保持首个候选阻塞，证明另一地址族可先成功、失败立即推进、取消等待全部在途拨号、迟到连接关闭和取消期间不发布成功连接；timer 只作死锁 watchdog，不提供交错顺序。
 
+`TestFetch_BoundsEncodedNetworkInput` 以有效空 gzip member 固定 5,000,000、5,000,001 和 10,000,000 字节的输入，证明 exact budget 可读、超限失败且只额外消费一字节探测；`TestFetch_RejectsSingleLayerCompressedNetworkBomb` 使用真实 chunked HTTP（无 Content-Length），验证单层小正文也不能绕过编码输入预算。identity 声明超限失败，缺省编码仍截断正文；默认 mutation 移除网络输入预算时永久断言必须失败。
+
 提问接缝用真实 service 与脚本 broker 覆盖请求上限、intent 校验、delegated 拒绝、取消（等待前与等待中）、broker 失败、全部非法答案形态、答案排序与切片解耦，以及 broker 注册与 scope 撤回。`ask_user_question` 与 `exit_plan_mode` 通过真实 tool runtime、提问服务和规划模式服务调用，覆盖逐字节 schema、结果 JSON、错误文本、规划模式外拒绝、标题规则、批准、继续规划、反馈、取消和服务停止。
 
 spill 与先读后写另有专门证据：预览算法用上游 retention 的 Python 逐行移植得到的摘要比较（含 UTF-16 代理对截断），runtime 测试覆盖无 store、无会话、保存失败、说明超预算、错误结果和 `KeepInline`；`spill-local` 用真实临时目录验证权限、随机命名、`O_EXCL`、大小上限、重试、提交/丢弃、关闭等待已打开文件，以及启动清理的过期/新鲜/链接/无关条目/他人 workspace 矩阵和取消后的 join。`bash` 的完整输出经真实 tool runtime 与 job service 覆盖前台截断、后台与超时转后台读取（运行中即声明文件）、job 上限回退，以及无 store、创建失败、超过大小上限和提交失败时退回 `(unavailable)`。`Readable` 有分区允许/拒绝矩阵（链接拼写、预置链接、`..`、相对拼写、未授权）。观察策略测试覆盖审批前拒绝与 approval 期间变化的执行点拒绝、盲覆盖、读后覆盖、自身写入、跨会话、内容变化、删除、确认不存在后的创建、并发创建者、批次内顺序、经由链接的读取和无会话调用。
@@ -124,6 +126,8 @@ TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event f
 `TestComposition_WebSearchAndFetchEndToEnd` 经真实 CLI config、settings 文件和 composition，让 loopback 模型在一步内调用 `web_search` 与 `web_fetch`：检索请求打到同一 Responses endpoint，抓取经注入 resolver 映射到 loopback 页面且只拨号已校验 IP；测试从磁盘 transcript 断言冻结的 schema、system prompt 指引、检索来源与 HTML 转换结果。`TestComposition_WebSearchUnconfiguredFailsClosed` 证明默认未配置时 `web_search` 返回 `WEB_PROVIDER_UNAVAILABLE` 且不联系 provider。
 
 `TestRenderHTML_MatchesUpstreamSemantics` 用表驱动 fixture 保存参考 `5badb15009ae` 的 Turndown/GFM 预期输出，覆盖删除线、任务状态、代码语言/围栏/空白、Markdown 字面量和隐式闭合的隐藏元素；只归一化 ADR-0011 中的等价排版。`TestFormatFetch_MatchesUpstreamUTF16Budget` 固定 ASCII、汉字、emoji 和 provider footer 的完整预算边界。`TestProvider_FetchSpillsCompleteFormattedOutput` 组装真实 tool runtime、spill store 与 web tools，替换网络结果边界；从磁盘读取预览定位的文件，独立比较 100,000 个汉字的 300,119 字节结果和 Markdown 展开后达到/超过 200,000 单元的结果，证明保存发生在内联截断之前。
+
+`TestComposition_WebFetchRejectsEncodedNetworkBomb` 走真实配置/composition，从磁盘 tool/result 与下一次模型请求验证上游 too-large 文案，基线源码 overlay 必须失败。
 
 `TestComposition_WebSearchAuditsConcurrentQueriesOnDisk` 经同一真实入口覆盖三个 provider 各 1–4 个查询；loopback server 用 barrier 等待全部查询到达，并在每个 HTTP 请求到达时读取磁盘 JSONL，证明对应审计已提交。从最终 transcript 验证查询序号、归属与 call/audit/result 因果关系；下一模型请求不包含审计元数据。`TestComposition_WebSearchAuditsNELQuery` 从磁盘确认单独 U+0085 查询保留原文并发送；领域与 LLM 断言审计和请求边界均按 ECMAScript 空白集接受 NEL、拒绝 BOM。service 的 barrier 测试另外验证去重后的审计顺序与网络并发，失败 journal 证明没有检索 dispatch 且错误链保留原因、模型文本不泄漏 I/O 详情。
 
@@ -221,7 +225,9 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 
 `testdata/session-v2-image.jsonl` 固定带图片引用的 user message 与 `read_image` call/result。`TestSessionV2Image_FrozenContract` 用同样的读取、投影和独立 writer 比较；`TestSessionV2Image_RejectsChangedContract` 拒绝旧的内联 `data` 与 `sha256` 字段、未知字段、旧式或大写或过短的 ID、不支持的 media type、字节数为 0 或超过 4 MiB、宽度为 0 或超过 4096、空名称和携带图片的错误结果。
 
-`testdata/session-v2-web-search.jsonl` 固定 log-only `web/search-request`：`TestSessionV2WebSearch_FrozenContract` 用真实 Manager/Inspect/Open 读取、证明 surface 不包含审计并与独立 writer 逐字节比较；`TestSessionV2WebSearch_RejectsChangedContract` 拒绝未知字段、URL endpoint、route/预算非法、缺失负载、重复或跳号序号、重复查询以及错误 call/tool/turn/step。`TestValidateOrder_WebSearchIntentRequiresPendingCall` 拒绝 call 前或 result/step/turn 后的意图；`TestLog_WebSearchAuditRepairPreservesIntentWithoutRedispatch` 分别恢复 0、1、2 条已提交意图的中断尾部，只补 interrupted result 与闭合事实，保留原字节前缀，并证明副本不会改变 journal。
+`testdata/session-v2-web-search.jsonl` 固定 log-only `web/search-request`：`TestSessionV2WebSearch_FrozenContract` 用真实 Manager/Inspect/Open 读取、证明 surface 不包含审计并与独立 writer 逐字节比较；`TestSessionV2WebSearch_RejectsChangedContract` 拒绝未知字段、URL endpoint、route/预算非法、缺失负载、重复或跳号序号、重复查询、参数外或错序查询、超出去重后查询数量、无效调用查询列表以及错误 call/tool/turn/step。`TestLog_WebSearchAuditMatchesDistinctCallQueries` 从真实 Append/Inspect 验证精确去重、原始空白与 NEL 保留，以及超过旧 128 KiB 文档值的合法查询，拒绝不属于对应序号的 query 且文件字节不变；默认 mutation 移除 query 绑定时这些断言必须失败。`TestLog_WebSearchAuditRejectsOmittedArguments` 用合法省略调用与第一条审计构造中断前缀，读取和追加都须在 pending-call 边界拒绝，追加不改变文件；它核对拒绝原因，防止后续空参数解析掩盖省略调用 guard 被删除的回归，对应默认 mutation 只移除 `call.ArgumentsOmitted` 条件。`TestValidateOrder_WebSearchIntentRequiresPendingCall` 拒绝 call 前或 result/step/turn 后的意图；`TestLog_WebSearchAuditRepairPreservesIntentWithoutRedispatch` 分别恢复 0、1、2 条已提交意图的中断尾部，只补 interrupted result 与闭合事实，保留原字节前缀，并证明副本不会改变 journal。
+
+`TestRecord_WebSearchQuerySharesArgumentBudget` 接受 128 KiB + 1 与 `MaxArgumentsBytes` 大小的查询，既有 shape/budget 反例拒绝超出共享预算。`TestProvider_SearchUsesSharedArgumentBudget` 经真实工具 runtime/schema 接受超过 128 KiB 和恰好整次参数预算的调用，并确认超出预算时 service 不被调用；JSON envelope 计入总量，检索不另设更小的单条上限。
 
 `testdata/session-v2-notice.jsonl` 冻结后台任务完成通知的持久化：step 内入队的 `notice/queued`、同一 turn 内带相同 `notice_id` 的投递，以及 turn 之后仍欠着的第二条通知。`TestSessionV2Notice_FrozenContract` 用同样的读取、投影和独立 writer 比较，并证明只有投递进入 surface、欠着的通知和下一个 ID 可从日志折叠；`TestSessionV2Notice_RejectsChangedContract` 拒绝来源未知字段、带 turn 的入队、缺少 ID、重复 ID、投递未欠的 ID 和内容不同的投递；resume 测试证明修复中断尾部后通知仍欠着，之后的投递使它不再欠着。
 

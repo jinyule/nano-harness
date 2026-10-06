@@ -1,10 +1,11 @@
 package jsonl
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
-	"slices"
 
+	"github.com/jinyule/nano-harness/internal/app/web"
 	coresession "github.com/jinyule/nano-harness/internal/core/session"
 )
 
@@ -26,7 +27,7 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 	approvalCalls := map[string]string{}
 	seenApprovals := map[string]struct{}{}
 	todoCalls := map[string]struct{}{}
-	searchQueries := map[string][]string{}
+	searchIndices := map[string]int{}
 	children := map[string]struct{}{}
 	// notices holds queued notices until a user/message delivers them;
 	// noticeIDs remembers every ID so none is queued twice.
@@ -130,7 +131,7 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 			}
 			delete(pendingCalls, record.Result.CallID)
 			delete(todoCalls, record.Result.CallID)
-			delete(searchQueries, record.Result.CallID)
+			delete(searchIndices, record.Result.CallID)
 			state.calls = remove(state.calls, record.Result.CallID)
 		case coresession.RecordTodoWrite:
 			if record.Turn != state.turn || record.Step != state.step {
@@ -153,11 +154,20 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 			if call == nil || call.Name != "web_search" || call.ArgumentsOmitted {
 				return state, orderError("web/search-request does not name a pending web_search call")
 			}
-			queries := searchQueries[data.CallID]
-			if data.Index != len(queries)+1 || slices.Contains(queries, data.Query) {
+			var arguments struct {
+				Queries []string `json:"queries"`
+			}
+			if err := json.Unmarshal(call.Arguments, &arguments); err != nil {
+				return state, fmt.Errorf("%w: web/search-request call %q arguments: %w", ErrCorruptSession, call.ID, err)
+			}
+			accepted, err := web.ParseQueries(arguments.Queries)
+			if err != nil {
+				return state, fmt.Errorf("%w: web/search-request call %q queries: %w", ErrCorruptSession, call.ID, err)
+			}
+			if data.Index != searchIndices[data.CallID]+1 || data.Index > len(accepted) || data.Query != accepted[data.Index-1] {
 				return state, orderError("web/search-request query order is invalid")
 			}
-			searchQueries[data.CallID] = append(queries, data.Query)
+			searchIndices[data.CallID] = data.Index
 		case coresession.RecordRetry, coresession.RecordRetryStarted:
 			if record.Turn != state.turn || record.Step != state.step || state.assistant {
 				return state, orderError("%s is not a request recovery fact", record.Type)

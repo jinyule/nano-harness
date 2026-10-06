@@ -9,6 +9,8 @@
 
 本变更仅涉及 fetch、其测试与相关文档。[传输对齐 Note](2026-10-06-web-fetch-transport-alignment.md)保留 URL/IDNA、UTF-16、拨号回退和初次编码支持的证据，本 Note 补充解压资源与取消边界，二者部分重叠，不归档旧 Note。HTML 转换、展示预算和 app/web 服务不在修改范围内。
 
+编码网络输入预算、审计 query 与调用参数的精确绑定，以及 web/LLM 空白 helper 收敛的补充证据见[工具边界修补 Note](2026-10-06-web-input-and-audit-validation.md)；本 Note 保留其余实施证据，二者部分重叠。
+
 ## Decision
 
 长期契约由 [ADR-0011](../../../docs/decisions/0011-provider-web-search-and-public-fetch.md#抓取传输语义)与[网络边界](../../../docs/security.md#网络边界)拥有。参考 submodule 仍为 `5badb15009ae1756c3afe0ae0cef1faafc290ccc`，锁定 [Undici 8.10.0](https://github.com/nodejs/undici/blob/v8.10.0/lib/web/fetch/index.js#L2069-L2129)：逆序建立流管道、最多 5 个编码项，没有逐层累计字节预算。本仓对齐编码项上限，并对每个中间解压输出设置独立预算，超限返回有原因链的 `WEB_FETCH_TOO_LARGE`；最终正文保留现有截断语义，identity 不额外制造解压层。
