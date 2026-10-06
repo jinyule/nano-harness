@@ -102,11 +102,12 @@
 
 前述审查以缺陷为主。2026-10-06 起由 6 个 Codex 只读审计按工具族逐项对照上游实现，核实参数语义、上限、输出与错误文案、事件与持久化、delegated 可用性和 Base 默认启用的功能分支：文件工具、搜索与 spill、shell 与后台任务、subagent 工具族、交互与会话状态工具（todo、提问、规划模式、goal、skill）、web 工具。审计结论汇总后按“对齐上游 / 保留并补 ADR / 暂缓”逐项处理，结果记录在此节。
 
-审计结论（逐个更新）：
+审计结论（逐个更新）。小修随审计完成即派给 Codex 并行处理：Codex-E（搜索、spill、共享 ECMAScript 空白判断）、Codex-F（web_fetch 传输层）、Codex-G（HTML 转换与抓取输出预算）。结构性差距（结构化错误码与结果 `meta`、检索请求审计事件、tool-result-pruner）待全部审计完成后统一评估，涉及会话格式或 compaction 的改动先与维护者确认范围。
 
 | 审计 | 结论 | 待处理差距 |
 |---|---|---|
 | 搜索与 spill（`0073dfb`） | 常规搜索与文本 spill 基本对齐 | 小修：ECMAScript 空白集、grep JSON 解析顺序、stderr 65,536 字节、错误结果也 spill（ADR-0008 理由不成立）、更换 spill root 后历史定位符不可读。结构性：`tool/result` 缺上游的结构化错误码与结果 `meta`（影响会话格式与所有工具）。Base 默认的工具结果裁剪阶段（compaction tool-result-pruner）缺失。待全部审计完成后统一分类 |
+| web（`0073dfb`） | 检索与基本抓取对齐；检索 provider 与默认未配置的取舍记录充分 | 小修：deflate/Brotli 解压、WHATWG URL 规范化与 IDNA、100,000 上限按 UTF-16 计数、双栈快速回退、HTML 转换语义（删除线、任务框、代码语言、转义、hidden 容错 bug）、抓取输出先截 256 KiB 导致 spill 丢正文、查询空白集。结构性：错误码只拼进文本而无结构化字段；缺上游发送前的检索请求审计事件；compaction tool-result-pruner |
 
 ### 后续项（不在本次范围）
 
