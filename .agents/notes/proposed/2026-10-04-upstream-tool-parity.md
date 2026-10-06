@@ -79,11 +79,11 @@
 | 问题 | 级别 | 负责 | 状态 |
 |---|---|---|---|
 | 工具执行期间打断时，已取出的通知与 steer 丢失，turn 记成 `error` | Blocker | WP3 | 修复中 |
-| 前台 `bash` 的 job 先于 Wait 结束时发出多余完成通知并写入会话 | Blocker | WP3 | 修复中 |
+| 前台 `bash` 的 job 先于 Wait 结束时发出多余完成通知并写入会话 | Blocker | Codex-C（自 WP3 改派） | 修复中 |
 | fork 子代理继承父会话 `plan/mode`，在规划模式下运行且无法退出 | Blocker | WP8 | 修复中 |
 | `web_fetch` 对 IPv6 字面量跳过 NAT64 校验（SSRF） | Blocker | WP5 | 已合入 `6d3322c` |
 | 关闭时工具先于在途 turn 撤销，前台 `bash` 可能在临时目录删除后才取消 | Suggestion | WP1 | 已合入 `2fa6aa7`：agent 层最后启动、先关闭，registry 一次性取消并等待全部在途 turn |
-| job 上限回退路径不归 Scope；超时交接竞态；macOS 进程组回收承诺 | Suggestion | WP3 | 修复中 |
+| job 上限回退路径不归 Scope；超时交接竞态；macOS 进程组回收承诺 | Suggestion | Codex-C（自 WP3 改派） | 修复中 |
 | `send_message` 后 `interrupt_agent` 丢弃已确认消息；one-shot 子代理被通知唤醒 | Suggestion | WP7 | 已合入 `091cb74`：取消结束且有未提交投递时保持驻留；one-shot 只在唯一 turn 期间接受通知 |
 | fork 子代理 `get_goal` 返回父目标；driver 只等 root 空闲（核实与上游一致） | Suggestion | WP10 | 已合入 `7959206` |
 | spill 清理顺序、`write` 大文件校验、spill root 位置、长工具名 | Suggestion | WP2 | 已合入 `ec3c142` |
@@ -95,7 +95,11 @@
 | 目标结算无 revision 条件，可能撤销后来的人类授权（Codex 审查） | Suggestion | Codex-A | 修复中 |
 | 提问 context 已取消时有效答案仍通过，可能安排退出规划模式（Codex 审查） | Suggestion | Codex-B | 修复中 |
 | `todo/write` 未校验所引用调用是否为 `todo_write`（Codex 审查） | Suggestion | Codex-B | 修复中 |
-| mutation 计数、README、ADR 互相引用等文档不一致 | 文档 | 协调者 | 待全部修复合入后统一处理 |
+| mutation 计数、README、ADR 互相引用等文档不一致 | 文档 | Codex-D | 修复中：会变化的计数只保留一个权威位置 |
+
+### 上游能力对齐审计
+
+前述审查以缺陷为主。2026-10-06 起由 6 个 Codex 只读审计按工具族逐项对照上游实现，核实参数语义、上限、输出与错误文案、事件与持久化、delegated 可用性和 Base 默认启用的功能分支：文件工具、搜索与 spill、shell 与后台任务、subagent 工具族、交互与会话状态工具（todo、提问、规划模式、goal、skill）、web 工具。审计结论汇总后按“对齐上游 / 保留并补 ADR / 暂缓”逐项处理，结果记录在此节。
 
 ### 后续项（不在本次范围）
 
