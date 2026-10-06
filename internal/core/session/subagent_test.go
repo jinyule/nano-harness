@@ -31,7 +31,11 @@ func TestChildren_ExcludesForkInheritedEntries(t *testing.T) {
 
 func TestFinalAssistantText_PrefersLastMessageThenStreamedText(t *testing.T) {
 	message := func(seq uint64, text string) Event {
-		return Event{Sequence: seq, Record: Record{Type: RecordAssistantMessage, Turn: 1, Step: 1, Message: textMessage(RoleAssistant, text)}}
+		message := textMessage(RoleAssistant, text)
+		if text == "" {
+			message.Content = nil
+		}
+		return Event{Sequence: seq, Record: Record{Type: RecordAssistantMessage, Turn: 1, Step: 1, Message: message}}
 	}
 	chunk := func(seq uint64, kind ChunkKind, text string) Event {
 		return Event{Sequence: seq, Record: Record{Type: RecordAssistantChunk, Turn: 1, Step: 1, Chunk: &AssistantChunk{Kind: kind, Text: text}}}
@@ -64,5 +68,18 @@ func TestLastOutcome_ReportsLatestClosedTurn(t *testing.T) {
 	}
 	if outcome, ok := LastOutcome(events); !ok || outcome != OutcomeCanceled {
 		t.Fatalf("LastOutcome = %q %t", outcome, ok)
+	}
+}
+
+func TestFinalAssistantText_LastToolProposalWithholdsEarlierProgress(t *testing.T) {
+	events := []Event{
+		{Record: Record{Type: RecordAssistantChunk, Chunk: &AssistantChunk{Kind: ChunkText, Text: "old streamed progress"}}},
+		{Record: Record{Type: RecordAssistantMessage, Message: textMessage(RoleAssistant, "old progress")}},
+		{Record: Record{Type: RecordAssistantMessage, Message: &Message{Role: RoleAssistant}}},
+		{Record: Record{Type: RecordToolCall, Call: &ToolCall{ID: "call", Name: "read"}}},
+		{Record: Record{Type: RecordTurnEnd, Outcome: OutcomeError}},
+	}
+	if got := FinalAssistantText(events); got != "" {
+		t.Fatalf("tool-only closing answer = %q", got)
 	}
 }

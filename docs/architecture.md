@@ -148,7 +148,7 @@ Submit user message
 - 主动 compaction 在估算上下文超过阈值时运行；context-window 错误触发强制 compaction 后重试新 step。raw log 不删除，surface 用持久化 summary 替换旧 prefix。
 - `Followup` 排队新的 turn；`Steer` 只在活动 turn 的工具 step 边界注入；`Interrupt` 只取消活动 turn，保留已排队 followup；`WhenIdle` 等待队列、活动 turn 和已唤醒的通知 turn 都结算。
 - 注册了 `Admission` 的 source kind（目前只有目标轮次 `goal`）在 worker 取出 turn 时先经 admission：它在排除并发状态变化的同时提交 `turn/start` 与开场 `user/message`，或以 `ErrNotAdmitted` 丢弃这个 turn，不写任何记录，也不更新 `Status().Last`。规则见[长期目标](#长期目标)。
-- `Notify` 投递模型可见通知：后台任务完成通知、agent 之间的 `send_message` 消息、子代理结算通知和目标收尾指令。agent 忙时，通知在 turn 开始后、工具 step 结束后以及无工具调用的回答之后作为 `user/message` 追加；最后一种情况下 turn 继续一个 step 回应它。最后一个允许的 step 不取通知，留待下一 turn。每个边界先检查取消：被取消的 turn 不取出通知和 steer，outcome 记为 `canceled`；已经取出的输入以不继承取消的 context 提交，不会因取消竞态丢失。agent 空闲，或 turn 结束后仍有通知、没有排队的 turn 且该 turn 未被取消时，worker 以通知开启新 turn；被取消的 turn 留下的通知等待下一个 turn，留下的 steer 在下一个 turn 的第一个工具 step 边界投递。one-shot agent 只在它唯一的 turn 运行期间接受通知，turn 结束后拒绝通知，也不为未投递的通知开启新 turn。待投递通知只在内存中，规则见 [ADR-0009](decisions/0009-background-jobs.md)。
+- `Notify` 投递模型可见通知：后台任务完成通知、agent 之间的 `send_message` 消息、子代理结算通知和目标收尾指令。agent 忙时，通知在 turn 开始后、工具 step 结束后以及无工具调用的回答之后作为 `user/message` 追加；最后一种情况下 turn 继续一个 step 回应它。最后一个允许的 step 不取通知，留待下一 turn。每个边界先检查取消：被取消的 turn 不取出通知和 steer，outcome 记为 `canceled`；已经取出的输入以不继承取消的 context 提交，不会因取消竞态丢失。agent 空闲，或 turn 结束后仍有通知、没有排队的 turn 且该 turn 未被取消时，worker 以通知开启新 turn。中断前排队的通知不单独唤醒下一 turn；取消生效后接受的新通知保留唤醒请求，并在旧 turn 退出后开启下一 turn，一并处理此前排队的通知。旧 turn 不消费取消后的待投递通知；留下的 steer 在下一个 turn 的第一个工具 step 边界投递。one-shot agent 只在它唯一的 turn 运行期间接受通知，turn 结束后拒绝通知，也不为未投递的通知开启新 turn。待投递通知只在内存中，规则见 [ADR-0009](decisions/0009-background-jobs.md)与 [ADR-0013](decisions/0013-background-continuable-subagents.md)。
 - 调用取消、输出 token 上限、step limit、错误和恢复中断分别记录稳定 outcome。输出上限归一为 `max_tokens`：提交已生成的 assistant message 与 usage 后结束 turn，不执行截断响应的工具提案，也不消费待投递通知；停止事实与兼容规则见 [ADR-0018](decisions/0018-goal-stop-outcomes.md)。异常边界会尝试用不继承上游取消的 context 关闭 step/turn。
 - Registry 拥有每个动态 agent（包括 root）的 Scope、worker 和 journal。关闭时先拒绝新 agent，再同时关闭全部 agent：每个 worker 立即取消在途 turn、丢弃排队工作，registry 等待所有 worker 回收，不会出现一个 agent 在排空时另一个仍在开启新 turn。
 
@@ -165,7 +165,7 @@ Submit user message
 - `Runtime.Catalog(allow)` 一次冻结按名称排序的 schema 和可见工具贡献的 guidance。guidance 按上游 section order 排序，engine 把它追加在 system prompt 的工具列表之后，与 schema 一起写入 `request/header`。
 - `Invocation` 携带 session、cwd、delegation、approval 结果、本 step 的 route（provider、model 与模型是否声明图片输入），以及当前 tool/call 的 call ID、turn、step 和调用方 durable journal。需要记录会话事实的工具在 tool/result 之前向该 journal 追加；没有 journal 的调用方必须失败关闭。
 - `Runtime.UseSpill` 在插件 Scope 内发布唯一的 `SpillStore`。`Invocation.CreateSpill`/`SaveText` 按调用方会话打开或保存 spill 文件，没有 store 或会话时返回 `ErrSpillUnavailable`，工具据此使用上游的降级文案。
-- 未知工具、panic、拒绝、执行错误和取消都成为有界 tool result，文本使用上游的 `Error: <message>` 格式；resume 为未决调用补写的结果同样使用这一格式。
+- 每个调用在轮到调度及即将进入 Execute 时检查取消，截止后返回 `Error: tool call aborted before dispatch`；已进入 Execute 的调用被取消时返回 `Error: tool call aborted`，取消优先于成功结果。未知工具、panic、拒绝、执行错误和取消都成为有界 tool result，文本使用上游的 `Error: <message>` 格式；resume 为未决调用补写的结果同样使用这一格式。
 - 参数超限的调用不进入 schema 分类、Check、approval 或执行；错误结果为 `Error: tool arguments exceed 786432 bytes; submit a smaller call`。system prompt 明确 workspace 文件策略、`read`/`grep`/`read_image` 对本 workspace spill 分区的只读例外，以及 `bash` 的一次性批准升级。
 
 内置工具与上游 Base 组合同名同定义（`ask_user_question` 取 Web preset 的默认阻塞定义），映射和差异见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)，后台任务与 `bash` 后台变体见 [ADR-0009](decisions/0009-background-jobs.md)，提问与规划模式见 [ADR-0014](decisions/0014-user-questions-and-plan-mode.md)，`read_image` 见 [ADR-0015](decisions/0015-multimodal-tool-results.md)，长期目标见 [ADR-0016](decisions/0016-long-running-goals.md)：
@@ -250,7 +250,7 @@ producer Launch(kind, label, owner, Run)
 subagent (默认后台)        → StartContinuable → 立即返回 id → child 驻留 → 空闲、无 continuable 子代理且投递已提交 → 结算：关闭 agent，通知 parent
 subagent (run_in_background: false)
 subagent_fork (默认前台)  → Run → 等待唯一 turn → 返回最终回答 → 释放 child
-subagent_fork (后台)       → StartBackground → kind subagent 的 job（owner 为 parent）
+subagent_fork (后台)       → StartBackground → job 准入 → job 信号下创建 child、提交 catalog → 返回 job id → child 的唯一 turn
 send_message               → parent→直接 continuable child（不驻留则冷恢复）| 驻留 child→直接 parent
 interrupt_agent            → 取消任一 live 后代当前 turn，不等待
 list_agents                → parent 自己的 subagent/catalog；descendants 深度优先遍历
@@ -258,9 +258,9 @@ list_agents                → parent 自己的 subagent/catalog；descendants �
 
 - spawn child 从空会话开始；fork child 以 parent 最后一个 `turn/end` 为止的事件为种子（不含进行中的 turn），provider/model 由同一 route 决定。child 创建时持久化 parent/depth、descriptor v2 与 `never` 策略；parent 在创建它的工具 step 内写 `subagent/catalog`。
 - delegated session 在持久化策略层固定为 `never`，需要 approval 的工具无法执行，`bash` 的 sandbox 升级还在工具执行点再次拒绝。
-- 消息只跨越直接父子边，经 `Agent.Notify` 投递：接收方忙时在下一个 step 边界追加，空闲时开启新 turn。被中断的 turn 留下未提交的消息时，child 保持驻留，由下一次投递开启的 turn 一并处理。结算通知只在 child 自然结算时发送；服务关闭和 one-shot parent 回收是拆除，不发通知。
-- 每个 continuable 池最多 8 个驻留 child，one-shot 不占池；绝对 delegation depth 上限为 4。
-- 释放 child 时先中断它，深度优先释放其 live 子代理，关闭 agent 与 transcript，再以 `job.Service.Release` 结束它拥有的 job。服务 cleanup 拒绝新操作、停止结算 watcher，再从最深处起释放全部 child。
+- 消息只跨越直接父子边，经 `Agent.NotifyContext` 在收件箱锁内检查取消后投递：接收方忙时在下一个 step 边界追加，空闲时开启新 turn。中断前排队的未提交消息使 child 保持驻留；中断后接受的新消息在旧 turn 退出后自动唤醒下一轮，一并处理旧消息。结算通知只在 child 自然结算时发送；服务关闭和 one-shot parent 回收是拆除，不发通知。
+- 每个 continuable 池最多 8 个驻留 child，创建占位与发布后的 handle 原子转交同一个名额，one-shot 不占池；绝对 delegation depth 上限为 4。
+- 释放 child 时先中断它，深度优先释放其 live 子代理，关闭 agent 与 transcript，再以 `job.Service.Release` 结束它拥有的 job。清理失败覆盖成功或取消结局，通知及后台 job 不附成功输出。服务 cleanup 拒绝新操作、停止结算 watcher，再从最深处起释放全部 child。
 - 驻留状态只在内存中；进程重启后，恢复的 root 从目录列出 `inactive` child，并可用 `send_message` 冷恢复它们。
 
 ## 用户提问与规划模式

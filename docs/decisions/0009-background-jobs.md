@@ -77,7 +77,7 @@ background job <id> (<kind>: <label>) finished <status line>. Read its output wi
 
 - agent 忙时进入内存队列，在下一个边界作为 `user/message` 追加到当前 turn：turn 开始后、工具 step 结束后（steer 之后），以及模型给出无工具调用的回答之后。最后一种情况下 turn 不结束，而是再开一个 step 回应通知。最后一个允许的 step（无论是否有工具调用）和因输出上限被截断、以 `max_tokens` 结束的 step 都不取通知，通知留在队列中，由 turn 结束后的唤醒回应。
 - agent 空闲时，或一个 turn 结束后队列中仍有通知且没有排队的 turn，worker 以最早的通知开启新 turn，其余通知在该 turn 开始时追加。这对应上游默认的 `wakeup` 投递；本仓不设 `maxConsecutiveWakes`，与 Base 默认相同。
-- 每个取出队列输入的边界先检查取消：被取消的 turn 不取出通知或 steer，以 `canceled` 结束；取出后的提交使用不继承取消的 context，取消与提交竞态时输入已提交而不是丢失，下一个边界再观察到取消。被取消的 turn 留下的通知等待下一个 turn，不会在用户 interrupt 后立即自动开 turn；留下的 steer 在下一个 turn 的第一个工具 step 边界投递。目标轮次的暂停和子代理的 “stopped” 结算都依赖这里记录的 `canceled`。`WhenIdle` 把已唤醒但尚未开始的通知 turn 视为忙。
+- 每个取出队列输入的边界先检查取消：被取消的 turn 不取出通知或 steer，以 `canceled` 结束；取出后的提交使用不继承取消的 context，取消与提交竞态时输入已提交而不是丢失，下一个边界再观察到取消。中断前排队的通知等待下一个 turn，不因 interrupt 单独自动开 turn；中断生效后接受的新通知保留唤醒请求，按 [ADR-0013 的消息规则](0013-background-continuable-subagents.md#3-消息与通知) 在旧 turn 退出后开启下一 turn，一并处理旧通知；留下的 steer 在下一个 turn 的第一个工具 step 边界投递。目标轮次的暂停和子代理的 “stopped” 结算都依赖这里记录的 `canceled`。`WhenIdle` 把已唤醒但尚未开始的通知 turn 视为忙。
 - 待投递的通知与 followup、steer 一样只在内存中，agent 停止时丢弃；此时 job 本身也已被终止。
 
 > 后续约束：[ADR-0013](0013-background-continuable-subagents.md#6-job-的-owner-释放) 规定 one-shot agent 只在唯一 turn 运行期间接受通知，turn 结束后不再由通知唤醒；本节的通用唤醒规则受此限制。

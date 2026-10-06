@@ -57,8 +57,8 @@ func TestService_ValidatesLifecycleAndRequests(t *testing.T) {
 		want   string
 	}{
 		"journal":     {func(request *StartRequest) { request.Journal = nil }, "subagent delegation requires a calling session journal"},
-		"description": {func(request *StartRequest) { request.Description = " \n" }, "invalid description: expected a non-empty string"},
-		"prompt":      {func(request *StartRequest) { request.Prompt = "  " }, "invalid prompt: expected a non-empty string"},
+		"description": {func(request *StartRequest) { request.Description = strings.Repeat("x", (128<<10)+1) }, "invalid description: at most 131072 bytes"},
+		"prompt":      {func(request *StartRequest) { request.Prompt = strings.Repeat("x", session.MaxTextBytes+1) }, "invalid prompt: at most 262144 bytes"},
 	} {
 		request := valid
 		test.mutate(&request)
@@ -98,14 +98,11 @@ func TestService_ValidatesLifecycleAndRequests(t *testing.T) {
 	}
 }
 
-func TestCheckStart_TruncatesLabelOnRuneBoundary(t *testing.T) {
-	label, err := checkStart(StartRequest{Journal: &memoryJournal{}, Description: " " + strings.Repeat("a", 126) + "中文", Prompt: "p"})
-	if err != nil || label != strings.Repeat("a", 126) {
+func TestCheckStart_PreservesFullLabel(t *testing.T) {
+	description := " " + strings.Repeat("a", 126) + "中文 \n"
+	label, err := checkStart(StartRequest{Journal: &memoryJournal{}, Description: description})
+	if err != nil || label != description {
 		t.Fatalf("label = %q, %v", label, err)
-	}
-	label, _ = checkStart(StartRequest{Journal: &memoryJournal{}, Description: strings.Repeat("b", 127) + " 中", Prompt: "p"})
-	if label != strings.Repeat("b", 127) {
-		t.Fatalf("trailing space label = %q", label)
 	}
 }
 
@@ -147,7 +144,7 @@ func TestJobOutcome_MapsRunEndings(t *testing.T) {
 		want   job.Outcome
 	}{
 		"cancelled":    {err: context.Canceled, want: job.Outcome{Status: job.StatusKilled}},
-		"deadline":     {err: errors.Join(context.DeadlineExceeded, errors.New("close")), want: job.Outcome{Status: job.StatusKilled}},
+		"deadline":     {err: context.DeadlineExceeded, want: job.Outcome{Status: job.StatusKilled}},
 		"failure":      {err: errors.New("broken"), want: job.Outcome{Status: job.StatusFailed, Detail: "broken"}},
 		"completed":    {report: Report{Outcome: session.OutcomeCompleted, Text: "answer"}, want: job.Outcome{Status: job.StatusCompleted, Result: "answer"}},
 		"canceled":     {report: Report{Outcome: session.OutcomeCanceled}, want: job.Outcome{Status: job.StatusKilled}},
@@ -173,4 +170,18 @@ func (journal *memoryJournal) Append(_ context.Context, record session.Record) (
 	}
 	journal.records = append(journal.records, record)
 	return session.Event{Sequence: uint64(len(journal.records)), Record: record}, nil
+}
+
+func TestCheckStart_DescriptionLeavesRoomForJobNotification(t *testing.T) {
+	for _, size := range []int{128 << 10, (128 << 10) + 1} {
+		description := strings.Repeat("x", size)
+		label, err := checkStart(StartRequest{Journal: &memoryJournal{}, Description: description})
+		if size == 128<<10 {
+			if err != nil || label != description {
+				t.Fatalf("boundary description rejected: %v", err)
+			}
+		} else if code(err) != CodeInvalidRequest || err.Error() != "invalid description: at most 131072 bytes" {
+			t.Fatalf("description cannot fit notification envelope: label bytes=%d, err=%v", len(label), err)
+		}
+	}
 }

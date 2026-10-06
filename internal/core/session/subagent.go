@@ -5,6 +5,10 @@ import (
 	"strings"
 )
 
+// MaxSubagentLabelBytes leaves room for the job notification envelope within
+// one text block, independently of the tool argument object's budget.
+const MaxSubagentLabelBytes = 128 << 10
+
 // OwnEvents returns the suffix of a session's events that the session wrote
 // itself. A forked child begins with events copied from its parent; its own
 // descriptor, the last one in the log, records how many. Events of a session
@@ -31,24 +35,28 @@ func Children(events []Event) []SubagentCatalog {
 	return children
 }
 
-// FinalAssistantText returns the closing answer within events: the text of
-// the last assistant message that has any, or, when none does, the streamed
-// text deltas joined in order, so an answer cut off by cancellation or a
-// failed request still surfaces. It returns "" when no text was produced.
+// FinalAssistantText selects the last assistant message with content,
+// including a tool proposal whose calls are separate records, then extracts
+// its text. Empty usage-only messages do not replace it. Streamed text is
+// the fallback only when no message with content exists.
 func FinalAssistantText(events []Event) string {
-	final := ""
-	var partial strings.Builder
-	for _, event := range events {
+	hasCalls := false
+	for _, event := range slices.Backward(events) {
 		record := event.Record
-		if record.Type == RecordAssistantMessage && Text(*record.Message) != "" {
-			final = Text(*record.Message)
+		if record.Type == RecordToolCall {
+			hasCalls = true
 		}
-		if record.Type == RecordAssistantChunk && record.Chunk.Kind == ChunkText {
-			partial.WriteString(record.Chunk.Text)
+		if record.Type == RecordAssistantMessage {
+			if len(record.Message.Content) > 0 || hasCalls {
+				return Text(*record.Message)
+			}
 		}
 	}
-	if final != "" {
-		return final
+	var partial strings.Builder
+	for _, event := range events {
+		if record := event.Record; record.Type == RecordAssistantChunk && record.Chunk.Kind == ChunkText {
+			partial.WriteString(record.Chunk.Text)
+		}
 	}
 	return partial.String()
 }

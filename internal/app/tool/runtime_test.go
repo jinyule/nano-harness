@@ -380,3 +380,58 @@ func TestRuntime_ChecksEachCallAfterEarlierCallsInTheBatch(t *testing.T) {
 		t.Fatalf("results = %#v", results)
 	}
 }
+
+func TestRuntime_CancellationStopsDispatchAndSupersedesSuccess(t *testing.T) {
+	for _, stage := range []string{"before batch", "between calls", "during check", "in body"} {
+		t.Run(stage, func(t *testing.T) {
+			runtime, _ := startRuntime(t, &fakeApprover{})
+			scope := &plugin.Scope{}
+			t.Cleanup(func() { _ = scope.Close(context.Background()) })
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			invoked := 0
+			if err := runtime.Register(simpleTool("cancel", false, "", func(context.Context, Invocation) (Result, error) {
+				cancel()
+				return Text("success"), nil
+			}), scope); err != nil {
+				t.Fatal(err)
+			}
+			send := simpleTool("send", false, "", func(context.Context, Invocation) (Result, error) {
+				invoked++
+				if stage == "in body" {
+					cancel()
+				}
+				return Text("delivered"), nil
+			})
+			if stage == "during check" {
+				send = Define(Spec[noArguments]{Name: "send", Description: "test",
+					Check: func(Invocation, noArguments) error { cancel(); return nil },
+					Execute: func(context.Context, Invocation, noArguments) (Result, error) {
+						invoked++
+						return Text("delivered"), nil
+					},
+				})
+			}
+			if err := runtime.Register(send, scope); err != nil {
+				t.Fatal(err)
+			}
+			calls := []session.ToolCall{{ID: "send", Name: "send", Arguments: json.RawMessage(`{}`)}}
+			if stage == "before batch" {
+				cancel()
+			}
+			if stage == "between calls" {
+				calls = append([]session.ToolCall{{ID: "cancel", Name: "cancel", Arguments: json.RawMessage(`{}`)}}, calls...)
+			}
+			results := runtime.ExecuteBatch(ctx, BatchRequest{Calls: calls})
+			want := "Error: tool call aborted before dispatch"
+			wantInvoked := 0
+			if stage == "in body" {
+				want, wantInvoked = "Error: tool call aborted", 1
+			}
+			got := results[len(results)-1]
+			if !got.IsError || got.Output != want || invoked != wantInvoked {
+				t.Fatalf("cancelled dispatch = %#v, invoked=%d; want %q, %d", got, invoked, want, wantInvoked)
+			}
+		})
+	}
+}

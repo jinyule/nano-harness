@@ -141,7 +141,7 @@ func TestComposition_CancelledPlanReviewCannotScheduleExit(t *testing.T) {
 	}
 	records := assembled.records(t)
 	results := orderedToolResults(records)
-	if len(results) != 1 || !results[0].IsError || results[0].Output != "Error: "+question.ErrAborted.Error() {
+	if len(results) != 1 || !results[0].IsError || results[0].Output != "Error: tool call aborted" {
 		t.Errorf("cancelled review result = %+v", results)
 	}
 	for _, record := range records {

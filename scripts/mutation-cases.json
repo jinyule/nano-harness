@@ -418,5 +418,61 @@
     "before": "\t\tif err := ctx.Err(); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tvar current *llm.Credential",
     "after": "\t\tvar current *llm.Credential",
     "test": "^TestStore_CanceledDuringAcquisitionAndRead$"
+  },
+  {
+    "id": "subagent-slot-transfer",
+    "file": "internal/app/subagent/service.go",
+    "before": "service.unreserveLocked(current.pool)",
+    "after": "service.reserved[current.pool] += 0",
+    "test": "^TestService_ConcurrentCreationsHoldOneSlotEach$"
+  },
+  {
+    "id": "subagent-inbox-cancellation",
+    "file": "internal/app/agent/agent.go",
+    "before": "if err := ctx.Err(); err != nil {",
+    "after": "if err := ctx.Err(); false && err != nil {",
+    "test": "^TestAgent_NotifyContextChecksCancellationAtInboxAcceptance$"
+  },
+  {
+    "id": "subagent-post-interrupt-wake",
+    "file": "internal/app/agent/agent.go",
+    "before": "if agent.busy && agent.turnAbortedLocked() {",
+    "after": "if false && agent.busy && agent.turnAbortedLocked() {",
+    "test": "^TestAgent_NoticeAfterInterruptWakesNextTurn$"
+  },
+  {
+    "id": "subagent-teardown-priority",
+    "file": "internal/app/subagent/service.go",
+    "before": "func teardownFailure(id string, err error) error {\n\tif err == nil {",
+    "after": "func teardownFailure(id string, err error) error {\n\tif err == nil || true {",
+    "test": "^TestService_(TeardownFailureOverridesSuccessfulSettlement|CancelledJobWithTeardownFailureIsFailed|StartupCancellationCannotMaskTeardownFailure)$"
+  },
+  {
+    "id": "subagent-job-admission-first",
+    "file": "internal/app/subagent/service.go",
+    "before": "started := make(chan struct{})",
+    "after": "_, _ = service.create(ctx, request, session.SubagentOneShot)\n\tstarted := make(chan struct{})",
+    "test": "^TestService_BackgroundAdmissionPrecedesForkSideEffects$"
+  },
+  {
+    "id": "subagent-tool-only-closing",
+    "file": "internal/core/session/subagent.go",
+    "before": "if len(record.Message.Content) > 0 || hasCalls {",
+    "after": "if len(record.Message.Content) > 0 || false && hasCalls {",
+    "test": "^TestFinalAssistantText_LastToolProposalWithholdsEarlierProgress$"
+  },
+  {
+    "id": "subagent-preserve-label",
+    "file": "internal/app/subagent/service.go",
+    "before": "return request.Description, nil",
+    "after": "return strings.TrimSpace(request.Description), nil",
+    "test": "^TestService_DelegationPreservesDescriptionAndBlankPrompt$"
+  },
+  {
+    "id": "subagent-label-notification-budget",
+    "file": "internal/core/session/subagent.go",
+    "before": "const MaxSubagentLabelBytes = 128 << 10",
+    "after": "const MaxSubagentLabelBytes = MaxArgumentsBytes",
+    "test": "^TestRecordValidateRejectsEveryInvalidShape$"
   }
 ]

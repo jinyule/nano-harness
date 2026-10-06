@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/job"
@@ -28,8 +27,6 @@ const (
 	// children of a root or one-shot agent plus all continuable children
 	// below them through continuable parents.
 	maxActiveChildren = 8
-	// maxLabelBytes is the descriptor and catalog label limit.
-	maxLabelBytes = 128
 	// JobKind is the background job kind of one-shot children.
 	JobKind = "subagent"
 )
@@ -39,6 +36,8 @@ var (
 	ErrInvalidConfig = errors.New("invalid subagent configuration")
 	// ErrNotRunning indicates the subagent service has not started or has stopped.
 	ErrNotRunning = errors.New("subagent service is not running")
+
+	errTeardownFailed = errors.New("subagent activation teardown failed")
 
 	closeAgent    = func(registry *agent.Registry, ctx context.Context, id string) error { return registry.Close(ctx, id) }
 	beforePublish = func(*agent.Agent) {}
@@ -63,6 +62,12 @@ const (
 	CodeNotResumable Code = "NOT_RESUMABLE"
 	// CodeParentUnavailable identifies a child message whose parent is not live.
 	CodeParentUnavailable Code = "PARENT_UNAVAILABLE"
+	// CodeAborted identifies cancellation at inbox acceptance.
+	CodeAborted Code = "ABORTED"
+	// CodeAbortedBeforeDispatch identifies cancellation before scheduling.
+	CodeAbortedBeforeDispatch Code = "ABORTED_BEFORE_DISPATCH"
+	// CodeTeardownFailed identifies failure to release a child and its resources.
+	CodeTeardownFailed Code = "ACTIVATION_TEARDOWN_FAILED"
 )
 
 // Error is a delegation failure whose message is shown to the model.
@@ -159,6 +164,8 @@ type child struct {
 	watched bool
 	closing bool
 	done    chan struct{}
+	// closeErr is published before done closes and shared by release waiters.
+	closeErr error
 	// generation counts accepted deliveries and child removals; wake is
 	// closed and replaced on each. The settlement watcher compares
 	// generations across an idle wait so a message accepted meanwhile keeps
@@ -265,28 +272,47 @@ func (service *Service) Run(ctx context.Context, request StartRequest) (Report, 
 	return service.finish(ctx, current, request.Prompt)
 }
 
-// StartBackground creates a one-shot child and runs it as a background job
-// owned by the parent, returning the job id. The job's value result is the
-// child's closing answer; killing the job releases the child.
+// StartBackground admits a parent-owned job before creating its one-shot
+// child. Startup uses the job's cancellation signal and failures become job
+// output. It waits for startup to commit the catalog in the caller's active
+// step, then returns the job id without waiting for the child's turn.
 func (service *Service) StartBackground(ctx context.Context, request StartRequest) (string, error) {
-	current, err := service.create(ctx, request, session.SubagentOneShot)
-	if err != nil {
+	if _, err := checkStart(request); err != nil {
 		return "", err
 	}
-	id, err := service.jobs.Launch(job.Spec{Kind: JobKind, Label: current.label, Owner: request.ParentID, Run: func(jobContext context.Context, _ *job.Output) job.Outcome {
+	if !service.running() {
+		return "", ErrNotRunning
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	started := make(chan struct{})
+	id, err := service.jobs.Launch(job.Spec{Kind: JobKind, Label: request.Description, Owner: request.ParentID, Run: func(jobContext context.Context, _ *job.Output) job.Outcome {
+		current, err := func() (*child, error) {
+			defer close(started)
+			return service.create(jobContext, request, session.SubagentOneShot)
+		}()
+		if err != nil {
+			return jobOutcome(Report{}, err)
+		}
 		report, err := service.finish(jobContext, current, request.Prompt)
 		return jobOutcome(report, err)
 	}})
 	if err != nil {
-		return "", errors.Join(err, service.close(context.WithoutCancel(ctx), current, nil))
+		return "", err
 	}
+	// The parent step cannot close before its catalog append finishes.
+	<-started
 	return id, nil
 }
 
-// jobOutcome maps a background run to its job settlement: a cancelled run
-// is killed, and any other unfinished run fails with its stop reason.
+// jobOutcome maps a background run to its job settlement. Teardown failure
+// takes priority over cancellation and withholds the child's output; other
+// cancelled runs are killed and unfinished runs fail with their stop reason.
 func jobOutcome(report Report, err error) job.Outcome {
 	switch {
+	case errors.Is(err, errTeardownFailed):
+		return job.Outcome{Status: job.StatusFailed, Detail: err.Error()}
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 		return job.Outcome{Status: job.StatusKilled}
 	case err != nil:
@@ -349,11 +375,17 @@ func (service *Service) create(ctx context.Context, request StartRequest, mode s
 		provider, seed = session.SubagentFork, completedTurns(events)
 	}
 	pool := ""
+	reserved := false
 	if mode == session.SubagentContinuable {
 		if pool, err = service.reserve(request.ParentID); err != nil {
 			return nil, err
 		}
-		defer service.unreserve(pool)
+		reserved = true
+		defer func() {
+			if reserved {
+				service.unreserve(pool)
+			}
+		}()
 	}
 	created, err := service.registry.Create(ctx, agent.CreateRequest{
 		ParentID: request.ParentID, Label: label, Mode: mode, Provider: provider, Seed: seed, Depth: depth, Create: true,
@@ -365,8 +397,9 @@ func (service *Service) create(ctx context.Context, request StartRequest, mode s
 	current := &child{id: created.Status().SessionID, parent: request.ParentID, label: label, mode: mode, depth: depth, pool: pool, agent: created, boundary: len(seed), done: make(chan struct{}), wake: make(chan struct{})}
 	beforePublish(created)
 	if err := service.publish(current); err != nil {
-		return nil, errors.Join(err, closeAgent(service.registry, context.WithoutCancel(ctx), current.id))
+		return nil, errors.Join(err, teardownFailure(current.id, closeAgent(service.registry, context.WithoutCancel(ctx), current.id)))
 	}
+	reserved = false
 	catalog := session.Record{Type: session.RecordSubagentCatalog, Turn: request.Turn, Step: request.Step, Catalog: &session.SubagentCatalog{SessionID: current.id, Mode: mode, Label: label}}
 	if _, err := request.Journal.Append(ctx, catalog); err != nil {
 		return nil, errors.Join(err, service.close(context.WithoutCancel(ctx), current, nil))
@@ -374,25 +407,20 @@ func (service *Service) create(ctx context.Context, request StartRequest, mode s
 	return current, nil
 }
 
-// checkStart validates model-supplied delegation arguments and returns the
-// display label: the trimmed description, cut to the label limit on a rune
-// boundary because it is only shown, never interpreted.
+// checkStart preserves model-supplied strings and rejects explicit bounds
+// before creating a transcript. Empty descriptions and prompts are valid;
+// the job service separately requires a non-empty background job label.
 func checkStart(request StartRequest) (string, error) {
 	if request.Journal == nil {
 		return "", fail(CodeInvalidRequest, "subagent delegation requires a calling session journal")
 	}
-	label := strings.TrimSpace(request.Description)
-	if label == "" {
-		return "", fail(CodeInvalidRequest, "invalid description: expected a non-empty string")
+	if len(request.Description) > session.MaxSubagentLabelBytes {
+		return "", fail(CodeInvalidRequest, "invalid description: at most %d bytes", session.MaxSubagentLabelBytes)
 	}
-	if strings.TrimSpace(request.Prompt) == "" {
-		return "", fail(CodeInvalidRequest, "invalid prompt: expected a non-empty string")
+	if len(request.Prompt) > session.MaxTextBytes {
+		return "", fail(CodeInvalidRequest, "invalid prompt: at most %d bytes", session.MaxTextBytes)
 	}
-	for len(label) > maxLabelBytes {
-		_, size := utf8.DecodeLastRuneInString(label)
-		label = label[:len(label)-size]
-	}
-	return strings.TrimSpace(label), nil
+	return request.Description, nil
 }
 
 // completedTurns is the balanced prefix a fork inherits: every event up to
@@ -454,6 +482,10 @@ func (service *Service) admitLocked(parentID string) (string, error) {
 func (service *Service) unreserve(pool string) {
 	service.mu.Lock()
 	defer service.mu.Unlock()
+	service.unreserveLocked(pool)
+}
+
+func (service *Service) unreserveLocked(pool string) {
 	service.reserved[pool]--
 	if service.reserved[pool] == 0 {
 		delete(service.reserved, pool)
@@ -470,6 +502,10 @@ func (service *Service) publish(current *child) error {
 	}
 	if parent := service.children[current.parent]; parent != nil && parent.closing {
 		return fail(CodeUnauthorized, "subagent parent %q is being released; the child was not established", current.parent)
+	}
+	// Publishing transfers the reservation into the resident handle atomically.
+	if current.pool != "" {
+		service.unreserveLocked(current.pool)
 	}
 	service.children[current.id] = current
 	return nil
@@ -564,7 +600,7 @@ func (service *Service) watch(current *child) {
 			message := settlementMessage(current.id, outcome, session.FinalAssistantText(own))
 			notice = &message
 		}
-		// A failed release still removed the handle; nothing reads the error.
+		// release reflects cleanup failure in the parent notice before removing the handle.
 		_ = service.release(context.WithoutCancel(service.ctx), current, notice)
 		return
 	}
@@ -596,7 +632,12 @@ func (service *Service) close(ctx context.Context, current *child, notice *sessi
 	if current.closing {
 		done := current.done
 		service.mu.Unlock()
-		return waitFor(ctx, done)
+		if err := waitFor(ctx, done); err != nil {
+			return err
+		}
+		service.mu.Lock()
+		defer service.mu.Unlock()
+		return current.closeErr
 	}
 	current.closing = true
 	// A watcher parked on this child's children re-checks and exits.
@@ -628,9 +669,15 @@ func (service *Service) release(ctx context.Context, current *child, notice *ses
 		failures = append(failures, err)
 	}
 	failures = append(failures, service.jobs.Release(ctx, current.id))
+	failure := teardownFailure(current.id, errors.Join(failures...))
+	if failure != nil && notice != nil {
+		message := settlementMessage(current.id, session.OutcomeError, "")
+		notice = &message
+	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	delete(service.children, current.id)
+	current.closeErr = failure
 	close(current.done)
 	parent := service.children[current.parent]
 	delivered := false
@@ -645,7 +692,16 @@ func (service *Service) release(ctx context.Context, current *child, notice *ses
 		}
 		wakeLocked(parent)
 	}
-	return errors.Join(failures...)
+	return failure
+}
+
+// teardownFailure preserves a cleanup marker across joined startup and
+// cancellation errors; their order cannot change the terminal classification.
+func teardownFailure(id string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &Error{Code: CodeTeardownFailed, Message: fmt.Sprintf("subagent %q activation teardown failed: %v", id, err), Err: fmt.Errorf("%w: %w", errTeardownFailed, err)}
 }
 
 // SendMessage delivers one model-authored message between a direct parent
@@ -655,6 +711,9 @@ func (service *Service) release(ctx context.Context, current *child, notice *ses
 // recipient receives the message at its next step boundary and an idle one
 // starts a turn with it. The call returns once the message is accepted.
 func (service *Service) SendMessage(ctx context.Context, senderID, targetID, text string) error {
+	if err := ctx.Err(); err != nil {
+		return &Error{Code: CodeAbortedBeforeDispatch, Message: "tool call aborted before dispatch", Err: err}
+	}
 	if len(text) > session.MaxTextBytes {
 		return fail(CodeInvalidRequest, "invalid message: at most %d bytes", session.MaxTextBytes)
 	}
@@ -664,6 +723,9 @@ func (service *Service) SendMessage(ctx context.Context, senderID, targetID, tex
 	}
 	for {
 		if retry, err := service.deliver(ctx, sender, senderID, targetID, text); err != nil || !retry {
+			if err != nil && ctx.Err() != nil {
+				return &Error{Code: CodeAborted, Message: "tool call aborted", Err: err}
+			}
 			return err
 		}
 	}
@@ -673,13 +735,24 @@ func (service *Service) SendMessage(ctx context.Context, senderID, targetID, tex
 // changed residency and the caller should try again.
 func (service *Service) deliver(ctx context.Context, sender *agent.Agent, senderID, targetID, text string) (bool, error) {
 	service.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		service.mu.Unlock()
+		return false, &Error{Code: CodeAborted, Message: "tool call aborted", Err: err}
+	}
 	if !service.active {
 		service.mu.Unlock()
 		return false, ErrNotRunning
 	}
 	if self := service.children[senderID]; self != nil && self.parent == targetID && self.mode == session.SubagentContinuable && !self.closing {
 		defer service.mu.Unlock()
-		if err := service.registry.Notify(targetID, agentMessage(senderID, text)); err != nil {
+		parent, err := service.registry.Find(targetID)
+		if err != nil {
+			return false, &Error{Code: CodeParentUnavailable, Message: "direct parent is not live; the message was not delivered", Err: err}
+		}
+		if err := notifyMessage(ctx, parent, senderID, text); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return false, err
+			}
 			return false, &Error{Code: CodeParentUnavailable, Message: "direct parent is not live; the message was not delivered", Err: err}
 		}
 		if parent := service.children[targetID]; parent != nil {
@@ -700,13 +773,16 @@ func (service *Service) deliver(ctx context.Context, sender *agent.Agent, sender
 			service.mu.Unlock()
 			return false, err
 		}
-		err := target.agent.Notify(agentMessage(senderID, text))
+		err := notifyMessage(ctx, target.agent, senderID, text)
 		if err == nil {
 			acceptedLocked(service, target)
 			deliveredLocked(target)
 		}
 		service.mu.Unlock()
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return false, err
+			}
 			// The agent stopped outside this service; drop its handle.
 			return false, errors.Join(err, service.close(context.WithoutCancel(ctx), target, nil))
 		}
@@ -714,6 +790,17 @@ func (service *Service) deliver(ctx context.Context, sender *agent.Agent, sender
 	}
 	service.mu.Unlock()
 	return service.resume(ctx, sender, senderID, targetID)
+}
+
+// notifyMessage checks cancellation at the recipient's inbox acceptance.
+func notifyMessage(ctx context.Context, recipient *agent.Agent, senderID, text string) error {
+	if err := recipient.NotifyContext(ctx, agentMessage(senderID, text)); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return &Error{Code: CodeAborted, Message: "tool call aborted", Err: err}
+		}
+		return err
+	}
+	return nil
 }
 
 func waitFor(ctx context.Context, done <-chan struct{}) error {
@@ -789,7 +876,7 @@ func (service *Service) resume(ctx context.Context, sender *agent.Agent, senderI
 		service.dropPlaceholder(placeholder)
 	}
 	if err != nil {
-		return false, errors.Join(err, closeAgent(service.registry, release, targetID))
+		return false, errors.Join(err, teardownFailure(targetID, closeAgent(service.registry, release, targetID)))
 	}
 	return true, nil
 }

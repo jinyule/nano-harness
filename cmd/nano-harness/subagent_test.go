@@ -41,6 +41,8 @@ type subagentModel struct {
 	resumedOnce sync.Once
 }
 
+var forkDescription = "  " + strings.Repeat("审阅", 40) + " \n"
+
 var startedPattern = regexp.MustCompile(`started subagent (\S+)`)
 
 func (model *subagentModel) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -114,7 +116,7 @@ func (model *subagentModel) ServeHTTP(writer http.ResponseWriter, request *http.
 	case !strings.Contains(history, "started subagent"):
 		calls = []scriptedCall{
 			{"subagent", map[string]any{"description": "worker", "prompt": "CHILD_TASK"}},
-			{"subagent_fork", map[string]any{"description": "review", "prompt": "FORK_TASK"}},
+			{"subagent_fork", map[string]any{"description": forkDescription, "prompt": "FORK_TASK"}},
 		}
 	case !strings.Contains(history, "[running]"):
 		calls = []scriptedCall{{"list_agents", map[string]any{}}, {"list_agents", map[string]any{"scope": "descendants"}}}
@@ -271,9 +273,13 @@ func TestComposition_SubagentsEndToEnd(t *testing.T) {
 	for _, entry := range session.Children(readTranscript(t, filepath.Join(data, "sessions", subagentRoot+".jsonl"))) {
 		children[entry.Label] = entry
 	}
-	worker, review := children["worker"], children["review"]
+	worker, review := children["worker"], children[forkDescription]
 	if len(children) != 2 || worker.SessionID != child || worker.Mode != session.SubagentContinuable || review.Mode != session.SubagentOneShot || review.SessionID == "" {
 		t.Fatalf("root catalog = %#v", children)
+	}
+	reviewOwn := session.OwnEvents(readTranscript(t, filepath.Join(data, "sessions", review.SessionID+".jsonl")))
+	if reviewOwn[0].Record.Subagent.Label != forkDescription {
+		t.Errorf("fork descriptor label = %q", reviewOwn[0].Record.Subagent.Label)
 	}
 	childRecords := transcript(child)
 	if childRecords[0].Subagent.Provider != session.SubagentSpawn || childRecords[1].Approval.Policy != session.ApprovalNever {

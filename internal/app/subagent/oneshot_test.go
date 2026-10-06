@@ -22,7 +22,7 @@ func TestService_RunSpawnsOneShotChildAndReleasesIt(t *testing.T) {
 		t.Fatalf("Run = %#v, %v", report, err)
 	}
 	children := session.Children(h.events("root"))
-	if len(children) != 1 || children[0].Mode != session.SubagentOneShot || children[0].Label != "scan files" {
+	if len(children) != 1 || children[0].Mode != session.SubagentOneShot || children[0].Label != "  scan files " {
 		t.Fatalf("catalog = %#v", children)
 	}
 	id := children[0].SessionID

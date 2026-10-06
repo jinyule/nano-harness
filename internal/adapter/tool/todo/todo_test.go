@@ -221,7 +221,7 @@ func TestWriteTool_RequiresOwningSessionAndReportsCommitFailures(t *testing.T) {
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	results := runtime.ExecuteBatch(canceled, appTool.BatchRequest{SessionID: "session", Turn: 1, Step: 1, Calls: []session.ToolCall{{ID: "call", Name: toolName, Arguments: json.RawMessage(valid)}}, Journal: journal})
-	if !results[0].IsError || !strings.Contains(results[0].Output, context.Canceled.Error()) || len(journal.written()) != 0 {
+	if !results[0].IsError || results[0].Output != "Error: tool call aborted before dispatch" || len(journal.written()) != 0 {
 		t.Fatalf("canceled write = %+v records=%v", results, journal.written())
 	}
 }

@@ -41,6 +41,7 @@ type Agent struct {
 	busy          bool
 	pending       int
 	currentCancel context.CancelFunc
+	currentDone   <-chan struct{}
 	idleWaiters   []chan struct{}
 	last          TurnResult
 	// notices wait for the next step boundary; woken asks the worker to
@@ -108,7 +109,7 @@ func (agent *Agent) run(ctx context.Context) {
 func (agent *Agent) turn(ctx context.Context, message session.Message) TurnResult {
 	turnContext, cancel := context.WithCancel(ctx)
 	agent.mu.Lock()
-	agent.busy, agent.currentCancel = true, cancel
+	agent.busy, agent.currentCancel, agent.currentDone = true, cancel, turnContext.Done()
 	agent.mu.Unlock()
 	result := agent.engine.runTurn(turnContext, runInput{
 		journal: agent.journal, message: message, persona: agent.persona,
@@ -119,12 +120,12 @@ func (agent *Agent) turn(ctx context.Context, message session.Message) TurnResul
 }
 
 // finishTurn records a settled turn. Notices that arrived too late for it
-// open another turn unless the turn was cancelled or a queued turn will
-// deliver them first.
+// open another turn unless a queued turn will deliver them first. A
+// cancelled turn only replays a wake requested after cancellation.
 func (agent *Agent) finishTurn(result TurnResult, submitted bool) {
 	agent.mu.Lock()
 	defer agent.mu.Unlock()
-	agent.currentCancel = nil
+	agent.currentCancel, agent.currentDone = nil, nil
 	agent.busy = false
 	if submitted {
 		agent.pending--
@@ -133,7 +134,7 @@ func (agent *Agent) finishTurn(result TurnResult, submitted bool) {
 	if !errors.Is(result.Err, ErrNotAdmitted) {
 		agent.last = result
 	}
-	agent.woken = len(agent.notices) > 0 && agent.pending == 0 && result.Outcome != session.OutcomeCanceled && agent.mode != "one-shot"
+	agent.woken = len(agent.notices) > 0 && agent.pending == 0 && (result.Outcome != session.OutcomeCanceled || agent.woken) && agent.mode != "one-shot"
 	if agent.pending == 0 && !agent.woken {
 		agent.notifyIdleLocked()
 	}
@@ -160,13 +161,20 @@ func (agent *Agent) claimWake() (session.Message, bool) {
 // completion. A busy agent appends it as a user message at the next step
 // boundary of its active turn, which then cannot close before answering
 // it; the last allowed step takes none, so a new turn answers it. An idle
-// agent opens a new turn for it. A cancelled turn takes no notices, and
-// the ones it leaves wait for the next turn. Pending notices are in memory
-// and are lost when the agent stops. A one-shot agent runs exactly one
-// turn, so it accepts notices only while that turn runs and never opens
-// another for them; notices that arrive too late for it are refused or
-// discarded.
+// agent opens a new turn for it. A cancelled turn takes no notices; those
+// queued before cancellation wait for the next turn. A notice accepted
+// after cancellation wakes that turn as soon as the cancelled turn exits.
+// Pending notices are in memory and are lost when the agent stops. A
+// one-shot agent runs exactly one turn, so it accepts notices only while
+// that turn runs and never opens another for them; notices that arrive too
+// late for it are refused or discarded.
 func (agent *Agent) Notify(message session.Message) error {
+	return agent.NotifyContext(context.Background(), message)
+}
+
+// NotifyContext is Notify with a cancellation cutoff under the inbox lock.
+// If ctx is cancelled before acceptance, the message is not queued.
+func (agent *Agent) NotifyContext(ctx context.Context, message session.Message) error {
 	if !validUserMessage(message) {
 		return ErrInvalidConfig
 	}
@@ -175,10 +183,16 @@ func (agent *Agent) Notify(message session.Message) error {
 	if !agent.active {
 		return ErrNotRunning
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if agent.mode == "one-shot" && !agent.busy {
 		return ErrInvalidConfig
 	}
 	agent.notices = append(agent.notices, cloneMessage(message))
+	if agent.busy && agent.turnAbortedLocked() {
+		agent.woken = true
+	}
 	if !agent.busy && agent.pending == 0 && !agent.woken {
 		agent.woken = true
 		select {
@@ -189,9 +203,22 @@ func (agent *Agent) Notify(message session.Message) error {
 	return nil
 }
 
+func (agent *Agent) turnAbortedLocked() bool {
+	select {
+	case <-agent.currentDone:
+		return true
+	default:
+		return false
+	}
+}
+
 func (agent *Agent) drainNotices() []session.Message {
 	agent.mu.Lock()
 	defer agent.mu.Unlock()
+	// Inputs arriving after cancellation belong to the next turn.
+	if agent.turnAbortedLocked() {
+		return nil
+	}
 	notices := agent.notices
 	agent.notices = nil
 	return notices
@@ -199,7 +226,9 @@ func (agent *Agent) drainNotices() []session.Message {
 
 // Submit queues one complete user message.
 func (agent *Agent) Submit(ctx context.Context, message session.Message) (<-chan TurnResult, error) {
-	if !validUserMessage(message) {
+	// Delegation preserves even an empty task, represented by a text block.
+	delegation := agent.delegated && message.Role == session.RoleUser && message.Source.Kind == "delegation" && (session.Record{Type: session.RecordUserMessage, Turn: 1, Message: &message}).Validate() == nil
+	if !delegation && !validUserMessage(message) {
 		return nil, ErrInvalidConfig
 	}
 	request := turnRequest{message: cloneMessage(message), result: make(chan TurnResult, 1)}
@@ -277,10 +306,9 @@ func (agent *Agent) drainSteers() []session.Message {
 // Interrupt cancels only the active turn; queued followups remain ordered.
 func (agent *Agent) Interrupt() {
 	agent.mu.Lock()
-	cancel := agent.currentCancel
-	agent.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	defer agent.mu.Unlock()
+	if agent.currentCancel != nil {
+		agent.currentCancel()
 	}
 }
 

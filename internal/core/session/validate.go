@@ -390,7 +390,8 @@ func validSubagentMode(mode string) bool {
 }
 
 func validSubagentLabel(label string) bool {
-	return label != "" && len(label) <= 128
+	// Leave room for the job notification envelope within one text block.
+	return len(label) <= MaxSubagentLabelBytes
 }
 
 func (record Record) requireTurnEnd() error {

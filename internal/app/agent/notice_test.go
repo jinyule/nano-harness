@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/jinyule/nano-harness/internal/core/plugin"
@@ -308,5 +309,63 @@ func TestAgent_OneShotNeverOpensASecondTurnForLateNotices(t *testing.T) {
 	}
 	if err := child.Notify(noticeMessage("after the turn")); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("Notify after the turn = %v", err)
+	}
+}
+
+func TestAgent_NoticeAfterInterruptWakesNextTurn(t *testing.T) {
+	started, aborted, release := make(chan struct{}, 1), make(chan struct{}), make(chan struct{})
+	harness := startEngineHarness(t, 1,
+		modelAction{started: started, wait: make(chan struct{}), cancelled: func() { close(aborted); <-release }},
+		modelAction{completion: assistantCompletion("resumed")},
+	)
+	registry, _ := startRegistry(t, harness, newMemoryRepository(), newMemoryPolicy())
+	var unblock sync.Once
+	t.Cleanup(func() { unblock.Do(func() { close(release) }) })
+	root, _ := registry.Create(context.Background(), CreateRequest{SessionID: "root", Create: true})
+	results, _ := root.Submit(context.Background(), agentMessage(session.RoleUser, "block"))
+	<-started
+	if err := root.Notify(noticeMessage("before interrupt")); err != nil {
+		t.Fatal(err)
+	}
+	root.Interrupt()
+	<-aborted
+	if err := root.Notify(noticeMessage("after interrupt")); err != nil {
+		t.Fatal(err)
+	}
+	if notices := root.drainNotices(); len(notices) != 0 {
+		t.Fatalf("aborted turn consumed next-turn notices: %v", notices)
+	}
+	unblock.Do(func() { close(release) })
+	if result := <-results; result.Outcome != session.OutcomeCanceled {
+		t.Fatalf("old turn = %+v", result)
+	}
+	if err := root.WhenIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := root.Events(context.Background())
+	if texts := userTexts(events); !slices.Equal(texts, []string{"1:block", "2:before interrupt", "2:after interrupt"}) || root.Status().Last.Text != "resumed" {
+		t.Fatalf("post-interrupt wake missing: messages=%q status=%+v", texts, root.Status())
+	}
+}
+
+func TestAgent_NotifyContextChecksCancellationAtInboxAcceptance(t *testing.T) {
+	harness := startEngineHarness(t, 1)
+	registry, _ := startRegistry(t, harness, newMemoryRepository(), newMemoryPolicy())
+	root, _ := registry.Create(context.Background(), CreateRequest{SessionID: "root", Create: true})
+	ctx, cancel := context.WithCancel(context.Background())
+	root.mu.Lock()
+	done := make(chan error, 1)
+	go func() { done <- root.NotifyContext(ctx, noticeMessage("must not arrive")) }()
+	cancel()
+	root.mu.Unlock()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled acceptance = %v", err)
+	}
+	if err := root.WhenIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := root.Events(context.Background())
+	if texts := userTexts(events); len(texts) != 0 || root.Status().Last.Turn != 0 {
+		t.Fatalf("cancelled notice opened a turn: %q, %+v", texts, root.Status())
 	}
 }

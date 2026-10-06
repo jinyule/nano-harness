@@ -35,7 +35,7 @@ func textMessage(source string, texts ...string) session.Message {
 // fork's inherited prefix stays unchanged.
 func taskMessage(prompt, parentID string, continuable bool) session.Message {
 	if !continuable {
-		return textMessage(SourceDelegation, prompt)
+		return session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: SourceDelegation}, Content: []session.ContentBlock{{Type: session.ContentText, Text: prompt}}}
 	}
 	// Session IDs are ASCII letters, digits, '.', '_' and '-', so Go and JSON
 	// quoting agree.

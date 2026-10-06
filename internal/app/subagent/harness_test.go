@@ -54,9 +54,10 @@ type rule struct {
 // reply is one scripted completion. hold makes the agent call the hold
 // tool; block makes the stream wait until its request is cancelled.
 type reply struct {
-	text  string
-	hold  bool
-	block bool
+	text       string
+	hold       bool
+	block      bool
+	afterAbort func()
 }
 
 type testModel struct {
@@ -114,6 +115,9 @@ func (model *testModel) Stream(ctx context.Context, _ llm.Credential, request ll
 	if chosen.block {
 		model.blocked <- struct{}{}
 		<-ctx.Done()
+		if chosen.afterAbort != nil {
+			chosen.afterAbort()
+		}
 		return llm.Completion{}, ctx.Err()
 	}
 	message := session.Message{Role: session.RoleAssistant, Source: session.MessageSource{Kind: "provider", Plugin: "openai"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: chosen.text}}}

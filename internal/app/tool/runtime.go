@@ -284,6 +284,10 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 		return validated.result
 	}
 	result.CallID = candidate.ID
+	if ctx.Err() != nil {
+		result.Output, result.IsError = "Error: tool call aborted before dispatch", true
+		return result
+	}
 	if err := validated.call.check(invocation); err != nil {
 		result.Output, result.IsError = errorText(err), true
 		return result
@@ -303,7 +307,15 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 		}
 		invocation.Approved = true
 	}
+	if ctx.Err() != nil {
+		result.Output, result.IsError = "Error: tool call aborted before dispatch", true
+		return result
+	}
 	output, err := validated.call.execute(ctx, invocation)
+	if ctx.Err() != nil {
+		result.Output, result.IsError = "Error: tool call aborted", true
+		return result
+	}
 	if err != nil {
 		result.Output, result.IsError = errorText(err), true
 		return result

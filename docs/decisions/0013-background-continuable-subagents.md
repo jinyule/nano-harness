@@ -26,6 +26,8 @@
 
 `subagent` 与 `subagent_fork` 声明并发安全，与上游一致；三个控制工具是 exclusive。结果文案沿用上游 render：`started subagent <id>`、`started background subagent job <id>`、前台返回 child 的最终文本；`message delivered to agent <id>`；`interrupt requested for agent <id>`；`list_agents` 每行 `<id> [running|inactive][ parent=<id> depth=<n>] — <label>`，读不到目录的条目为 `<id> [diagnostic: unavailable]...`，空列表为 `(no subagents)`。
 
+description 原样进入 descriptor、catalog、列表与 job label，不去空白或截断；空字符串和空白字符串在前台及 continuable 委派中合法，prompt 同样允许为空或只有空白。后台 one-shot 的空 label 由 job 准入拒绝。description 最多 128 KiB，独立于完整工具参数对象的预算，为 job 通知的附加文案在 256 KiB 文本块内保留空间；prompt 最多 256 KiB，与单文本块上限一致。服务在创建 child 前明确拒绝超限值；持久化 decoder 同样拒绝超限 label。字段、descriptor v2 与 composition token 不变，已有合法记录均可读取；旧二进制仍可能拒绝含超过 128 字节或空 label 的新记录。
+
 前台 run 未完成时返回错误：`subagent run was cancelled`（取消或中断恢复）、`subagent run failed`（错误）或 `subagent run ended abnormally (step_limit)`，有部分回答时追加 `\nPartial output before the run ended:\n<text>`。
 
 > 后续停止契约：[ADR-0018](0018-goal-stop-outcomes.md) 将 `max_tokens` 纳入前台异常结束错误、后台结算通知和后台 job 的失败结局；此处保留原结果描述。
@@ -35,12 +37,14 @@
 `internal/app/subagent.Service`（插件 `subagents`）拥有全部 child 句柄：
 
 - **前台 one-shot**（`subagent` 且 `run_in_background: false`，或 `subagent_fork` 默认）：创建 child、提交任务、等待唯一一个 turn、读取最终回答、释放 child。调用被取消时释放 child 并返回取消错误。
-- **后台 one-shot**（`subagent_fork` 且 `run_in_background: true`）：child 在调用内创建并写入目录，然后作为 kind `subagent`、owner 为 parent 的 job 运行。job 值结果是 child 的最终回答；完成为 `completed`，取消为 `killed`，其他结局为 `failed`、detail 为 outcome 名称。`job_output`、`job_kill` 按 ADR-0009 读取与终止它。
+- **后台 one-shot**（`subagent_fork` 且 `run_in_background: true`）：先准入 kind `subagent`、owner 为 parent 的 job，再在 job 拥有的取消信号下创建 child、复制 fork 种子并写 parent catalog。池满或 job 服务停止时没有 child 或 catalog 副作用。调用只等待启动阶段结束，使 catalog 在调用方活动工具 step 内提交；启动失败仍返回 job id，由 `job_output` 显示 `failed` 与错误 detail。job 值结果是 child 的最终回答；完成为 `completed`，取消为 `killed`，其他结局为 `failed`、detail 为 outcome 名称。清理失败优先于取消，记为 `failed` 且不提供成功值结果。`job_output`、`job_kill` 按 ADR-0009 读取与终止它。
 - **后台 continuable**（`subagent` 默认）：创建 child、提交任务后立即返回 id。child 驻留（resident）期间接收消息；当它空闲、等待期间没有新投递、没有 continuable 子代理，且服务投递给它的消息都已写入日志时**结算**：服务关闭 child agent（status 变为 `inactive`），然后通知 parent。之后 parent 的 `send_message` 从 transcript 冷恢复它。
+
+清理失败归类为 `ACTIVATION_TEARDOWN_FAILED`，保留底层原因且不阻止其他 cleanup。continuable 结算必须在清理之后决定通知：失败时通知 parent `failed before it finished.` 与 `It left no closing message.`，不附 child 的成功或部分输出；并发释放调用方得到同一清理错误。
 
 释放 child 时先中断它，按深度优先释放它的 live 子代理，关闭 agent 与 transcript，再释放它拥有的 job。服务关闭与 one-shot parent 被回收时也按此顺序释放整棵子树，但这些拆除不是结算，不发通知。
 
-每个 continuable 池最多 8 个驻留 child：根或 one-shot agent 的 continuable child 自成一池，continuable child 的 continuable 子代理共用其池。创建与冷恢复在重建 agent 前占位；超限立即返回 `subagent limit reached (active child limit: 8); wait for an existing child to finish or complete this work with the current agents`，不排队。one-shot child 不占池。绝对 delegation depth 上限仍为 4，超限返回 `subagent depth <n> exceeds maxDepth 4`。上游 Base 默认深度为 1、池上限可由设置修改；本仓保留既有的固定深度 4 和上游默认池上限 8，两者都不作为部署配置。
+每个 continuable 池最多 8 个驻留 child：根或 one-shot agent 的 continuable child 自成一池，continuable child 的 continuable 子代理共用其池。创建与冷恢复在重建 agent 前占位；创建的 reservation 与发布后的 resident handle 在同一临界区转交，整个创建过程只占一个名额，失败释放占位；超限立即返回 `subagent limit reached (active child limit: 8); wait for an existing child to finish or complete this work with the current agents`，不排队。one-shot child 不占池。绝对 delegation depth 上限仍为 4，超限返回 `subagent depth <n> exceeds maxDepth 4`。上游 Base 默认深度为 1、池上限可由设置修改；本仓保留既有的固定深度 4 和上游默认池上限 8，两者都不作为部署配置。
 
 ### 3. 消息与通知
 
@@ -49,9 +53,11 @@
 - 任何 agent 可以写给自己目录中的 continuable 直接 child；child 不驻留时冷恢复。目录中的 one-shot child、不在目录中的 id 和他人的 child 分别返回 `has no supported continuation state ...`、`is unavailable` 和 `belongs to another parent session`。
 - 驻留的 continuable child 可以写给直接 parent；parent 不再 live 时返回 `direct parent is not live; the message was not delivered`。one-shot child 或非驻留 child 写给 parent 返回 `is not a resident continuable child and cannot send to parent ...`。
 
-消息以 `user/message`（source kind `agent-message`）投递，内容为 `Agent <sender> sent a message: ` 加正文两个文本块，经 `Agent.Notify`：接收方忙时在下一个 step 边界追加，空闲时开启新 turn。continuable child 的首条任务（source kind `delegation`）在正文后追加上游的返回指引，告诉它 parent id 并要求用 `send_message` 报告结果；one-shot 任务只有正文。
+`send_message` 在调度之前和收件箱接受消息的锁内检查调用取消。前者返回 `ABORTED_BEFORE_DISPATCH`（`tool call aborted before dispatch`），后者返回 `ABORTED`（`tool call aborted`）；工具结果使用 `Error: ` 信封。被截止线拒绝的消息不入队、不写 recipient 日志，也不释放原有 resident child。
 
-结算通知是 source kind `subagent-settled` 的 `user/message`，以 `Background subagent <id> finished and will do no further work unless you send it more.`（取消或中断为 `was stopped before it finished.`，错误为 `failed before it finished.`，step 上限为 `ended abnormally (step_limit) before it finished.`）开头，后接 `Its closing message:` 与本次驻留的最终回答，没有回答时为 `It left no closing message.`。结局取本次驻留中最后一个 `turn/end`，回答取最后一条非空 assistant message，没有时拼接流式文本。child 的移除和通知在同一临界区完成，continuable parent 不会在两者之间结算。
+消息以 `user/message`（source kind `agent-message`）投递，内容为 `Agent <sender> sent a message: ` 加正文两个文本块，经 `Agent.NotifyContext`：接收方忙时在下一个 step 边界追加，空闲时开启新 turn。中断已生效、旧 turn 尚未退出时接受的新消息属于下一 turn，并保留唤醒请求；旧 turn 退出后自动处理，旧 turn 不消费这些待投递消息。中断前已排队的消息不单独唤醒，但可随该新 turn 一起提交。one-shot 仍不因此开启第二个 turn。continuable child 的首条任务（source kind `delegation`）在正文后追加上游的返回指引，告诉它 parent id 并要求用 `send_message` 报告结果；one-shot 任务只有正文。
+
+结算通知是 source kind `subagent-settled` 的 `user/message`，以 `Background subagent <id> finished and will do no further work unless you send it more.`（取消或中断为 `was stopped before it finished.`，错误为 `failed before it finished.`，step 上限为 `ended abnormally (step_limit) before it finished.`）开头，后接 `Its closing message:` 与本次驻留的最终回答，没有回答时为 `It left no closing message.`。结局取本次驻留中最后一个 `turn/end`，回答先选择最后一条含内容块的 assistant message，再提取文本；本仓分开记录的 `tool/call` 同样属于该 assistant 消息的内容。最后消息只有工具提案时没有 closing text，不退回较早的进度文字。空 content 的 usage-only 消息不替换候选；没有任何带内容的 assistant 消息时才拼接流式文本。child 的移除和通知在同一临界区完成，continuable parent 不会在两者之间结算。
 
 `interrupt_agent` 取消调用方任一 live 后代当前 turn 而不等待，不级联到目标的子代理；目标不 live 是被接受的空操作，自身或非后代返回 `UNAUTHORIZED` 类错误。上游只中断 continuable activation；本仓对 live one-shot 后代同样有效。
 
@@ -83,7 +89,7 @@ session format 仍为 v2，变化都在记录层：
 
 已知限制：
 
-- 被中断的 turn 不处理已接受但尚未提交的消息。服务按本次驻留投递的消息与结算通知计数，与日志中已提交的 `agent-message`/`subagent-settled` 比较；最后一个 turn 以取消结束且仍有差额时，child 保持驻留（`list_agents` 显示 `inactive`），由下一次投递开启的 turn 一并处理，与上游保留驻留直到下一次唤醒投递一致。parent 不再发送时，消息与池名额保留到服务关闭。
+- 只有中断前已接受但尚未提交的消息，且中断后没有新的唤醒输入时，child 才继续等待下一次投递。服务按本次驻留投递的消息与结算通知计数，与日志中已提交的 `agent-message`/`subagent-settled` 比较；最后一个 turn 以取消结束且仍有差额时，child 保持驻留（`list_agents` 显示 `inactive`）。中断后新接受的消息在旧 turn 退出后自动唤醒下一 turn，一并提交此前排队的消息。parent 不再发送新输入时，中断前的待投递消息与池名额保留到服务关闭。
 - 后台任务通知不经过 subagent 服务；它与 child 结算并发到达时可能落在正在关闭的 agent 上而丢失，被释放的 job 本身已经结束。
 - 待投递消息与驻留状态只在内存中；进程崩溃会丢失已接受但尚未写入 child 日志的消息。
 - 目录的读不到状态只报告 `unavailable`，不区分上游的 `corrupt`。

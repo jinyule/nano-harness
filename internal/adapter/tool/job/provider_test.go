@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	appJob "github.com/jinyule/nano-harness/internal/app/job"
@@ -162,7 +163,7 @@ func TestJobOutput_ReadsWaitsAndFencesOwners(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if result := h.call(ctx, t, "root", "job_output", map[string]any{"job_id": id, "wait": true}); result.Output != "Error: tool call aborted" {
+	if result := h.call(ctx, t, "root", "job_output", map[string]any{"job_id": id, "wait": true}); result.Output != "Error: tool call aborted before dispatch" {
 		t.Fatalf("aborted wait = %#v", result)
 	}
 	waited := make(chan session.ToolResult)
@@ -187,6 +188,47 @@ func TestJobOutput_ReadsWaitsAndFencesOwners(t *testing.T) {
 	}
 	if result := h.call(context.Background(), t, "root", "job_output", map[string]any{"job_id": valueID}); result.Output != "(no new output)\n[status: completed]" {
 		t.Fatalf("second value read = %#v", result)
+	}
+}
+
+type waitBarrierContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (ctx *waitBarrierContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.entered) })
+	return ctx.Context.Done()
+}
+
+func TestJobOutput_CancellationDuringWaitPreservesJobAndUnreadOutput(t *testing.T) {
+	h := newHarness(t)
+	id, _ := h.stream(t, "root", appJob.Outcome{Status: appJob.StatusCompleted})
+	base, cancel := context.WithCancel(context.Background())
+	ctx := &waitBarrierContext{Context: base, entered: make(chan struct{})}
+	finished := make(chan session.ToolResult, 1)
+	var group sync.WaitGroup
+	t.Cleanup(func() { cancel(); group.Wait() })
+	group.Go(func() {
+		finished <- h.call(ctx, t, "root", "job_output", map[string]any{"job_id": id, "wait": true})
+	})
+	select {
+	case <-ctx.entered:
+	case <-t.Context().Done():
+		t.Fatal("test cancelled before job wait")
+	}
+	cancel()
+	select {
+	case result := <-finished:
+		if !result.IsError || result.Output != "Error: tool call aborted" {
+			t.Fatalf("cancelled active wait = %#v", result)
+		}
+	case <-t.Context().Done():
+		t.Fatal("cancelled wait did not return")
+	}
+	if result := h.call(context.Background(), t, "root", "job_output", map[string]any{"job_id": id}); result.IsError || result.Output != "building\n[stderr]\nwarning\n[status: running]" {
+		t.Fatalf("cancelled wait consumed output or stopped job: %#v", result)
 	}
 }
 

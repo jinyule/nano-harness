@@ -188,6 +188,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 | `interrupt_agent` | 调用方任一 live 后代 | 自身、祖先、兄弟及其子树 |
 | `list_agents` | 调用方自己的目录及其后代目录 | 其他 session 的目录 |
 
+- `send_message` 在调度前与收件箱接受时检查取消，被拒消息不入队也不写日志；description/prompt 的原样保存、显式大小上限与后台 job 的先准入规则见 [ADR-0013](decisions/0013-background-continuable-subagents.md)。
 - 消息以 `agent-message`、结算以 `subagent-settled` source kind 写入，只表示来源，不授予权限；接收方仍按自己的策略执行工具。
 - delegated agent 只能访问自己的 job；后台 one-shot child 的 job 属于创建它的 parent。child 被释放时，服务以 `job.Service.Release` 取消并等待它拥有的 job，不留下无人读取的后台工作。
 - 列表只返回 session id、标签、模式、深度、运行状态和不可读诊断，不返回账户、prompt 或 child 输出。

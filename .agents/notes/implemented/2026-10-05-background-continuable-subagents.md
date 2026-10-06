@@ -13,6 +13,8 @@ WP3 的 [ADR-0009](../../../docs/decisions/0009-background-jobs.md) 要求引入
 
 非目标：子代理写文件或请求审批、按调用选择模型、persona/tool filter 参数、外部进程子代理、跨进程 mailbox。
 
+后续正确性修补见 [subagent 正确性 Note](2026-10-06-subagent-correctness.md)：它拥有池名额转交、取消截止线、中断后的新唤醒、清理错误优先级、job 启动准入、closing output 与原样参数保存；本 Note 继续拥有工具迁移、目录、fork 与 owner 释放的实施证据。
+
 重叠审计：[核心 harness Note](2026-08-24-core-agent-harness.md) 中对 subagent 工具与 fork 快照的描述被本 Note 部分取代，其余部分仍有效，两者保留并互相链接；[上游工具定义 Note](2026-10-04-upstream-tool-definitions.md) 记录的 `subagent-tools-v2` 迁移已被 v3 取代，该 Note 其余内容不受影响。
 
 ## Decision
@@ -53,7 +55,7 @@ fork 种子复制 parent 的全部事件，包括 WP8 的 `plan/mode` 与 WP6 �
 
 模型看到与上游相同的委派工具，可以并行启动后台 child 并在结算时收到通知，parent 与 child 可中途交换信息，fork 获得完整的已完成会话。代价：fork 复制 parent 日志前缀的磁盘空间；结算后的消息需要冷恢复；旧会话按 composition mismatch 拒绝恢复（本仓尚无发布 tag）。
 
-已知风险：中断后未处理的消息在结算时丢弃；后台任务通知与 child 结算并发时可能丢失；驻留状态只在内存中。均记录于 ADR-0013 的复审条件。
+已知风险：只有中断前排队且没有后续唤醒的消息会继续占用驻留名额；后台任务通知与 child 结算并发时可能丢失；驻留状态与未提交消息只在内存中。当前取消与唤醒规则由 ADR-0013 和后续正确性 Note 维护。
 
 与其他 WP 的冲突热点：`internal/app/agent/{registry,types}.go`（descriptor v2、`Provider`/`Seed`）、`internal/app/job/service.go`（`Release` 与 WP2 的 `Output.Advertise`/`Read.Spills` 并存）、`internal/app/tool/define.go`（`OrderSubagent`）、`internal/adapter/session/jsonl/jsonl.go`（种子写入）、`cmd/nano-harness/{application,main}.go` 与两份 fixture、`docs/testing.md` 的 mutation 数量、`scripts/tui-e2e.py`。WP2 的 `Spec.Check` 签名变化不影响本包（subagent 工具没有 `Check`）。
 
