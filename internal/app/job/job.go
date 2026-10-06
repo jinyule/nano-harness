@@ -107,11 +107,14 @@ type View struct {
 	Label  string
 	Status Status
 	Detail string
+	// emptyDetail renders an empty Detail as present, as upstream does for
+	// the detail an explicit empty kill reason leaves.
+	emptyDetail bool
 }
 
 // StatusLine renders the bracketed status the model reads after output.
 func (view View) StatusLine() string {
-	if view.Detail == "" {
+	if view.Detail == "" && !view.emptyDetail {
 		return "[status: " + string(view.Status) + "]"
 	}
 	return "[status: " + string(view.Status) + ", " + view.Detail + "]"

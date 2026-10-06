@@ -29,17 +29,21 @@ const (
 type record struct {
 	id, kind, label, owner string
 
-	status          Status
-	detail          string
+	status Status
+	detail string
+	// emptyDetail marks a detail that is present but empty: an explicit
+	// empty kill reason on a producer that reported no detail.
+	emptyDetail     bool
 	result          string
 	resultDelivered bool
 	ring            ring
 	// spills are the advertised complete-output files per channel.
 	spills [2]string
 	// cursor is the model's consuming read position in the ring.
-	cursor     int64
-	cancel     context.CancelFunc
-	killReason string
+	cursor int64
+	cancel context.CancelFunc
+	// killReason is the latest kill intent; nil means none was given.
+	killReason *string
 	cause      settleCause
 	// waiters counts live Wait calls; a settlement that releases one is
 	// collected by that caller and sends no notice.
@@ -50,7 +54,7 @@ type record struct {
 }
 
 func (current *record) view() View {
-	return View{ID: current.id, Kind: current.kind, Label: current.label, Status: current.status, Detail: current.detail}
+	return View{ID: current.id, Kind: current.kind, Label: current.label, Status: current.status, Detail: current.detail, emptyDetail: current.emptyDetail}
 }
 
 // Service is the in-process background job registry. Jobs belong to the
@@ -192,8 +196,10 @@ func (service *Service) settle(current *record, outcome Outcome) {
 	if !outcome.Status.terminal() {
 		current.status = StatusFailed
 	}
-	if current.status == StatusKilled && current.killReason != "" {
-		current.detail = joinDetail(current.detail, current.killReason)
+	// Like upstream, an explicit empty reason still joins the detail.
+	if current.status == StatusKilled && current.killReason != nil {
+		current.detail = joinDetail(current.detail, *current.killReason)
+		current.emptyDetail = current.detail == ""
 	}
 	// Keep every unread byte for the first terminal read, which trims.
 	current.ring.trim(max(settledRetainBytes, int(current.ring.total-current.cursor)))
@@ -375,7 +381,7 @@ func (service *Service) Kill(owner, id string, reason *string) (View, bool, erro
 	current.cancel()
 	current.status, current.cause = StatusStopping, causeKill
 	if reason != nil {
-		current.killReason = *reason
+		current.killReason = new(*reason)
 	}
 	return current.view(), true, nil
 }

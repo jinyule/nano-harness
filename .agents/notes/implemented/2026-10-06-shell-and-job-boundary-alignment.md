@@ -24,6 +24,8 @@ B5 的追加审查发现 `Wait` 超时与首次 `Read` 之间没有取消检查�
 - 前台交接入口在首次 Read 前检查调用取消，与 Wait 取消共用 abortForeground：保持完成预留，kill、等待结算并移除，返回 tool call aborted。测试通过启动 channel、先超时后显式取消的顺序，证明 runner 已结束、真实 TERM trap 已写文件且无存活 job 或通知。
 - ADR 修正 owner Release 与跨重启编号复用限制，记录固定预算和没有等价 home/profile 上下文的环境取舍；schema、composition ID 与 session 格式不变。
 
+> 部分取代：sandbox 不可用文案、runner 失败的后台 detail、3 s 管道排空、显式空 reason 的渲染与 `job_output` 顺序已由[上游文案对齐 Note](2026-10-07-shell-job-upstream-text.md)改为上游字节，前台取消结算等待随之改为 7 s；本 Note 其余决定与验证仍有效。
+
 重叠审计：[后台任务 Note](2026-10-04-background-jobs.md)保留运行时、通知与原始实施证据；[前台交接 Note](2026-10-06-foreground-job-handoff-and-shell-cleanup.md)保留预留、交接与回退 Scope 证据。两者由本 Note 部分补充并双向链接，不归档或改写原始验证。
 
 ## Consequences

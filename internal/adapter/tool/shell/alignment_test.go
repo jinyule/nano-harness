@@ -16,6 +16,17 @@ import (
 	platformProcess "github.com/jinyule/nano-harness/internal/platform/process"
 )
 
+const runnerFailedNote = "[sandbox: the sandbox runner itself failed under workspace-write mode — the command did not run; this is a sandbox problem, not a command failure]"
+
+// A runner that never started has no exit code; upstream aliases it to a
+// signal-less kill, so its detail starts like one.
+func TestOutcome_RunnerSpawnFailureHasNoExitCode(t *testing.T) {
+	got := outcome(platformProcess.Result{RunnerFailed: true}, platformProcess.ErrSandboxUnavailable)
+	if got.Status != appJob.StatusFailed || got.Detail != "killed before exit; "+runnerFailedNote {
+		t.Fatalf("spawn failure = %+v", got)
+	}
+}
+
 func TestBash_RunnerFailureHasInfrastructureExplanation(t *testing.T) {
 	name := "sandbox-exec"
 	if runtime.GOOS == "linux" {
@@ -31,13 +42,15 @@ func TestBash_RunnerFailureHasInfrastructureExplanation(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	h := newHarness(t, platformProcess.New())
 	result := h.call(t, map[string]any{"description": "Run command", "command": "touch should-not-exist"})
-	if !result.IsError || !strings.Contains(result.Output, "SANDBOX_UNAVAILABLE") || !strings.Contains(result.Output, diagnostic) {
-		t.Errorf("foreground = %#v", result)
+	// Upstream renders SandboxUnavailableError (packages/sandbox/sandbox/src/index.ts:132-145) as "Error: <message>".
+	if want := "Error: sandbox mode \"workspace-write\" is requested but no sandbox backend is usable on this host; refusing to run the command unconfined. Install bubblewrap or run a Landlock-enforcing kernel (Linux), ensure sandbox-exec is usable (macOS), or ensure the ACL restricted-token runner can start (Windows) — otherwise switch the consumer to danger-full-access. Runner failure: " + diagnostic; !result.IsError || result.Output != want {
+		t.Errorf("foreground = %q, want %q", result.Output, want)
 	}
 	result = h.call(t, map[string]any{"description": "Run command", "command": "touch should-not-exist", "run_in_background": true})
 	id := strings.TrimPrefix(result.Output, "started background job ")
 	view := h.settled(t, id)
-	if view.Status != "failed" || !strings.Contains(view.Detail, "command did not run") || strings.Contains(view.Detail, "escalation available") {
+	// Upstream's processOutcome (packages/shell/tool-bash/src/background.ts:50-54) prefixes the exit code; the status stays failed here.
+	if view.Status != "failed" || view.Detail != "exit code: 1; "+runnerFailedNote {
 		t.Errorf("background = %+v", view)
 	}
 	if _, err := os.Stat(filepath.Join(h.root.Path(), "should-not-exist")); !os.IsNotExist(err) {

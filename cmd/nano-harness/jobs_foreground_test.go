@@ -36,7 +36,7 @@ func TestComposition_ForegroundBashDoesNotCommitCompletionNotice(t *testing.T) {
 		runner foregroundRunner
 		want   string
 	}{
-		{"sandbox unavailable", foregroundRunner{err: platformProcess.ErrSandboxUnavailable}, "Error: SANDBOX_UNAVAILABLE: workspace sandbox is unavailable"},
+		{"sandbox unavailable", foregroundRunner{err: platformProcess.ErrSandboxUnavailable}, "Error: sandbox mode \"workspace-write\" is requested but no sandbox backend is usable on this host; refusing to run the command unconfined. Install bubblewrap or run a Landlock-enforcing kernel (Linux), ensure sandbox-exec is usable (macOS), or ensure the ACL restricted-token runner can start (Windows) — otherwise switch the consumer to danger-full-access."},
 		{"start failed", foregroundRunner{err: errors.New("start process: missing executable")}, "Error: start process: missing executable"},
 		{"fast command", foregroundRunner{result: platformProcess.Result{Stdout: platformProcess.Output{Text: "done"}}}, "done"},
 	} {

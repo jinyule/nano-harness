@@ -250,7 +250,9 @@ func (provider *Provider) foregroundResult(ctx context.Context, owner, id string
 func (provider *Provider) abortForeground(ctx context.Context, owner, id string) (appTool.Result, error) {
 	reason := "tool call aborted"
 	_, _, _ = provider.jobs.Kill(owner, id, &reason)
-	_, _ = provider.jobs.Wait(context.WithoutCancel(ctx), owner, id, terminationGrace+2*time.Second)
+	// The runner spends at most the grace before KILL and the same again
+	// draining pipes; one more second covers settlement.
+	_, _ = provider.jobs.Wait(context.WithoutCancel(ctx), owner, id, 2*terminationGrace+time.Second)
 	_ = provider.jobs.Remove(owner, id)
 	return appTool.Result{}, errors.New("tool call aborted")
 }
@@ -271,7 +273,14 @@ func finish(ctx context.Context, run processRun, timeoutMS float64) (appTool.Res
 func outcome(result platformProcess.Result, err error) appJob.Outcome {
 	switch {
 	case result.RunnerFailed:
-		return appJob.Outcome{Status: appJob.StatusFailed, Detail: "[sandbox: the sandbox runner itself failed under workspace-write mode — the command did not run; this is a sandbox problem, not a command failure]"}
+		// Upstream reports a runner that exited as completed with its exit
+		// code and one that never started as a signal-less kill; both keep
+		// that detail here while the status stays failed.
+		base := "killed before exit"
+		if result.ExitCode > 0 {
+			base = "exit code: " + strconv.Itoa(result.ExitCode)
+		}
+		return appJob.Outcome{Status: appJob.StatusFailed, Detail: base + "; [sandbox: the sandbox runner itself failed under workspace-write mode — the command did not run; this is a sandbox problem, not a command failure]"}
 	case err != nil && !errors.Is(err, context.Canceled):
 		return appJob.Outcome{Status: appJob.StatusFailed, Detail: err.Error()}
 	case result.Signal != "":

@@ -69,22 +69,30 @@ func TestService_OmittedKillReasonPreservesPriorIntent(t *testing.T) {
 	}
 }
 
-func TestService_ExplicitEmptyKillReasonClearsPriorIntent(t *testing.T) {
+// An explicit empty reason replaces a prior one and, like upstream's
+// `${detail}; ${reason}`, still joins the detail: the separator stays, and a
+// producer without detail reports the empty reason as its whole detail.
+func TestService_ExplicitEmptyKillReasonReplacesPriorIntent(t *testing.T) {
 	service, _, _ := startService(t)
-	release := make(chan struct{})
-	id, err := service.Launch(Spec{Kind: "bash", Label: "hold", Owner: "root", Run: func(ctx context.Context, _ *Output) Outcome {
-		<-ctx.Done()
-		<-release
-		return Outcome{Status: StatusKilled, Detail: "signal: SIGTERM"}
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _, _ = service.Kill("root", id, new("stale"))
-	_, _, _ = service.Kill("root", id, new(""))
-	close(release)
-	if view := waitSettled(t, service, "root", id); view.Detail != "signal: SIGTERM" {
-		t.Fatalf("explicit empty reason preserved stale intent: %+v", view)
+	for _, test := range []struct{ detail, want string }{
+		{detail: "signal: SIGTERM", want: "[status: killed, signal: SIGTERM; ]"},
+		{want: "[status: killed, ]"},
+	} {
+		release := make(chan struct{})
+		id, err := service.Launch(Spec{Kind: "bash", Label: "hold", Owner: "root", Run: func(ctx context.Context, _ *Output) Outcome {
+			<-ctx.Done()
+			<-release
+			return Outcome{Status: StatusKilled, Detail: test.detail}
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, _ = service.Kill("root", id, new("stale"))
+		_, _, _ = service.Kill("root", id, new(""))
+		close(release)
+		if view := waitSettled(t, service, "root", id); view.StatusLine() != test.want {
+			t.Fatalf("explicit empty reason = %q, want %q", view.StatusLine(), test.want)
+		}
 	}
 }
 

@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// upstreamUnavailable is upstream SandboxUnavailableError's message for the
+// workspace-write mode (packages/sandbox/sandbox/src/index.ts:132-145).
+const upstreamUnavailable = "sandbox mode \"workspace-write\" is requested but no sandbox backend is usable on this host; refusing to run the command unconfined. Install bubblewrap or run a Landlock-enforcing kernel (Linux), ensure sandbox-exec is usable (macOS), or ensure the ACL restricted-token runner can start (Windows) — otherwise switch the consumer to danger-full-access."
+
 func TestRunnerRun_RunnerFailureOutranksDenial(t *testing.T) {
 	for _, test := range []struct {
 		goos, diagnostic string
@@ -20,13 +24,14 @@ func TestRunnerRun_RunnerFailureOutranksDenial(t *testing.T) {
 		t.Run(test.goos, func(t *testing.T) {
 			root := t.TempDir()
 			fake := filepath.Join(root, "sandbox")
-			if err := os.WriteFile(fake, []byte("#!/bin/sh\nprintf '%s\\n' 'informational line' '"+test.diagnostic+"' >&2\nexit 1\n"), 0o700); err != nil { //nolint:gosec // test-owned executable fixture
+			// Like upstream's /\r?\n/ split, the CR goes and the line's indentation stays.
+			if err := os.WriteFile(fake, []byte("#!/bin/sh\nprintf '%s\\r\\n' 'informational line' '  "+test.diagnostic+"' >&2\nexit 1\n"), 0o700); err != nil { //nolint:gosec // test-owned executable fixture
 				t.Fatal(err)
 			}
 			runner := &Runner{goos: test.goos, sandboxPath: fake}
 			result, err := runner.Run(t.Context(), Request{Path: "/bin/true", Root: root, Cwd: root, TempDir: root, Mode: ModeWorkspace})
-			if !errors.Is(err, ErrSandboxUnavailable) || !strings.Contains(err.Error(), test.diagnostic) || result.SandboxDenied {
-				t.Fatalf("runner failure = %+v, %v; must identify unavailable sandbox without escalation", result, err)
+			if !errors.Is(err, ErrSandboxUnavailable) || err.Error() != upstreamUnavailable+" Runner failure:   "+test.diagnostic || !result.RunnerFailed || result.SandboxDenied {
+				t.Fatalf("runner failure = %+v, %q; must identify unavailable sandbox without escalation", result, err)
 			}
 		})
 	}
@@ -96,8 +101,13 @@ func TestRunnerRun_FailedSandboxSpawnPreservesCause(t *testing.T) {
 	root := t.TempDir()
 	runner := &Runner{goos: "linux", sandboxPath: filepath.Join(root, "missing")}
 	result, err := runner.Run(t.Context(), Request{Path: "/bin/true", Root: root, Cwd: root, TempDir: root, Mode: ModeWorkspace})
-	if !errors.Is(err, ErrSandboxUnavailable) || !errors.Is(err, os.ErrNotExist) || !result.RunnerFailed || result.SandboxDenied {
-		t.Fatalf("failed sandbox spawn = %+v, %v", result, err)
+	if !errors.Is(err, ErrSandboxUnavailable) || !errors.Is(err, os.ErrNotExist) || !strings.HasPrefix(err.Error(), upstreamUnavailable+" Runner failure: fork/exec "+runner.sandboxPath+": ") || !result.RunnerFailed || result.SandboxDenied {
+		t.Fatalf("failed sandbox spawn = %+v, %q", result, err)
+	}
+	// Without a backend there is no runner failure to report.
+	runner.sandboxPath = ""
+	if _, err := runner.Run(t.Context(), Request{Path: "/bin/true", Root: root, Cwd: root, TempDir: root, Mode: ModeWorkspace}); !errors.Is(err, ErrSandboxUnavailable) || err.Error() != upstreamUnavailable {
+		t.Fatalf("missing backend = %q", err)
 	}
 }
 
@@ -125,6 +135,23 @@ func TestRunnerSpawnFailure_RequiresExecutableEvidenceAndUsableCwd(t *testing.T)
 	} {
 		if got := runnerSpawnFailure(test.err, "/runner", test.cwd); got != test.want {
 			t.Errorf("spawn classification(%v,%s)=%v; want %v", test.err, test.cwd, got, test.want)
+		}
+	}
+}
+
+// Like upstream's spawn, output a descendant writes after the command exits
+// is drained for the termination grace; zero-grace search keeps a short
+// fixed drain and its descendants are killed with the group.
+func TestRunnerRun_DrainsDescendantOutputForTheGrace(t *testing.T) {
+	for _, test := range []struct {
+		grace time.Duration
+		want  string
+	}{{3 * time.Second, "early\nlate\n"}, {0, "early\n"}} {
+		root := t.TempDir()
+		started := time.Now()
+		result, err := New().Run(t.Context(), Request{Path: "/bin/sh", Args: []string{"-c", "(sleep 2; echo late) & echo early"}, Root: root, Cwd: root, Mode: ModeHost, TerminationGrace: test.grace})
+		if elapsed := time.Since(started); err != nil || result.Stdout.Text != test.want || test.grace == 0 && elapsed > 1900*time.Millisecond {
+			t.Fatalf("grace=%v: %+v, %v after %v", test.grace, result, err, elapsed)
 		}
 	}
 }

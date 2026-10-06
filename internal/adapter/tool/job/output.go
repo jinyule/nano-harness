@@ -8,26 +8,41 @@ import (
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
-// renderOutput reserves the final envelope before budgeting the consuming
-// read. Even without a spill store, the durable result keeps its status and
-// loss notice. Metadata is bounded independently of producer value results.
+// renderOutput follows upstream's order: the streamed output, the loss
+// notice that ends upstream's delta, the value result, then the status line.
+// The status and loss notice are bounded metadata that always survive, even
+// without a spill store; the stream is cut before the notice, and the value
+// takes what remains. Metadata is bounded independently of value results.
 func renderOutput(read appJob.Read) string {
-	const metadataBytes = 4096
+	const (
+		metadataBytes = 4096
+		truncated     = "\n[output truncated]"
+	)
 	status := boundedText(read.Job.StatusLine(), metadataBytes, "…]")
 	loss := strings.ToValidUTF8(appJob.Read{Lossy: read.Lossy, Spills: read.Spills}.Delta(), "�")
 	if len(loss) > metadataBytes {
 		loss = appJob.Read{Lossy: true}.Delta()
 	}
-	envelope := withNewline(loss) + status
-	body := appJob.Read{Stdout: read.Stdout, Stderr: read.Stderr}.Delta()
+	limit := session.MaxTextBytes - len(status) - 1
+	streamLimit := limit
+	if loss != "" {
+		streamLimit -= len(loss) + 1
+	}
+	text := boundedText(appJob.Read{Stdout: read.Stdout, Stderr: read.Stderr}.Delta(), streamLimit, truncated)
+	if loss != "" {
+		text = withNewline(text) + loss
+	}
 	if read.Result != "" {
-		body = withNewline(body) + read.Result
+		separated := withNewline(text)
+		// A stream that filled the budget already carries the cut marker.
+		if room := limit - len(separated); room > len(truncated) {
+			text = separated + boundedText(read.Result, room, truncated)
+		}
 	}
-	if body == "" {
-		body = "(no new output)"
+	if text == "" {
+		text = "(no new output)"
 	}
-	body = boundedText(body, session.MaxTextBytes-len(envelope)-1, "\n[output truncated]")
-	return withNewline(body) + envelope
+	return withNewline(text) + status
 }
 
 func boundedText(text string, limit int, suffix string) string {

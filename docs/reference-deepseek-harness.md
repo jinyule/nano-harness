@@ -166,3 +166,14 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 ## Shell 与 job 边界复核
 
 参考 `5badb15009ae` 的 `packages/shell`、`packages/jobs` 与 `packages/subprocess`：runner 致命诊断优先于拒绝、bash/job 的 TERM→3 s→KILL、解码后输出计量、显式空 kill reason 与身份先于 wait timeout 校验均采纳。只读搜索保留立即 KILL；固定预算、托管 home/profile 取舍、owner 释放与 ID 复用限制由 [ADR-0009](decisions/0009-background-jobs.md) 和 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md) 拥有。基础设施失败保留本仓 `failed` 终态，上游尚将部分启动失败映射为 killed/completed。复现、平台证据与未覆盖范围见[实施 Note](../.agents/notes/implemented/2026-10-06-shell-and-job-boundary-alignment.md)。
+
+第四轮复核继续对齐模型可见的字节（[Note](../.agents/notes/implemented/2026-10-07-shell-job-upstream-text.md)）：
+
+| 上游行为 | 本仓处理 |
+|---|---|
+| `sandbox/src/index.ts:132-145` 的 `SandboxUnavailableError` 文案与 `Runner failure: <行>` | 采纳原文，mode 固定为 `workspace-write`；runner 启动失败时 `Runner failure:` 之后是 Go 启动错误，而不是 Node 的 `String(error)` |
+| `tool-bash/src/background.ts:50-54` 的 `exit code: N; [sandbox: …]` | 采纳 detail（未启动时为 `killed before exit; `），状态仍是本仓 `failed` |
+| `spawn.ts:409-415` 以 `graceMs`（bash 3 s）作命令退出后的管道排空窗口 | bash/job 采纳 3 s；零宽限的搜索保留 1 s 排空 |
+| `jobs-local/src/index.ts:584-587` 的显式空 reason 渲染为 `; ` | 采纳，包括 producer 无 detail 时的 `[status: killed, ]` |
+| `tool-jobs/src/index.ts:183-188` 的 delta（含丢失提示）→ 值结果 → 状态 | 采纳；只有丢失提示时不显示 `(no new output)` |
+| `diagnostics.ts:65-87` 只按 stderr 行内前缀判定 runner 失败 | 判定相同；普通命令打印该前缀会被误判，记为已知限制，见 ADR-0009 |

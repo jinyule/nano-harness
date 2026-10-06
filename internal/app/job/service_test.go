@@ -357,12 +357,13 @@ func TestService_WaitTimeoutCancellationAndAwaitedSettlement(t *testing.T) {
 func TestService_KillRecordsReasonWithoutNotice(t *testing.T) {
 	service, notifier, scope := startService(t)
 	for _, test := range []struct {
-		reason, want string
-		run          func(context.Context, *Output) Outcome
+		reason *string
+		want   string
+		run    func(context.Context, *Output) Outcome
 	}{
-		{reason: "no longer needed", want: "[status: killed, signal: SIGKILL; no longer needed]"},
+		{reason: new("no longer needed"), want: "[status: killed, signal: SIGKILL; no longer needed]"},
 		{want: "[status: killed, signal: SIGKILL]"},
-		{reason: "stop", want: "[status: killed, stop]", run: func(ctx context.Context, _ *Output) Outcome {
+		{reason: new("stop"), want: "[status: killed, stop]", run: func(ctx context.Context, _ *Output) Outcome {
 			<-ctx.Done()
 			return Outcome{Status: StatusKilled}
 		}},
@@ -376,7 +377,7 @@ func TestService_KillRecordsReasonWithoutNotice(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		view, requested, err := service.Kill("root", id, new(test.reason))
+		view, requested, err := service.Kill("root", id, test.reason)
 		if err != nil || !requested || view.Status != StatusStopping {
 			t.Fatalf("kill = %+v, %v, %v", view, requested, err)
 		}

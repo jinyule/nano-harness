@@ -19,19 +19,26 @@ import (
 const (
 	// maxStreamBytes is the default retained tail of each output stream.
 	maxStreamBytes = 64_000
-	// pipeDrainDelay bounds waiting for descendants that keep pipes open
-	// after the process exits or is killed.
-	pipeDrainDelay = time.Second
+	// zeroGraceDrain bounds waiting for descendants that keep pipes open
+	// after the process exits or is killed when the request has no
+	// termination grace, as for read-only search. A request with a grace
+	// drains for that grace, like upstream's spawn.
+	zeroGraceDrain = time.Second
 )
 
 var (
 	// ErrInvalidConfig identifies a process request the runner cannot execute safely.
 	ErrInvalidConfig = errors.New("invalid process configuration")
-	// ErrSandboxUnavailable identifies a missing or failed workspace sandbox runner.
-	ErrSandboxUnavailable = errors.New("SANDBOX_UNAVAILABLE: workspace sandbox is unavailable")
-	operatingSystem       = runtime.GOOS
-	findExecutable        = exec.LookPath
-	processAbs            = filepath.Abs
+	// ErrSandboxUnavailable identifies a missing or failed workspace sandbox
+	// runner. Its text is upstream's SandboxUnavailableError for the
+	// workspace-write mode; a runner failure appends " Runner failure: <detail>".
+	ErrSandboxUnavailable = errors.New(`sandbox mode "workspace-write" is requested but no sandbox backend is usable on this host; ` + //nolint:staticcheck // ST1005: upstream's model-facing message ends with a period and is reproduced byte for byte
+		"refusing to run the command unconfined. Install bubblewrap or run a Landlock-enforcing kernel (Linux), " +
+		"ensure sandbox-exec is usable (macOS), or ensure the ACL restricted-token runner can start (Windows) " +
+		"— otherwise switch the consumer to danger-full-access.")
+	operatingSystem = runtime.GOOS
+	findExecutable  = exec.LookPath
+	processAbs      = filepath.Abs
 )
 
 // denialSignatures are the case-insensitive stderr fragments each sandbox
@@ -164,12 +171,15 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 	command.Env = cleanEnvironment(root, temporary, request.Additional)
 	configureProcess(command)
 	var killed atomic.Bool
-	command.WaitDelay = pipeDrainDelay
+	command.WaitDelay = request.TerminationGrace
+	if command.WaitDelay == 0 {
+		command.WaitDelay = zeroGraceDrain
+	}
 	stdout, stderr := tailBuffer{limit: request.StdoutLimit}, tailBuffer{limit: request.StderrLimit}
 	command.Stdout, command.Stderr = observed(&stdout, request.Stdout), observed(&stderr, request.Stderr)
 	if err = command.Start(); err != nil {
 		if request.Mode == ModeWorkspace && runnerSpawnFailure(err, path, cwd) {
-			return Result{RunnerFailed: true}, fmt.Errorf("%w: start sandbox runner: %w", ErrSandboxUnavailable, err)
+			return Result{RunnerFailed: true}, fmt.Errorf("%w Runner failure: %w", ErrSandboxUnavailable, err)
 		}
 		return Result{}, fmt.Errorf("start process: %w", err)
 	}
@@ -212,9 +222,10 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 	if request.Mode == ModeWorkspace && result.ExitCode > 0 {
 		prefix := map[string]string{"darwin": "sandbox-exec: ", "linux": "bwrap: "}[runner.goos]
 		for line := range strings.SplitSeq(result.Stderr.Text, "\n") {
-			if prefix != "" && strings.Contains(strings.ToLower(line), prefix) {
+			// Like upstream's /\r?\n/ split, the matched line is otherwise unchanged.
+			if line = strings.TrimSuffix(line, "\r"); prefix != "" && strings.Contains(strings.ToLower(line), prefix) {
 				result.RunnerFailed = true
-				return result, fmt.Errorf("%w: %s", ErrSandboxUnavailable, strings.TrimSpace(line))
+				return result, fmt.Errorf("%w Runner failure: %s", ErrSandboxUnavailable, line)
 			}
 		}
 	}

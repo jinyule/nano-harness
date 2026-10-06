@@ -32,8 +32,10 @@ func TestJobKill_ExplicitEmptyReasonReplacesPriorIntent(t *testing.T) {
 		h.call(t.Context(), t, "root", "job_kill", arguments)
 		close(release)
 		result := h.call(t.Context(), t, "root", "job_output", map[string]any{"job_id": id, "wait": true})
-		if strings.Contains(result.Output, "stale") == explicit {
-			t.Errorf("explicit empty=%v: %q", explicit, result.Output)
+		// Upstream joins an explicit empty reason too, leaving "; ".
+		want := map[bool]string{false: "(no new output)\n[status: killed, signal: SIGTERM; stale]", true: "(no new output)\n[status: killed, signal: SIGTERM; ]"}[explicit]
+		if result.Output != want {
+			t.Errorf("explicit empty=%v: %q, want %q", explicit, result.Output, want)
 		}
 	}
 }
@@ -105,5 +107,33 @@ func TestJobOutput_LargeValueKeepsFinalEnvelope(t *testing.T) {
 	result := h.call(t.Context(), t, "root", "job_output", map[string]any{"job_id": id, "wait": true})
 	if result.IsError || !utf8.ValidString(result.Output) || len(result.Output) > session.MaxTextBytes || !strings.HasSuffix(result.Output, "[status: completed]") || !strings.Contains(result.Output, "[output truncated]") {
 		t.Fatalf("value bytes=%d suffix=%q", len(result.Output), result.Output[max(0, len(result.Output)-80):])
+	}
+}
+
+// Upstream readBody renders the delta, whose loss notice ends it, then the
+// value result once, then the status line.
+func TestJobOutput_LossNoticePrecedesValueResult(t *testing.T) {
+	read := appJob.Read{Stdout: "out", Lossy: true, Result: "value", Job: appJob.View{Status: appJob.StatusCompleted}}
+	if text := renderOutput(read); text != "out\n[some output was dropped from memory; full output: (unavailable)]\nvalue\n[status: completed]" {
+		t.Fatalf("output = %q", text)
+	}
+	read.Stdout = ""
+	if text := renderOutput(read); text != "[some output was dropped from memory; full output: (unavailable)]\nvalue\n[status: completed]" {
+		t.Fatalf("output without stream = %q", text)
+	}
+	// Like upstream, a read whose delta is only the loss notice is not empty.
+	if text := renderOutput(appJob.Read{Lossy: true, Job: read.Job}); text != "[some output was dropped from memory; full output: (unavailable)]\n[status: completed]" {
+		t.Fatalf("loss-only output = %q", text)
+	}
+	// Oversized output and value cut the value, never the loss notice.
+	read.Stdout, read.Result = strings.Repeat("o", session.MaxTextBytes), strings.Repeat("v", session.MaxTextBytes)
+	text := renderOutput(read)
+	if len(text) > session.MaxTextBytes || !strings.Contains(text, "o\n[output truncated]\n[some output was dropped from memory; full output: (unavailable)]\n") || !strings.HasSuffix(text, "\n[status: completed]") || strings.Contains(text, "vv") {
+		t.Fatalf("bounded output: bytes=%d tail=%q", len(text), text[max(0, len(text)-160):])
+	}
+	read.Stdout = "short"
+	text = renderOutput(read)
+	if len(text) > session.MaxTextBytes || !strings.HasPrefix(text, "short\n[some output was dropped from memory; full output: (unavailable)]\nvvv") || !strings.HasSuffix(text, "v\n[output truncated]\n[status: completed]") {
+		t.Fatalf("bounded value: bytes=%d tail=%q", len(text), text[max(0, len(text)-160):])
 	}
 }
