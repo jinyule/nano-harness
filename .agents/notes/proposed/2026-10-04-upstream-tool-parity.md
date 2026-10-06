@@ -70,6 +70,7 @@
 | 2026-10-06 | 启动顺序改为工具、jobs、subagent/goal 服务在前，agent registry、root bootstrap、goal driver 最后（仅在前端之前）；关闭时先停前端与 goal driver，再由 registry 同时取消并等待所有 agent，之后才撤销工具、停止 jobs、删除临时目录 | 整体审查、WP1 | `docs/architecture.md` |
 | 2026-10-06 | 所有 provider 请求（含 OAuth）拒绝跟随重定向；IPv6 字面量同样做 NAT64 校验 | 整体审查 | ADR-0011 |
 | 2026-10-06 | 会话日志内联图片会在约 10 张大图后写满 64 MiB：先以 8 MiB 保留容量拒绝新图片（`fe565ad`），再按上游迁移到附件存储（WP11），届时取代容量拒绝 | 整体审查、维护者 | ADR-0015、ADR-0017 |
+| 2026-10-06 | provider 的输出上限截断统一映射为停止原因 `max_tokens`，engine 持久化为 turn outcome，goal 据此解除 armed（对齐上游 driver 在 max-tokens 时 disarm）；目标轮次开场的非准入失败按轮次 ID/revision 解除 armed；解除 armed 在锁内比较确切 ID/revision | Codex 审查、Codex-A | ADR-0018（goal 停止结局）、ADR-0016 |
 | 2026-10-06 | WP11 设计：对象按 `sha256` 存于 `<attachment-root>/v1/objects/`（0700/0600、独占创建、fsync、硬链接发布、发布后只读），不自动删除；图片块只存 `{id, name, media_type, bytes, width, height}`；session 仍为 v2，靠 `attachments-v1` composition token 拒绝旧会话；`/attach` 在消息提交前才写入存储（对齐上游）；附件缺失或损坏时本次请求以占位文本代替并提示用户（偏离上游的请求失败，避免会话永久不可用；维护者 2026-10-06 确认不必严格遵循上游）；移除 8 MiB 图片保留容量检查 | WP9 提案、协调者与维护者确认 | ADR-0017（草稿） |
 
 ### 整体审查与修复
@@ -107,7 +108,7 @@
 - `Check` 不接收 `context.Context`；当前由 10 MiB 前置上限和执行点可取消读取覆盖。
 - 三个 provider 的检索请求和工具结果图片只有 loopback 协议证据，缺 live 验证。
 
-ADR 编号预先分配，避免并行分支冲突；某个 WP 不需要 ADR 时编号作废，不复用。每个 WP 另写自己的 Agent Note，本 Note 只记录总体范围、映射和进度。
+ADR 编号预先分配，避免并行分支冲突（审查修复期间追加：0017 图片附件存储，0018 goal 停止结局）；某个 WP 不需要 ADR 时编号作废，不复用。每个 WP 另写自己的 Agent Note，本 Note 只记录总体范围、映射和进度。
 
 ### 执行方式
 
