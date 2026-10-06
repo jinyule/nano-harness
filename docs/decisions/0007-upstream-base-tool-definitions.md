@@ -26,9 +26,13 @@
 
 subagent 工具名称不变；它们的 schema 改用共享子集表达，去掉根对象 `additionalProperties: false` 和 `maxItems: 32`，32 个工具的上限仍由 `app/subagent` 强制。
 
+> 已被取代：本段的 subagent 名称与参数契约由 [ADR-0013](0013-background-continuable-subagents.md) 的上游工具族取代，工具不再接受自有 persona/tool filter 参数；此处保留原决定。
+
 ### 定义权威
 
 “上游默认组合”指非 Windows 主机上的 Base 组合。`glob` 使用 “keeps the first paths” 描述；`write`、`edit`、`bash` 声明 `sandbox_permissions`（枚举 `workspace-write`、`danger-full-access`）和 `justification`；`bash` 采用 `enableRunInBackground: false` 的前台变体，不含 `run_in_background`，`timeoutMs` 使用到期即终止的描述；[ADR-0009](0009-background-jobs.md) 已将其改为 Base 的后台变体。与上游同名的工具在名称、描述和参数 JSON（含属性顺序）上必须逐字节一致。尚未实现的上游能力沿用上游自身的降级输出，例如超限结果报告无法保存完整结果，不改写模型可见描述。
+
+> 后续决定：[ADR-0008](0008-tool-output-spill-and-observation-policy.md) 已实现完整结果 spill 与先读后写，取代这些能力尚未实现时的降级输出；其余工具的当前集合见[模型可见工具目录](../testing.md#模型可见工具目录)。
 
 ### 定义抽象
 
@@ -39,6 +43,8 @@ subagent 工具名称不变；它们的 schema 改用共享子集表达，去掉
 失败结果的文本采用上游 `Error: <message>` 格式（未知工具为 `Error: unknown tool "<name>"`），session resume 补写的中断结果也使用同一格式，模型在本仓和上游看到相同的失败形态。审批失败沿用本仓的 `Error: approval <outcome>`，因为上游 Base 只在 sandbox 升级时询问，没有对应文案。执行上下文 `Invocation` 提供当前 call ID、turn、step 和调用方 durable journal，供需要写会话事实的工具使用；没有 journal 时这类工具失败关闭。
 
 并发按 `Concurrent(A)` 决定，对应上游 `isConcurrencySafe(args)`；省略、无效参数和未知工具都是 exclusive。`read`、`glob`、`grep` 声明并发安全；上游 `glob`/`grep` 省略该声明，本仓认为只读遍历可以并行。approval 原因由 `Approval(A)` 基于类型化参数生成。执行结果是 `tool.Result`，目前只含文本，多模态结果扩展该类型。
+
+> 已被取代：`tool.Result` 只含文本的限制由 [ADR-0015](0015-multimodal-tool-results.md) 取代，结果可携带一张规范化图片；此处保留原决定。
 
 ### Prompt guidance
 
@@ -53,6 +59,8 @@ subagent 工具名称不变；它们的 schema 改用共享子集表达，去掉
 ### 路径
 
 相对路径按启动时解析的 workspace root 解析。描述中的 “resolved by the filesystem backend” 在本仓指 `internal/adapter/tool/workspace.Root`：绝对路径只在词法上位于已解析 root 内时接受，其余一律拒绝。读取和搜索可以经过解析后仍在 root 内的 symlink；`write` 与 `edit` 拒绝 root 到目标之间任何已存在的 symlink 组件。上游读取和搜索不限制在 workspace 内，且写入会更新 symlink 目标；本仓保持更严格的既有规则。`read`、`write`、`edit` 像上游一样显示绝对路径；`glob`、`grep` 显示 workspace 相对路径。
+
+> 后续决定：workspace 之外的只读 spill 分区由 [ADR-0008](0008-tool-output-spill-and-observation-policy.md#读回与安全边界) 开放给 `read`/`grep`，[ADR-0015](0015-multimodal-tool-results.md#read_image) 将同一读取边界扩展到 `read_image`；其他文件路径约束保留。
 
 ### 搜索实现
 
@@ -79,6 +87,8 @@ ripgrep 以 argv 直接运行，不经过 shell，也不进入 workspace sandbox
 `cmd/nano-harness/testdata/tool-catalog.json` 冻结真实 composition 的全部工具定义，测试从 transcript 的 `request/header` 和 loopback provider 收到的请求比较；`testdata/upstream-base-tools.json` 记录上述 Base 推导和上游来源，测试要求同名工具逐字节一致。两个文件都由人工审查维护，CI 只比较，测试不读取 submodule。
 
 composition ID 改为分别绑定 `fs-tools-v1`、`search-tools-v2`、`shell-tools-v1` 和 `subagent-tools-v2`；改用 ripgrep 后搜索语义变化，search 升到 v2。spill 与先读后写落地后又升为 `fs-tools-v2`、`search-tools-v3`、`shell-tools-v3` 并加入 `spill-v1`，见 ADR-0008。旧会话的工具名称与 schema 已变化，按 composition mismatch 拒绝恢复。本仓尚无发布 tag，没有需要迁移的用户会话；session v2 格式本身不变。
+
+> 历史身份：这里记录各次工具对齐的 composition token；后续 subagent 与图片 token 变更分别见 [ADR-0013](0013-background-continuable-subagents.md#4-持久化) 和 [ADR-0015](0015-multimodal-tool-results.md#版本识别拒绝旧格式与恢复)，当前绑定范围见[架构](../architecture.md#事件持久化与-replay)。
 
 ## 后果
 

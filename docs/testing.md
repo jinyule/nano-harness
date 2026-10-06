@@ -110,7 +110,17 @@ TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event f
 
 命令级 failure matrix 覆盖路径归一化、create/resume、每个 constructor、runtime start、TUI run、shutdown、usage/version output 和 write failure；PATH 中没有 `rg` 时，`tui` 以退出码 1 结束并给出安装提示。发布 smoke 必须运行编译后的 `bin/nano-harness`，不能以 `go run` 或直接调用内部函数替代。
 
-`make tui-e2e` 是独立的本机 PTY 验证入口，需要 Python 3、Unix 和 PATH 中的 ripgrep；脚本给被测二进制的最小 PATH 加上当前 `rg` 所在目录。`scripts/tui-e2e.py` 只替换远端模型，在 loopback 的动态端口提供 Responses SSE；TUI、composition、工具、审批、sandbox 和 session 均走编译后的真实 `cmd`。脚本从终端发送任务、审批和提问答案，确认终端显示 `todo_write` 计划和 `read_image` 结果的图片摘要，再独立检查根会话的十九次工具调用（`read_image` 结果带规范化 JPEG，且下一次请求携带同一张图片）与 `todo/write` 快照（含两题 `ask_user_question` 的预填推荐项与自由回答，`/plan` 后一次真实 TUI 批准的 `exit_plan_mode`，以及 `/goal` 创建目标后 driver 自动轮次中的 `get_goal` 与 `update_goal` complete、两条 `goal/change`、轮次与收尾指令消息和状态栏）、`plan/mode` 记录与切换提示、规划段落只出现在批准前的请求中、前台 spawn 与 fork 两个子会话的目录记录、descriptor、`never` 策略与 child 的 `read`、`write`/`edit`/两次 `bash` 的四次审批决定、实际文件字节、长行末尾、打断、重启 replay（后续 turn 已清除计划）、私有权限（含 `--spill-root` 的 `0700`）和退出后的 lock 清理。其中一个后台 `bash` job 在第一个 turn 结束后才完成，终端显示 `job>` 通知，通知开启的 turn 用 `job_output` 读到输出。PTY 场景里 `list_agents` 不列出已回收的 one-shot child，`send_message` 写给目录外 id 返回错误，`interrupt_agent` 对不存在的目标是空操作；后台 continuable 生命周期由上面的 assembled 测试与 subagent 包测试覆盖。
+`make tui-e2e` 是独立的本机 PTY 验证入口，需要 Python 3、Unix、PATH 中的 ripgrep 和可用的 workspace sandbox；脚本给被测二进制的最小 PATH 加上当前 `rg` 所在目录。[`scripts/tui-e2e.py`](../scripts/tui-e2e.py) 只替换远端模型，在 loopback 的动态端口提供 Responses SSE；TUI、composition、工具、审批、sandbox 和 session 均走编译后的真实 `cmd`。工具调用序列以脚本中的精确断言为准，验证场景包括：
+
+- 文件读取、搜索、写入、编辑和 shell：独立检查 call/result、审批决定与实际文件字节；`read_image` 结果包含规范化 JPEG，终端显示图片摘要，下一次模型请求携带同一张图片。
+- `todo_write`：终端显示计划，磁盘日志包含完整快照，重启 replay 时后续 turn 已清除计划。
+- 后台 `bash`：job 在首个 turn 结束后才完成，`job>` 通知开启新 turn，模型用 `job_output` 读到输出。
+- 前台 one-shot spawn 与 fork：独立子会话包含目录、descriptor 和 `never` 策略，spawn child 调用 `read`；子代理回收后 `list_agents` 返回空列表，`send_message` 写给目录外 id 返回错误，`interrupt_agent` 对不存在的目标是空操作。
+- `ask_user_question` 与规划审查：接受预填推荐项和自由回答；`/plan` 后通过真实 TUI 批准 `exit_plan_mode`，日志包含 `plan/mode` 与切换提示，规划段落只出现在批准前的请求中。
+- `/goal`：创建目标后 driver 自动开启轮次，模型通过 `get_goal` 与 `update_goal` 完成目标；检查 create/complete 的 `goal/change`、轮次与收尾指令、状态查询和状态栏。
+- 终端输入与生命周期：bracketed paste、窗口缩放、长行末尾可见、打断、重启 replay、私有权限（含 `--spill-root` 的 `0700`）与退出后的 lock 清理。
+
+PTY 中的 fork 在首个 turn 内创建，没有已完成 turn 可继承；完整 fork 继承和后台 continuable 生命周期由上面的 assembled 测试与 subagent 包测试覆盖。
 
 TUI 回归测试还覆盖 v2 粘贴、按键释放、secret 遮罩、小窗口布局（含计划面板在 18×8 到 80×24 窗口中的行数上限、溢出窗口和 transcript 保留行）、计划的初始 replay、实时替换与下一 turn 清除，以及 Scope 关闭正在运行的 terminal、取消并等待登录命令和拒绝迟到命令。PTY 在两种窗口尺寸下使用 bracketed paste 输入任务。TUI 回归测试证明流式输出与系统行不会串接、reasoning 不隐藏最终回答、中文长行可见、历史浏览保留位置，以及键盘输入和分页/鼠标滚动各自生效。断点调试另按[调试步骤](debugging.md)验证；直接 IDE 与 Remote 各自需要真实断点、调用栈和变量证据，协议 fixture 不等于远端模型 live 证据。
 
@@ -155,7 +165,7 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 
 ## 定向 mutation 与断言有效性
 
-`make mutation` 执行 `scripts/mutation-cases.json` 中三十三个已审查回归：Scope cleanup 顺序、approval never、会话序号、事件因果、read 字节上限、路径逃逸、写入跨 symlink、已提交输出后的 retry、web 抓取公网地址校验、IP 字面量经过同一地址策略、NAT64 翻译校验、同源重定向限制、后台 job 的 owner 隔离、delegated 提问拒绝、`plan/mode` 只在 step 边界、未读文件被 `write` 覆盖、spill 分区内预置链接、spill 会话目录的预置链接与过宽权限、取消后 broker 返回合法答案、规划退出选择前取消、todo 快照绑定工具类型、approval 决定禁止额外 call 引用、`send_message` 的直接父子授权、`interrupt_agent` 的后代授权、目标的人类权限排除 delegated agent、目标轮次必须属于当前 revision、`read_image` 的图片输入门禁、provider 对工具结果图片的 vision 拒绝，图片不得占用会话保留容量、目标开场持久化失败停止推进、engine 输出截断不继续调用、目标输出截断解除 armed，以及旧结算保留后来的人类授权。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
+`make mutation` 执行 [`scripts/mutation-cases.json`](../scripts/mutation-cases.json) 列出的全部已审查回归；用例 ID、变异位置与定向测试由该清单维护。它进入 `make check` 与 CI required mutation lane，普通逐文件 100% coverage 仍独立必需。这个有限集合不代表全仓自动 mutation score。
 
 执行器使用 Python 3 标准库，在 Unix 私有临时目录复制当前 cmd/internal、go.mod/go.sum（包含未提交源码与测试），拒绝源 symlink；不在工作树变异，不运行用户数据，不复用历史结果。每项先运行明确选择的真实测试且至少一个测试通过，再变异、独立编译、以 `-count=1` 重跑。只有 Go JSON 输出中的具名测试失败可认定 killed；build-error、timeout、infrastructure-error、no-tests、baseline failure、stale-site 和 survived 全部失败。当前列举的每个 site 都执行，不依赖 coverage 筛选，因此没有“缺失 coverage 就跳过”的成功路径。空集合、重复 ID 或找不到唯一替换位置均拒绝。超时终止并等待整个测试进程组；临时树最终清理。
 
@@ -179,9 +189,9 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 
 ## 模型可见工具目录
 
-`cmd/nano-harness/testdata/tool-catalog.json` 冻结真实 composition 的全部工具定义。`TestComposition_ToolCatalogGolden` 经 `cmd` 跑完一轮，从磁盘 transcript 的第一个 `request/header` 取出 tools，逐项比较名称、描述和紧凑化后的参数 JSON（保留键序），并确认 loopback provider 收到的 wire 定义与 header 相同。fixture 是人工审查的期望值，CI 只比较；有意变化时手工修改 fixture 并在同一变更中提升 composition 版本。
+[`cmd/nano-harness/testdata/tool-catalog.json`](../cmd/nano-harness/testdata/tool-catalog.json) 冻结真实 composition 的全部工具定义。`TestComposition_ToolCatalogGolden` 经 `cmd` 跑完一轮，从磁盘 transcript 的第一个 `request/header` 取出 tools，逐项比较名称、描述和紧凑化后的参数 JSON（保留键序），并确认 loopback provider 收到的 wire 定义与 header 相同。fixture 是人工审查的期望值，CI 只比较；有意变化时手工修改 fixture 并在同一变更中提升 composition 版本。
 
-`cmd/nano-harness/testdata/upstream-base-tools.json` 记录上游 Base 组合中 `read`、`read_image`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`skill`、`todo_write`、`web_search`、`web_fetch`、`exit_plan_mode`、`subagent`、`subagent_fork`、`send_message`、`interrupt_agent`、`list_agents`、`create_goal`、`get_goal`、`update_goal` 和 Web preset 的 `ask_user_question` 定义，以及 Base 规划段落与目标段落原文（`prompt_sections`），标注上游提交、来源文件和组合推导，测试不读取 submodule。`TestComposition_MatchesUpstreamBaseTools` 要求同名工具逐字节一致；规划模式与目标 assembled 测试要求请求中的规划段落与目标段落和 fixture 原文一致。更新参考指针时按 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md) 重新推导这份数据。
+[`cmd/nano-harness/testdata/upstream-base-tools.json`](../cmd/nano-harness/testdata/upstream-base-tools.json) 记录已对齐的上游 Base 工具定义、Web preset 的 `ask_user_question` 定义，以及 Base 规划段落与目标段落原文（`prompt_sections`），标注上游提交、来源文件和组合推导，测试不读取 submodule。对齐工具集合以该 fixture 的 `tools` 为准。`TestComposition_MatchesUpstreamBaseTools` 要求同名工具逐字节一致；规划模式与目标 assembled 测试要求请求中的规划段落与目标段落和 fixture 原文一致。更新参考指针时按 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md) 重新推导这份数据。
 
 ## 性能观测与预算
 

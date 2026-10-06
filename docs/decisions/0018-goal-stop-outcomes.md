@@ -12,6 +12,8 @@
 
 ## 决策
 
+> 与既有决定的关系：本 ADR 细化 [ADR-0016 的核心循环停止规则](0016-long-running-goals.md#核心循环变化)；目标的[领域与记录](0016-long-running-goals.md#领域与记录)、[权限](0016-long-running-goals.md#服务权限与工具)及[保留与恢复](0016-long-running-goals.md#版本识别拒绝旧格式与恢复)继续由 ADR-0016 拥有。
+
 - `llm.StopMaxTokens` 是 provider-neutral 的输出上限标识。Anthropic `stop_reason = "max_tokens"`、OpenRouter `finish_reason = "length"`、OpenAI Responses `response.incomplete` 且 `status = "incomplete"`、`incomplete_details.reason = "max_output_tokens"`、无 error，均映射到它。其他 Responses incomplete 仍失败关闭。协议依据：[Anthropic](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons)、[OpenRouter](https://openrouter.ai/docs/api/api-reference/chat/send-chat-completion-request)、[Responses](https://developers.openai.com/api/docs/guides/reasoning)。
 - session v2 新增 `turn/end.outcome = "max_tokens"`，它是权威停止事实，不从模型文本或 usage 数字推断。engine 先提交 assistant message、带 usage 的 step/end，再结束 turn；已经提交的 streaming chunk 保留。reasoning-only、空文本和被截断的工具 JSON 都可以以这个结局结束；provider 不返回截断响应的工具提案，engine 同样在执行工具前停止，不消费待投递通知。现有失败与取消路径保持自己的 outcome。
 - 严格形状校验只接受精确枚举 `max_tokens`，不接受 wire 名 `length`、`max_output_tokens` 或上游拼写 `max-tokens`。JSONL 只在最近一步已有 assistant message、step 与未决工作均已关闭时接受它；前一 turn 的 completion 不能证明后一 turn 的停止。

@@ -16,6 +16,8 @@
 4. 复杂度、跨包重复和性能先由独立 workflow 观察；分析器自身失败必须可见。固定工具和语料、保存原始样本，在实际 runner 校准并验证负例后才提升为阻断。不得以重复率或复杂度数字自动强制跨职责抽象。
 5. v2 JSONL 固定样本由人工审查，reader 与独立构造的 writer 分别验证。持久化变更明确兼容/拒绝/迁移选择并提供事件因果证据；不引入上游格式或自动迁移。
 
+> 历史计数：本节的 mutation 数量记录初始实施集合；当前全部用例与执行契约见[测试策略](../testing.md#定向-mutation-与断言有效性)。
+
 ## 后果
 
 新增门禁具有真实拒绝证据，代价是本地 workflow helpers 需要 Python 3，定向 mutation 需要 Unix 进程组和额外 Go 编译时间。golangci-lint 的 dupl 仅在包内运行，跨包报告采用其同版本依赖的独立 dupl，固定 pseudo-version、MIT 许可证且无传递 Go 依赖；不进入产品 module。未直接引入三个 Python 工具，避免新增 Python parser 依赖和已实证的 mutation 误判/缓存问题。

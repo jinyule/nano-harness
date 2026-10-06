@@ -106,7 +106,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 
 ## 当前上游 Skills 映射
 
-当前上游有 14 个普通文件形式的 skill 入口，另有 `agent-experience` 的仓内 symlink 入口。`dsh-doc` 继续拥有合并后的文档流程。部分 `agents/openai.yaml` 删除不代表本仓元数据不再需要；本仓七个 skill 由自己的 `skillcheck` 校验，并通过现有权威文档链接获得更新后的规则。
+上游 skill 的采纳、保留与暂缓按下表记录，`agent-experience` 是仓内 symlink 入口；参考基线与更新证据见[参考更新 Note](../.agents/notes/implemented/2026-10-04-refresh-deepseek-reference.md)。`dsh-doc` 继续拥有合并后的文档流程。部分 `agents/openai.yaml` 删除不代表本仓元数据不再需要；本仓入口见[项目 Skills](../.agents/skills/AGENTS.md)，由自己的 `skillcheck` 校验，并通过现有权威文档链接获得更新后的规则。
 
 | 上游 skill | 本仓处理 |
 |---|---|

@@ -37,6 +37,8 @@
 
 `glob` 超过 100 个路径时保存全部路径（`glob-results.txt`），`grep` 超过 250 个匹配时保存全部匹配的分组预览（`grep-results.txt`，首行 `Found N matches`）。结果尾注使用上游文案 `Full sorted result stored at: …` 与 `Full grep result stored at: …`；保存失败时仍是上游的 “could not be saved” 文案，搜索本身不因此失败。
 
+> 后续决定：[ADR-0015](0015-multimodal-tool-results.md#工具运行时) 将携带图片的结果排除在通用 spill 策略之外；文本结果仍按本节处理。
+
 工具通过 `Invocation.CreateSpill` 流式写入，或通过 `Invocation.SaveText` 一次写入；两者由 runtime 绑定调用方会话。`SpillFile.Locator` 从创建起可用，运行中的命令可以先声明正在增长的文件。
 
 ### bash 完整输出
@@ -57,6 +59,8 @@
 - 绝对路径在词法上位于分区内，且解析链接后仍位于分区的解析结果内时才接受；分区内被放置的链接指向外部时拒绝。
 - `glob`、`write`、`edit` 和 `bash` 的 `workdir` 不受影响，仍只接受 workspace 路径。
 - 同一 workspace 的会话（包括 delegated child）可以读取彼此的 spill 文件，fork 快照中的定位符因此仍可用；其他 workspace 的分区不可见。
+
+> 后续决定：[ADR-0015](0015-multimodal-tool-results.md#read_image) 将同一只读边界扩展到 `read_image`，并让成功读图记录源文件摘要供先读后写检查；本 ADR 的 `read`/`grep` 与写入边界仍保留。
 
 ### 持久化与生命周期
 
@@ -82,6 +86,8 @@
 ### 身份
 
 composition ID 改为绑定 `fs-tools-v2`、`search-tools-v3`、`shell-tools-v3` 和新的 `spill-v1`。旧会话按 composition mismatch 拒绝恢复；会话 v2 格式本身不变。
+
+> 已被取代：本节的 `fs-tools-v2` 由 [ADR-0015](0015-multimodal-tool-results.md#版本识别拒绝旧格式与恢复) 提升为 `fs-tools-v3`；此处保留 spill 与观察策略落地时的身份。
 
 ## 后果
 

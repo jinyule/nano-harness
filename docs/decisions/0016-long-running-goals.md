@@ -19,6 +19,8 @@
 
 ## 决策
 
+> 后续决定：[ADR-0018](0018-goal-stop-outcomes.md) 拥有输出截断事实、开场持久化失败停止推进及按确切 ID/revision 结算的契约；本 ADR 拥有目标状态、权限、轮次驱动和恢复规则。下文的停止语义已同步到该后续决定。
+
 ### 领域与记录
 
 `internal/core/session` 定义 `GoalSnapshot`、`GoalChange` 与严格折叠 `GoalState.Apply`/`ProjectGoal`。新记录：

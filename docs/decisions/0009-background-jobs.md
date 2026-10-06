@@ -37,6 +37,8 @@
 
 本仓暂不实现上游的 controller 挂载检查、非消费式观察读取、progress 行和 owner 销毁时的 job 清理：当前 composition 总是同时注册 job 工具；没有 UI 观察者；`bash` 没有 progress；WP3 中能启动 job 的只有根 agent，它在 `jobs` 之后关闭。WP7 引入可在服务运行期间关闭的 owner 时，必须同时增加 owner 释放。
 
+> 已被取代：暂缓 owner 销毁清理的部分由 [ADR-0013](0013-background-continuable-subagents.md#6-job-的-owner-释放) 取代，child 关闭时释放其 job；其他暂缓项保留。
+
 ### job 工具
 
 `internal/adapter/tool/job` 是插件 `job-tools`，注册与上游逐字节一致的 `job_output`、`job_list`、`job_kill`：
@@ -73,11 +75,19 @@ background job <id> (<kind>: <label>) finished <status line>. Read its output wi
 - 被取消的 turn 留下的通知等待下一个 turn，不会在用户 interrupt 后立即自动开 turn。`WhenIdle` 把已唤醒但尚未开始的通知 turn 视为忙。
 - 待投递的通知与 followup、steer 一样只在内存中，agent 停止时丢弃；此时 job 本身也已被终止。
 
+> 后续约束：[ADR-0013](0013-background-continuable-subagents.md#6-job-的-owner-释放) 规定 one-shot agent 只在唯一 turn 运行期间接受通知，turn 结束后不再由通知唤醒；本节的通用唤醒规则受此限制。
+
+> 后续停止契约：[ADR-0018](0018-goal-stop-outcomes.md) 规定输出截断的 turn 不消费待投递通知，通知留给下一个 turn；本节的提交点受此停止规则约束。
+
 模型可见的通知只通过已提交的 `user/message` 进入 surface。session v2 的记录类型、字段和校验都不变：source kind 本来就是开放字符串，order validator 已允许活动 turn 内任意位置的 `user/message`。新出现的因果形态（无工具调用的 step 之后出现 `user/message` 并继续 step）也由现有 validator 接受，resume 修复规则不变。TUI 把这类消息显示为 `job> `，而不是 `you> `。
+
+> 后续格式：[ADR-0016](0016-long-running-goals.md#领域与记录) 为目标轮次增加 `MessageSource` 归属字段和严格折叠校验；`tool-jobs` 通知仍沿用本节形态。
 
 ### 恢复与身份
 
 job、计数器和待投递通知都不持久化。恢复后旧 transcript 中的 job ID 对 `job_*` 工具是 `unknown job`，新进程的编号从 1 重新开始。composition ID 改为绑定 `shell-tools-v2` 和新增的 `job-tools-v1`，旧会话按 composition mismatch 拒绝恢复；本仓尚无发布 tag，没有已发布的用户会话需要迁移。
+
+> 已被取代：本节的 `shell-tools-v2` 由 [ADR-0008](0008-tool-output-spill-and-observation-policy.md#身份) 提升为 `shell-tools-v3`；此处保留后台任务落地时的身份。
 
 ### Subagent
 
@@ -93,6 +103,8 @@ delegated agent 可以调用对其可见的 `job_*` 工具，但只能访问自�
 - 进程退出、崩溃或 shutdown 会终止全部 job，并丢弃尚未投递的通知；用户需要重新运行命令。
 - 前台命令现在多一次 job 注册和输出复制（输出环最多 128 KiB）；内存上限为每 owner 10 个活动 job。
 - 输出环保留量与上游不同；超出保留窗口的输出在 WP2 的 spill 落地前无法找回。
+
+> 后续决定：[ADR-0008](0008-tool-output-spill-and-observation-policy.md#bash-完整输出) 已保存完整 shell 输出并补齐定位符；[ADR-0013](0013-background-continuable-subagents.md#2-生命周期) 增加无需用户审批即可启动的后台 subagent job，因此“每次启动都需要用户审批”只适用于 `bash`，不覆盖所有 job producer。
 
 ## 被否决方案
 

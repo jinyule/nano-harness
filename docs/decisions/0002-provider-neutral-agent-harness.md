@@ -48,9 +48,13 @@ composition ID 绑定 workspace 与工具/会话语义，不绑定可热切换 r
 
 只在失败前没有 stream 事实时自动 retry。context-window failure 关闭当前 step、强制 compaction，再开始新 step。`Followup` 排新 turn；`Steer` 在工具 step 边界注入；`Interrupt` 只取消当前 turn；shutdown 停止新工作、取消并等待静止。所有终止都记录 stable outcome。
 
+> 后续停止契约：[ADR-0018](0018-goal-stop-outcomes.md) 增加 `max_tokens` 结局，并规定输出截断时在执行工具和消费待投递通知之前停止；此处保留原循环决定。
+
 ### 5. 工具、approval 与 sandbox
 
 workspace provider 安装 `read_file`、`list_files`、`search_files`、`apply_patch` 和 `run_shell`。只读工具声明 parallel，写与 shell 声明 exclusive；scheduler 并行相邻 parallel call，并把 exclusive call 作为 barrier，同时保持 result 顺序。
+
+> 已被取代：本节的工具清单、patch 行为与 shell 参数由 [ADR-0007](0007-upstream-base-tool-definitions.md) 的 Base 工具映射、`write`/`edit` 与 sandbox 升级字段取代；`bash` 后台变体见 [ADR-0009](0009-background-jobs.md)。下文保留原决定。
 
 模型生成的 arguments strict decode。所有文件操作限定解析后的 workspace；patch 拒绝 binary/rename/copy/symlink 并先 check。写入和 shell 在实际执行点请求一次性 approval；无 broker、取消、policy never、非法决定或 journal failure 都拒绝。
 
@@ -60,9 +64,13 @@ workspace provider 安装 `read_file`、`list_files`、`search_files`、`apply_p
 
 subagent 不是 Codex/Claude subprocess，而是 Registry 中的完整 child Agent、独立 JSONL 和 Scope。支持 one-shot/continuable、spawn、可选 parent surface fork、followup、interrupt、report 和 list；最大深度为 4。parent/depth/mode/persona/tool allowlist 持久化，parent identity 在控制边界校验。
 
+> 已被取代：本节的 subagent 工具族、fork 与持久化契约由 [ADR-0013](0013-background-continuable-subagents.md) 取代；进程内 child Agent、独立会话与 Scope 的所有权仍保留。
+
 ### 7. 图片与全屏 TUI
 
 图片只做输入，不提供生成。显式 JPEG/PNG attachment 经大小/像素校验、缩放与有界 JPEG 重新编码后进入 user message；provider 能力不支持 vision 时在发网前拒绝。
+
+> 已被取代：图片只进入 user message 的限制由 [ADR-0015](0015-multimodal-tool-results.md) 取代，成功的工具结果也可携带图片；该 ADR 同时扩展 `/attach` 的输入格式。此处保留原决定。
 
 TUI 使用 Bubble Tea alternate screen，从 durable replay 初始化并订阅已提交事件，展示 text/reasoning/tool stream、approval、retry、compaction、账户、模型、图片和 subagent 状态。TUI 同时是本地 approval broker 与 auth interaction；命令只调用 app 用例，不直接越层修改 adapter 状态。
 

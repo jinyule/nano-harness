@@ -117,9 +117,9 @@ Git hook 只做快速检查：pre-commit 处理 staged whitespace/gofmt，pre-pu
 
 `make quality BASE_REF=<verified-base>` 使用固定的 golangci-lint v2.12.2 `gocyclo` 和独立 dupl `v0.0.0-20260401084720-c99c5cf5c202` 生成 `.cache/quality/` 报告。独立 dupl 采用与 lint 相同的依赖版本、MIT 许可证，无第三方 Go module 依赖，不进入产品依赖；它比较全部产品源码，避免 lint 的包内分析漏掉跨包重复。首次运行需要 Go module 下载网络和 Python 3。source tests、testdata 和 internal/tools 不进入指标；复杂度按当前构建平台分析，重复检测包含其他平台文件。
 
-当前报告阈值为圈复杂度 10、重复片段 100 个语法节点。它们是定位线索，不是通过线。基线为 57 条复杂度诊断、9 条重复位置诊断（位置循环对应三个重复组，不是九对函数）；以本次 Agent Note 的工具与平台记录为准。CRAP 在 100% coverage 下等于圈复杂度，因此不增加一个同义硬指标。
+当前报告阈值为圈复杂度 10、重复片段 100 个语法节点。它们是定位线索，不是通过线。已测基线、工具与平台记录见[工程证据 Note](../.agents/notes/implemented/2026-10-04-engineering-evidence-gates.md#verification)，不作为当前工作树的诊断计数。CRAP 在 100% coverage 下等于圈复杂度，因此不增加一个同义硬指标。
 
-PR 审查新增或修改的高复杂度函数与跨包重复：说明不变量、owner、变化原因及自然拆分点；保留必要的边界和失败分支。相同形状不证明同一职责，不为指标创建 PluginBase、无意义 wrapper、跨 adapter 依赖或宽泛 nolint。已存在的插件启停、provider 注册和私有文件写入重复保留独立 owner，具体取舍见实施 Note。
+PR 审查新增或修改的高复杂度函数与跨包重复：说明不变量、owner、变化原因及自然拆分点；保留必要的边界和失败分支。相同形状不证明同一职责，不为指标创建 PluginBase、无意义 wrapper、跨 adapter 依赖或宽泛 nolint。已存在的插件启停、provider 注册和私有文件写入重复保留独立 owner，具体取舍见[工程证据 Note](../.agents/notes/implemented/2026-10-04-engineering-evidence-gates.md#consequences)。
 
 `BASE_REF` 必须为已核实的基线，报告记录 merge-base 到当前工作树的变更文件和未跟踪文件；完整语料始终参与检测，新代码与旧代码也能匹配。指标报告不使用 `git status` 代替 PR diff，也不因干净 checkout 而跳过已提交变化。分析器配置、解析或工具失败会使命令失败；发现复杂度/重复候选只写报告。`make quality-tests` 用真实 Go fixture 证明复杂度和跨包重复可被发现。
 

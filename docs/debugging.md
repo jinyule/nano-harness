@@ -10,7 +10,7 @@ GoLand 可以直接启动并调试真实 TUI，也可以连接由 Codex 终端�
 make tui-e2e
 ```
 
-需要 Python 3、macOS/Linux PTY、Git，以及 macOS `sandbox-exec` 或可用的 Linux `bwrap`。脚本用私有临时 workspace、账户路径和 session root，不读取个人模型凭据；结束时回收 binary、server、终端和临时目录。验证范围由[测试策略](testing.md#tui-与真实-cmd)定义。
+需要 Python 3、macOS/Linux PTY、Git，以及 macOS `sandbox-exec` 或可用的 Linux `bwrap`。脚本用私有临时 workspace、账户路径和 session root，不读取个人模型凭据；结束时回收产品进程、server、终端和临时目录，`make build` 生成的二进制保留在 `bin/`。验证范围由[测试策略](testing.md#tui-与真实-cmd)定义。
 
 ## 直接在 GoLand 调试
 

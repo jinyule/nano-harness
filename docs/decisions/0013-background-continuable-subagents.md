@@ -28,6 +28,8 @@
 
 前台 run 未完成时返回错误：`subagent run was cancelled`（取消或中断恢复）、`subagent run failed`（错误）或 `subagent run ended abnormally (step_limit)`，有部分回答时追加 `\nPartial output before the run ended:\n<text>`。
 
+> 后续停止契约：[ADR-0018](0018-goal-stop-outcomes.md) 将 `max_tokens` 纳入前台异常结束错误、后台结算通知和后台 job 的失败结局；此处保留原结果描述。
+
 ### 2. 生命周期
 
 `internal/app/subagent.Service`（插件 `subagents`）拥有全部 child 句柄：

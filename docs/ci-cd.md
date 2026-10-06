@@ -19,7 +19,7 @@
 | `lint` | Go 1.26.x 下运行固定版本 golangci-lint 与配置 schema |
 | `test` | Go 1.26/1.27 兼容、race 和单元测试 |
 | `coverage` | 主版本 Linux 下执行逐产品源文件 100% 门槛 |
-| `mutation` | 无缓存、私有副本执行[已审查高风险回归](testing.md#定向-mutation-与断言有效性)；仅具名测试失败算 killed |
+| `mutation` | 无缓存、私有副本执行[测试策略规定的全部定向回归](testing.md#定向-mutation-与断言有效性)；仅具名测试失败算 killed |
 | `build` | Linux/macOS/Windows 从真实 `cmd` 构建并运行 `version` |
 | `security` | `govulncheck` 的可达漏洞分析 |
 | `release-dry-run` | GoReleaser 构建跨平台制品，验证精确 payload 并执行 Linux 宿主 archive，不发布 |

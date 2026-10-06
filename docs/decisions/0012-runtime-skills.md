@@ -44,6 +44,8 @@
 
    上游在消息 source 中另存条目列表并比较其摘要；本仓 `MessageSource` 只有 `kind` 与 `plugin`，所以直接比较确定性渲染的文本。模板变化会改变比较结果，因此必须同时提升 composition 版本。
 
+   > 后续格式：[ADR-0016](0016-long-running-goals.md#领域与记录) 为 `MessageSource` 增加目标轮次归属字段，取代“只有 kind 与 plugin”的描述；skill 消息仍只使用本节的来源字段，目录比较规则不变。
+
 7. **工具结果。** `skill` 先在 `Check` 中拒绝非法名称（`invalid skill name "<name>"`），执行时重新发现并查找摘要：找不到报告 `skill "<name>" is unknown or no longer available`，摘要禁止模型调用报告 `skill "<name>" is not available for model invocation`。随后重读文件，对实际读到的定义再检查名称与策略。结果采用上游 `<skill_content>` 格式，包含 `Base directory for this skill: <目录>`、相对资源解析提示和原样正文；不列举资源文件。发现失败以 `Error: <原因>` 返回。目录在 workspace 外时，workspace 文件工具不能读取其中的资源；模型只能通过受 approval 约束的 `bash` 访问。
 
 8. **显式调用。** 本 turn 最近一次 `turn/start` 或 `step/start` 之后提交的、来源为 `user` 的消息中，被空白包围的 `/name` 文本块令牌按首次出现顺序去重。名称对应 user-invocable skill 时，重读其文件，把同样的 `<skill_content>` 作为来源 `{kind: "skill-invocation", plugin: "skill-tools"}` 的消息追加在目录之后。未知名称和 `user-invocable: false` 保持普通文本；这是 `disable-model-invocation` skill 唯一的入口，`skill` 工具可见与否不影响它。加载这个 skill 的 I/O 失败会结束 turn，与上游 pre-step 的行为一致。TUI 把以 kebab-case `/name` 开头、但不是 TUI 命令的输入作为普通消息发送。

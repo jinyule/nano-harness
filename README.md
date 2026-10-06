@@ -97,7 +97,7 @@ model 必须在该 provider 的模型目录中，否则设置加载失败。未�
 
 ## 终端验证与 GoLand 调试
 
-`make tui-e2e` 使用真实二进制和 PTY，配合本地模型协议 fixture，验证文件工具、任务计划、后台任务通知、Subagent、审批、提问、规划模式、打断和恢复，无需模型账户。需要 Python 3、Unix PTY、ripgrep 和本机 workspace sandbox。
+`make tui-e2e` 使用真实二进制和 PTY，配合本地模型协议 fixture，验证文件工具与 `read_image`、任务计划、后台任务通知、前台 one-shot spawn/fork 子代理、审批、提问、规划审查、`/goal` 自动轮次与完成、粘贴、窗口缩放与换行、打断和恢复，无需模型账户。需要 Python 3、Unix PTY、ripgrep 和本机 workspace sandbox；完整场景与证据范围见[测试策略](docs/testing.md#tui-与真实-cmd)。
 
 GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点。需要把 TUI 输入保留在 Codex 或其他终端中时，使用 `Nano TUI Remote`；完整步骤见[终端与断点调试](docs/debugging.md)。
 
@@ -105,7 +105,7 @@ GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点�
 
 - provider-neutral 的 Models → Provider → wire API 路由；provider 拥有 catalog、认证、刷新和流协议。
 - OpenAI Responses/ChatGPT Codex Responses、Anthropic Messages、OpenRouter Chat Completions 的流式适配。
-- 与上游 Base 定义一致的 `read`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`web_search`、`web_fetch`、`skill`、记录会话任务计划的 `todo_write`、`exit_plan_mode` 和长期目标的 `get_goal`、`create_goal`、`update_goal`，与 Web preset 一致的 `ask_user_question`，以及后台可继续的 `subagent`、继承会话的 `subagent_fork` 和 `send_message`、`interrupt_agent`、`list_agents`。
+- 与上游 Base 定义一致的 `read`、`read_image`、`write`、`edit`、`glob`、`grep`、`bash`、`job_output`、`job_list`、`job_kill`、`web_search`、`web_fetch`、`skill`、记录会话任务计划的 `todo_write`、`exit_plan_mode` 和长期目标的 `get_goal`、`create_goal`、`update_goal`，与 Web preset 一致的 `ask_user_question`，以及后台可继续的 `subagent`、继承会话的 `subagent_fork` 和 `send_message`、`interrupt_agent`、`list_agents`。完整定义以[真实 composition 工具目录](cmd/nano-harness/testdata/tool-catalog.json)为准，验证方式见[测试策略](docs/testing.md#模型可见工具目录)。
 - `bash` 可在后台运行，前台命令超时后转为后台 job 继续运行；job 完成后通知所属 agent，agent 空闲时自动开启新 turn。
 - 可持久化的规划模式与经用户审查的退出，以及失败关闭的用户提问接缝。
 - 运行时 skill 发现：skill 目录随会话持久化并在变化时替换，用户可用 `/name` 直接调用。
@@ -119,12 +119,18 @@ GoLand 可直接选择共享配置 `Nano TUI` 调试全屏界面并命中断点�
 cmd/nano-harness/                 CLI、依赖组装、生命周期与退出码
 internal/core/plugin/             Plugin/Scope 生命周期
 internal/core/session/            v2 会话事件、校验与 replay surface
+internal/core/skill/              skill 名称、目录与正文模板、调用令牌
 internal/app/agent/               agent engine、worker、registry 与 bootstrap
-internal/app/{llm,tool,...}/      用例与消费方能力接口
+internal/app/goal/                长期目标服务、轮次准入与自动 driver
+internal/app/{llm,tool,...}/       用例与消费方能力接口
 internal/adapter/model/provider/  OpenAI、Anthropic、OpenRouter provider
 internal/adapter/credential/file/ owner-only 账户存储
+internal/adapter/settings/file/   严格 YAML 设置存储与热重载
 internal/adapter/session/jsonl/   严格 JSONL 会话 provider
-internal/adapter/tool/            file、search、shell、job、subagent、todo、web、提问与规划模式工具与 workspace 根
+internal/adapter/spill/           workspace 分区的完整工具输出存储与清理
+internal/adapter/tool/            file、search、shell、job、subagent、todo、web、提问、规划模式工具与 workspace 根
+internal/adapter/tool/skill/       skill 发现、加载与 step 上下文注入
+internal/adapter/tool/goal/        get_goal、create_goal、update_goal 工具
 internal/adapter/web/fetch/       公网 HTTP(S) 抓取与地址策略
 internal/adapter/media/image/     图片解码、缩放与规范化
 internal/adapter/tui/             全屏终端 UI
