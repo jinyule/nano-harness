@@ -39,6 +39,8 @@
 
 失败通过既有收尾路径追加 `compaction/end.error = "max_tokens"`，返回包含 compaction ID 的错误；收尾写入失败与截断原因一起保留。收尾不继承调用取消，写入仍失败时按既有追加式 resume repair 关闭未结束事务。截断前已经落盘的 `compaction/prune` 保留，此时布尔结果为 true，但 error 仍使 engine 结束 turn，不能把已有裁剪当成摘要成功。手动请求没有裁剪，返回 false 和错误。resume 与后续请求从原历史和已提交裁剪重建 surface。
 
+已提交的 `compaction/summary` 之后，成功收尾的 `compaction/end` 同样不继承调用取消，所以摘要落盘后被取消的请求仍关闭事务并返回成功。插件 cleanup 先拒绝新请求，再取消进行中的 `Maybe`（包括摘要模型请求、退避等待和日志读写），等待全部返回后才返回：已开始的事务在 cleanup 返回前由失败收尾或成功收尾关闭，cleanup 返回后不再追加 compaction 记录。等待时长取决于 provider 与日志对取消的响应。
+
 本修补不增加会话字段或 composition token：`compaction/end.error` 已是安全错误字符串，`max_tokens` 沿用停止词汇。修补前已发布的不完整摘要没有停止原因可供可靠识别，因此不自动撤销或改写；raw log 保留供离线检查。session v2 与本 ADR 的 composition mismatch 拒绝规则继续有效。
 
 ### 裁剪规则

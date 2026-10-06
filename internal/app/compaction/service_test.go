@@ -3,6 +3,8 @@ package compaction
 import (
 	"context"
 	"errors"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +34,8 @@ type compactionPrepared struct {
 	errors  []error
 	calls   int
 	seen    []llm.Request
+	// hold, when set, runs before each stream returns and can fail it.
+	hold func(context.Context) error
 }
 
 func (*compactionPrepared) Info() llm.ModelInfo {
@@ -45,9 +49,14 @@ func (*compactionPrepared) Search(context.Context, llm.Credential, llm.SearchReq
 	return llm.SearchResult{}, nil
 }
 
-func (prepared *compactionPrepared) Stream(_ context.Context, _ llm.Credential, request llm.Request, emit llm.Emit) (llm.Completion, error) {
+func (prepared *compactionPrepared) Stream(ctx context.Context, _ llm.Credential, request llm.Request, emit llm.Emit) (llm.Completion, error) {
 	if request.Purpose != "compaction" || request.MaxTokens == 0 || emit == nil {
 		return llm.Completion{}, errors.New("bad compaction request")
+	}
+	if prepared.hold != nil {
+		if err := prepared.hold(ctx); err != nil {
+			return llm.Completion{}, err
+		}
 	}
 	index := prepared.calls
 	prepared.calls++
@@ -99,6 +108,50 @@ func (journal *compactionJournal) Append(_ context.Context, record session.Recor
 		return session.Event{}, err
 	}
 	return session.Event{Sequence: uint64(position), Record: record}, nil
+}
+
+// gatedJournal rejects an append under an ended context, like the JSONL log,
+// except one of type holdFor, which runs hold and then commits. It records
+// appends made on another goroutine.
+type gatedJournal struct {
+	events  []session.Event
+	holdFor session.RecordType
+	hold    func(context.Context)
+
+	mu      sync.Mutex
+	records []session.Record
+}
+
+func (journal *gatedJournal) Events(context.Context) ([]session.Event, error) {
+	return journal.events, nil
+}
+
+func (journal *gatedJournal) Append(ctx context.Context, record session.Record) (session.Event, error) {
+	if journal.hold != nil && record.Type == journal.holdFor {
+		journal.hold(ctx)
+	} else if err := ctx.Err(); err != nil {
+		return session.Event{}, err
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	journal.records = append(journal.records, record)
+	return session.Event{Sequence: uint64(len(journal.records)), Record: record}, nil
+}
+
+func (journal *gatedJournal) types() []session.RecordType {
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	kinds := make([]session.RecordType, len(journal.records))
+	for index, record := range journal.records {
+		kinds[index] = record.Type
+	}
+	return kinds
+}
+
+func (journal *gatedJournal) last() *session.CompactionData {
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	return journal.records[len(journal.records)-1].Compaction
 }
 
 func assistantSummary(text string) session.Message {
@@ -364,4 +417,95 @@ type noImages struct{}
 
 func (noImages) ReadImage(context.Context, session.Image) ([]byte, error) {
 	return nil, session.ErrAttachmentMissing
+}
+
+func TestService_CleanupClosesInFlightCompaction(t *testing.T) {
+	harness := newCompactionHarness(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	harness.prepared.hold = func(ctx context.Context) error {
+		close(entered)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+			return nil
+		}
+	}
+	journal := &gatedJournal{events: visibleEvents(4)}
+	type outcome struct {
+		compacted bool
+		err       error
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		compacted, err := harness.service.Maybe(context.Background(), Request{Journal: journal, Turn: 1, Force: true})
+		result <- outcome{compacted, err}
+	}()
+	<-entered
+	// Close runs while the summary request is open; only cleanup's
+	// cancellation ends it.
+	if err := harness.serviceScope.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	want := []session.RecordType{session.RecordCompactionStart, session.RecordCompactionEnd}
+	if got := journal.types(); !slices.Equal(got, want) {
+		t.Fatalf("cleanup returned with the compaction open: %v", got)
+	}
+	if end := journal.last(); end.Error != "cancelled" {
+		t.Fatalf("closing record = %+v", end)
+	}
+	if got := <-result; got.compacted || !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("in-flight compaction = %t, %v", got.compacted, got.err)
+	}
+}
+
+func TestService_CleanupWaitsForCompactionCommit(t *testing.T) {
+	harness := newCompactionHarness(t)
+	entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	// The summary append observes cancellation but, like a write already
+	// past its last check, still commits once released.
+	journal := &gatedJournal{events: visibleEvents(4), holdFor: session.RecordCompactionSummary, hold: func(ctx context.Context) {
+		close(entered)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+	}}
+	type outcome struct {
+		compacted bool
+		err       error
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		compacted, err := harness.service.Maybe(context.Background(), Request{Journal: journal, Turn: 1, Force: true})
+		result <- outcome{compacted, err}
+	}()
+	<-entered
+	closed := make(chan error, 1)
+	go func() { closed <- harness.serviceScope.Close(context.Background()) }()
+	select {
+	case <-cancelled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cleanup did not cancel the in-flight compaction")
+	}
+	if _, err := harness.service.Maybe(t.Context(), Request{Journal: &gatedJournal{events: visibleEvents(4)}, Force: true}); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("compaction during cleanup = %v", err)
+	}
+	select {
+	case err := <-closed:
+		t.Fatalf("cleanup returned with a compaction in flight: %v", err)
+	default:
+	}
+	close(release)
+	// A committed summary always closes its transaction, even cancelled.
+	if got := <-result; !got.compacted || got.err != nil {
+		t.Fatalf("in-flight compaction = %t, %v", got.compacted, got.err)
+	}
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	want := []session.RecordType{session.RecordCompactionStart, session.RecordCompactionSummary, session.RecordCompactionEnd}
+	if got := journal.types(); !slices.Equal(got, want) {
+		t.Fatalf("records = %v", got)
+	}
 }

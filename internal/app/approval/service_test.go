@@ -3,7 +3,10 @@ package approval
 import (
 	"context"
 	"errors"
+	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
@@ -23,6 +26,56 @@ func (journal *testJournal) Append(_ context.Context, record session.Record) (se
 	return session.Event{Sequence: uint64(len(journal.records)), Record: record}, nil
 }
 
+// lockedJournal records appends made on another goroutine. hold, when set,
+// runs inside every Append of the given type before it records.
+type lockedJournal struct {
+	mu      sync.Mutex
+	records []session.Record
+	holdFor session.RecordType
+	hold    func(context.Context) error
+}
+
+func (journal *lockedJournal) Append(ctx context.Context, record session.Record) (session.Event, error) {
+	if journal.hold != nil && record.Type == journal.holdFor {
+		if err := journal.hold(ctx); err != nil {
+			return session.Event{}, err
+		}
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	journal.records = append(journal.records, record)
+	return session.Event{Sequence: uint64(len(journal.records)), Record: record}, nil
+}
+
+func (journal *lockedJournal) snapshot() []session.Record {
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	return slices.Clone(journal.records)
+}
+
+// heldBroker answers outcome only after its context ends or release closes,
+// like an operator who approves just as shutdown begins.
+type heldBroker struct {
+	entered chan struct{}
+	release chan struct{}
+	outcome session.ApprovalOutcome
+}
+
+func (broker heldBroker) Ask(ctx context.Context, _ Question) session.ApprovalOutcome {
+	close(broker.entered)
+	select {
+	case <-ctx.Done():
+	case <-broker.release:
+	}
+	return broker.outcome
+}
+
+func (service *Service) policyCount() int {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	return len(service.policies)
+}
+
 type testBroker struct{ outcome session.ApprovalOutcome }
 
 func (broker testBroker) Ask(context.Context, Question) session.ApprovalOutcome {
@@ -40,7 +93,7 @@ func startApproval(t *testing.T) (*Service, *plugin.Scope) {
 	return service, scope
 }
 
-func approvalRequest(journal *testJournal) appTool.ApprovalRequest {
+func approvalRequest(journal appTool.Journal) appTool.ApprovalRequest {
 	return appTool.ApprovalRequest{SessionID: "s", Turn: 1, Step: 1, Call: session.ToolCall{ID: "c", Name: "tool"}, Reason: "risk", Journal: journal}
 }
 
@@ -146,4 +199,136 @@ func TestServiceFailureAndCancellation(t *testing.T) {
 		t.Fatalf("invalid broker outcome=%s err=%v", outcome, err)
 	}
 	_ = brokerScope.Close(context.Background())
+}
+
+func types(records []session.Record) []session.RecordType {
+	kinds := make([]session.RecordType, len(records))
+	for index, record := range records {
+		kinds[index] = record.Type
+	}
+	return kinds
+}
+
+func TestService_CleanupCancelsInFlightAppends(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		held session.RecordType
+		call func(*Service, *lockedJournal) error
+	}{
+		{"policy", session.RecordApprovalPolicy, func(service *Service, journal *lockedJournal) error {
+			return service.SetPolicy(context.Background(), "s", journal, session.ApprovalNever)
+		}},
+		// A question that never committed needs no outcome.
+		{"question", session.RecordApprovalAsked, func(service *Service, journal *lockedJournal) error {
+			_, err := service.Decide(context.Background(), approvalRequest(journal))
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, scope := startApproval(t)
+			entered, release := make(chan struct{}), make(chan struct{})
+			journal := &lockedJournal{holdFor: test.held, hold: func(ctx context.Context) error {
+				close(entered)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-release:
+					return nil
+				}
+			}}
+			result := make(chan error, 1)
+			go func() { result <- test.call(service, journal) }()
+			<-entered
+			// Close runs while the append is held; nothing else releases it.
+			if err := scope.Close(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			close(release)
+			err := <-result
+			if got := journal.snapshot(); len(got) != 0 || service.policyCount() != 0 {
+				t.Fatalf("a call committed after cleanup returned: records %v, policies %d", types(got), service.policyCount())
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("in-flight call = %v", err)
+			}
+		})
+	}
+}
+
+func TestService_CleanupWaitsForInFlightPolicyChange(t *testing.T) {
+	service, scope := startApproval(t)
+	entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	// The append observes cancellation but, like a write already past its
+	// last check, still commits once released.
+	journal := &lockedJournal{holdFor: session.RecordApprovalPolicy, hold: func(ctx context.Context) error {
+		close(entered)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		return nil
+	}}
+	result := make(chan error, 1)
+	go func() { result <- service.SetPolicy(context.Background(), "s", journal, session.ApprovalNever) }()
+	<-entered
+	closed := make(chan error, 1)
+	go func() { closed <- scope.Close(context.Background()) }()
+	select {
+	case <-cancelled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cleanup did not cancel the in-flight policy change")
+	}
+	if err := service.SetPolicy(t.Context(), "other", &lockedJournal{}, session.ApprovalNever); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("policy change during cleanup = %v", err)
+	}
+	select {
+	case err := <-closed:
+		t.Fatalf("cleanup returned with a policy change in flight: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-result; err != nil {
+		t.Fatalf("in-flight policy change = %v", err)
+	}
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	// The committed change landed before cleanup forgot every policy.
+	if got := journal.snapshot(); len(got) != 1 || service.policyCount() != 0 {
+		t.Fatalf("records %v, policies %d", types(got), service.policyCount())
+	}
+}
+
+func TestService_CleanupSettlesPendingDecisions(t *testing.T) {
+	service, scope := startApproval(t)
+	broker := heldBroker{entered: make(chan struct{}), release: make(chan struct{}), outcome: session.ApprovalAllowedOnce}
+	t.Cleanup(func() { close(broker.release) })
+	if err := service.RegisterBroker(broker, &plugin.Scope{}); err != nil {
+		t.Fatal(err)
+	}
+	journal := &lockedJournal{}
+	type decision struct {
+		outcome session.ApprovalOutcome
+		err     error
+	}
+	result := make(chan decision, 1)
+	go func() {
+		outcome, err := service.Decide(context.Background(), approvalRequest(journal))
+		result <- decision{outcome, err}
+	}()
+	<-broker.entered
+	// Close runs while the operator has not answered; only cleanup's
+	// cancellation ends the question.
+	if err := scope.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := journal.snapshot()
+	if len(got) != 2 || got[0].Type != session.RecordApprovalAsked || got[1].Type != session.RecordApprovalDecided {
+		t.Fatalf("cleanup returned before the decision was paired: %v", types(got))
+	}
+	if data := got[1].Approval; data.ID != got[0].Approval.ID || data.Outcome != session.ApprovalCancelled || data.Source != "cancellation" {
+		t.Fatalf("decision = %+v", data)
+	}
+	if settled := <-result; settled.err != nil || settled.outcome != session.ApprovalCancelled {
+		t.Fatalf("pending decision = %s, %v", settled.outcome, settled.err)
+	}
 }

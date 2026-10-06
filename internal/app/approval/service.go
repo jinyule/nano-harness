@@ -30,28 +30,39 @@ type Question struct {
 	Reason   string
 }
 
-// Broker presents one question and returns a stable one-shot outcome.
+// Broker presents one question and returns a stable one-shot outcome. Ask
+// must return promptly once its context ends, because service cleanup
+// cancels and waits for every pending question.
 type Broker interface {
 	Ask(context.Context, Question) session.ApprovalOutcome
 }
 
 // Service owns the active UI broker and per-session policies.
 type Service struct {
-	mu       sync.RWMutex
+	mu       sync.Mutex
 	started  bool
 	active   bool
 	broker   Broker
 	policies map[string]session.ApprovalPolicy
 	nextID   atomic.Uint64
+	// calls cancels each SetPolicy or Decide in flight; group joins them.
+	nextCall uint64
+	calls    map[uint64]context.CancelFunc
+	group    sync.WaitGroup
 }
 
 // New constructs an inactive approval service.
-func New() *Service { return &Service{policies: map[string]session.ApprovalPolicy{}} }
+func New() *Service {
+	return &Service{policies: map[string]session.ApprovalPolicy{}, calls: map[uint64]context.CancelFunc{}}
+}
 
 // ID returns the stable plugin identity.
 func (*Service) ID() string { return "approval" }
 
 // Start activates the service and owns every published decision surface.
+// Cleanup rejects new calls, cancels every policy change and decision in
+// flight, and returns only after each has returned, so nothing is appended
+// once it returns; it then forgets the broker and every policy.
 func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -61,6 +72,15 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	if err := scope.Defer(func(context.Context) error {
 		service.mu.Lock()
 		service.active = false
+		for _, cancel := range service.calls {
+			cancel()
+		}
+		service.mu.Unlock()
+		// A cancelled decision still pairs its question within its bounded
+		// commit, and a policy change may be inside its append; the wait is
+		// bounded by the broker's and journal's cancellation latency.
+		service.group.Wait()
+		service.mu.Lock()
 		service.broker = nil
 		service.policies = map[string]session.ApprovalPolicy{}
 		service.mu.Unlock()
@@ -126,12 +146,11 @@ func (service *Service) SetPolicy(ctx context.Context, sessionID string, journal
 	if sessionID == "" || journal == nil || policy != session.ApprovalAsk && policy != session.ApprovalNever {
 		return ErrInvalidRequest
 	}
-	service.mu.RLock()
-	active := service.active
-	service.mu.RUnlock()
-	if !active {
-		return ErrNotRunning
+	ctx, done, err := service.begin(ctx)
+	if err != nil {
+		return err
 	}
+	defer done()
 	if _, err := journal.Append(ctx, session.Record{Type: session.RecordApprovalPolicy, Approval: &session.ApprovalData{Policy: policy}}); err != nil {
 		return err
 	}
@@ -141,22 +160,26 @@ func (service *Service) SetPolicy(ctx context.Context, sessionID string, journal
 	return nil
 }
 
-// Decide records a paired question and outcome. Delegated sessions can never elevate.
+// Decide records a paired question and outcome. Delegated sessions can never
+// elevate. Once the question is recorded its outcome is always committed,
+// even after cancellation; a decision pending when cleanup begins settles
+// as cancelled, whatever the broker answers, before cleanup returns.
 func (service *Service) Decide(ctx context.Context, request tool.ApprovalRequest) (session.ApprovalOutcome, error) {
 	if request.SessionID == "" || request.Turn == 0 || request.Step == 0 || request.Call.ID == "" || request.Call.Name == "" || request.Reason == "" || request.Journal == nil {
 		return "", ErrInvalidRequest
 	}
-	service.mu.RLock()
-	if !service.active {
-		service.mu.RUnlock()
-		return "", ErrNotRunning
+	ctx, done, err := service.begin(ctx)
+	if err != nil {
+		return "", err
 	}
+	defer done()
+	service.mu.Lock()
 	policy := service.policies[request.SessionID]
 	if policy == "" {
 		policy = session.ApprovalAsk
 	}
 	broker := service.broker
-	service.mu.RUnlock()
+	service.mu.Unlock()
 	id := fmt.Sprintf("approval-%d", service.nextID.Add(1))
 	asked := session.Record{Type: session.RecordApprovalAsked, Turn: request.Turn, Step: request.Step, Approval: &session.ApprovalData{
 		ID: id, ToolName: request.Call.Name, CallID: request.Call.ID, Reason: request.Reason,
@@ -176,12 +199,42 @@ func (service *Service) Decide(ctx context.Context, request tool.ApprovalRequest
 	case broker == nil:
 	default:
 		outcome, source = broker.Ask(ctx, Question{ID: id, Session: request.SessionID, ToolName: request.Call.Name, CallID: request.Call.ID, Reason: request.Reason}), "operator"
-		if outcome != session.ApprovalAllowedOnce && outcome != session.ApprovalRejected && outcome != session.ApprovalCancelled {
+		switch {
+		case errors.Is(context.Cause(ctx), errStopped):
+			// The caller's context is still live, so an approval here would
+			// let the tool run while the service shuts down.
+			outcome, source = session.ApprovalCancelled, "cancellation"
+		case outcome != session.ApprovalAllowedOnce && outcome != session.ApprovalRejected && outcome != session.ApprovalCancelled:
 			outcome, source = session.ApprovalUnavailable, "unavailable"
 		}
 	}
 	commitContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	_, err := request.Journal.Append(commitContext, session.Record{Type: session.RecordApprovalDecided, Turn: request.Turn, Step: request.Step, Approval: &session.ApprovalData{ID: id, Outcome: outcome, Source: source}})
+	_, err = request.Journal.Append(commitContext, session.Record{Type: session.RecordApprovalDecided, Turn: request.Turn, Step: request.Step, Approval: &session.ApprovalData{ID: id, Outcome: outcome, Source: source}})
 	return outcome, err
+}
+
+// errStopped is the cause cleanup gives the calls it cancels.
+var errStopped = errors.New("approval service stopped")
+
+// begin admits one call while the service runs and returns its context,
+// which cleanup cancels with errStopped; done must run once the call returns.
+func (service *Service) begin(ctx context.Context) (context.Context, func(), error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if !service.active {
+		return nil, nil, ErrNotRunning
+	}
+	call, cancel := context.WithCancelCause(ctx)
+	service.nextCall++
+	key := service.nextCall
+	service.calls[key] = func() { cancel(errStopped) }
+	service.group.Add(1)
+	return call, func() {
+		cancel(nil)
+		service.mu.Lock()
+		delete(service.calls, key)
+		service.mu.Unlock()
+		service.group.Done()
+	}, nil
 }

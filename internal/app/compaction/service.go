@@ -55,10 +55,14 @@ type Service struct {
 	llm      *llm.Runtime
 	settings *settings.Service
 
-	mu      sync.RWMutex
+	mu      sync.Mutex
 	started bool
 	active  bool
 	nextID  atomic.Uint64
+	// calls cancels each Maybe in flight; group joins them.
+	nextCall uint64
+	calls    map[uint64]context.CancelFunc
+	group    sync.WaitGroup
 }
 
 // New constructs an inactive service.
@@ -66,13 +70,16 @@ func New(runtime *llm.Runtime, configuration *settings.Service) (*Service, error
 	if runtime == nil || configuration == nil {
 		return nil, ErrInvalidRequest
 	}
-	return &Service{llm: runtime, settings: configuration}, nil
+	return &Service{llm: runtime, settings: configuration, calls: map[uint64]context.CancelFunc{}}, nil
 }
 
 // ID returns the stable plugin identity.
 func (*Service) ID() string { return "compaction" }
 
-// Start activates compaction until scope cleanup.
+// Start activates compaction until scope cleanup. Cleanup rejects new
+// requests, cancels each one in flight, including its summary request, and
+// returns only after each has returned; an open compaction transaction is
+// closed first, so nothing is appended once cleanup returns.
 func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -82,7 +89,13 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	if err := scope.Defer(func(context.Context) error {
 		service.mu.Lock()
 		service.active = false
+		for _, cancel := range service.calls {
+			cancel()
+		}
 		service.mu.Unlock()
+		// The wait is bounded by the provider's and journal's cancellation
+		// latency plus the uncancellable append that closes a transaction.
+		service.group.Wait()
 		return nil
 	}); err != nil {
 		return err
@@ -96,17 +109,19 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 // tool result over the pruning budget; a pressure request that the pruned
 // surface relieves stops there, and otherwise the oldest prefix is
 // summarized. It reports whether the surface changed. Prunes recorded before
-// a failure stay in the log.
+// a failure stay in the log. Once compaction/start is committed the
+// transaction is always closed: a failure, including cancellation, records
+// an error compaction/end, and a committed summary records its end even if
+// the context is cancelled meanwhile.
 func (service *Service) Maybe(ctx context.Context, request Request) (bool, error) {
 	if request.Journal == nil {
 		return false, ErrInvalidRequest
 	}
-	service.mu.RLock()
-	active := service.active
-	service.mu.RUnlock()
-	if !active {
-		return false, ErrNotRunning
+	ctx, done, err := service.begin(ctx)
+	if err != nil {
+		return false, err
 	}
+	defer done()
 	document, _, err := service.settings.Snapshot()
 	if err != nil {
 		return false, err
@@ -191,7 +206,7 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 	if _, err := request.Journal.Append(ctx, session.Record{Type: session.RecordCompactionSummary, Turn: request.Turn, Compaction: data}); err != nil {
 		return false, service.finishError(ctx, request, id, err)
 	}
-	if _, err := request.Journal.Append(ctx, session.Record{Type: session.RecordCompactionEnd, Turn: request.Turn, Compaction: &session.CompactionData{ID: id}}); err != nil {
+	if _, err := request.Journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordCompactionEnd, Turn: request.Turn, Compaction: &session.CompactionData{ID: id}}); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -207,6 +222,28 @@ func findModel(document settings.Document, provider, model string) settings.Mode
 		}
 	}
 	return settings.Model{}
+}
+
+// begin admits one request while the service runs and returns its context,
+// which cleanup cancels; done must run once the request returns.
+func (service *Service) begin(ctx context.Context) (context.Context, func(), error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if !service.active {
+		return nil, nil, ErrNotRunning
+	}
+	call, cancel := context.WithCancel(ctx)
+	service.nextCall++
+	key := service.nextCall
+	service.calls[key] = cancel
+	service.group.Add(1)
+	return call, func() {
+		cancel()
+		service.mu.Lock()
+		delete(service.calls, key)
+		service.mu.Unlock()
+		service.group.Done()
+	}, nil
 }
 
 // prune records the bounded replacement of every visible tool result over

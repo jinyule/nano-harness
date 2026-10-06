@@ -3,6 +3,9 @@ package retry
 import (
 	"context"
 	"errors"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,7 +40,37 @@ func retrySettings(t *testing.T) (*settings.Service, *plugin.Scope) {
 	return service, scope
 }
 
-func startRetry(t *testing.T) *Service {
+// lockedJournal records appends made on another goroutine. hold, when set,
+// runs inside every Append before it records and can fail it.
+type lockedJournal struct {
+	mu      sync.Mutex
+	records []session.RecordType
+	hold    func(context.Context) error
+}
+
+func (journal *lockedJournal) Append(ctx context.Context, record session.Record) (session.Event, error) {
+	if journal.hold != nil {
+		if err := journal.hold(ctx); err != nil {
+			return session.Event{}, err
+		}
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	journal.records = append(journal.records, record.Type)
+	return session.Event{Sequence: uint64(len(journal.records)), Record: record}, nil
+}
+
+func (journal *lockedJournal) types() []session.RecordType {
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	return slices.Clone(journal.records)
+}
+
+func failServer() (llm.Completion, bool, error) {
+	return llm.Completion{}, false, &llm.Error{Code: llm.ErrorServer, Provider: "p"}
+}
+
+func startRetry(t *testing.T) (*Service, *plugin.Scope) {
 	t.Helper()
 	configuration, _ := retrySettings(t)
 	service, err := New(configuration)
@@ -51,14 +84,14 @@ func startRetry(t *testing.T) *Service {
 		t.Fatal("start")
 	}
 	t.Cleanup(func() { _ = scope.Close(context.Background()) })
-	return service
+	return service, scope
 }
 
 func TestServiceRetriesAndStops(t *testing.T) {
 	if _, err := New(nil); err == nil {
 		t.Fatal("nil settings")
 	}
-	service := startRetry(t)
+	service, _ := startRetry(t)
 	closed := &plugin.Scope{}
 	_ = closed.Close(context.Background())
 	configuration, _ := retrySettings(t)
@@ -161,7 +194,7 @@ func TestRetryClassificationDelayAndSleep(t *testing.T) {
 }
 
 func TestServiceAfterCloseAndSleepFailure(t *testing.T) {
-	configuration, _ := retrySettings(t)
+	configuration, settingsScope := retrySettings(t)
 	service, _ := New(configuration)
 	scope := &plugin.Scope{}
 	service.sleep = func(context.Context, time.Duration) error { return errors.New("sleep") }
@@ -175,8 +208,129 @@ func TestServiceAfterCloseAndSleepFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("sleep error lost")
 	}
+	_ = settingsScope.Close(context.Background())
+	journal := &retryJournal{}
+	_, err = service.Do(context.Background(), journal, 1, 1, "p", "k", failServer)
+	if !errors.Is(err, settings.ErrNotRunning) || len(journal.records) != 0 {
+		t.Fatalf("stopped settings=%v records=%#v", err, journal.records)
+	}
 	_ = scope.Close(context.Background())
-	if _, err := service.policy(); !errors.Is(err, ErrNotRunning) {
-		t.Fatalf("closed policy=%v", err)
+	if _, _, err := service.begin(context.Background()); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("closed decision=%v", err)
+	}
+}
+
+func TestService_CleanupCancelsRetryWait(t *testing.T) {
+	service, scope := startRetry(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	service.sleep = func(ctx context.Context, _ time.Duration) error {
+		close(entered)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+			return nil
+		}
+	}
+	journal := &lockedJournal{}
+	var attempts atomic.Int32
+	result := make(chan error, 1)
+	go func() {
+		_, err := service.Do(context.Background(), journal, 1, 1, "p", "k", func() (llm.Completion, bool, error) {
+			attempts.Add(1)
+			return failServer()
+		})
+		result <- err
+	}()
+	<-entered
+	// Close runs while Do waits out its delay; nothing else ends that wait.
+	if err := scope.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	err := <-result
+	if got := journal.types(); !slices.Equal(got, []session.RecordType{session.RecordRetry}) || attempts.Load() != 1 {
+		t.Fatalf("a retry continued after cleanup returned: records %v, attempts %d", got, attempts.Load())
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("in-flight retry = %v", err)
+	}
+}
+
+func TestService_CleanupWaitsForRetryRecords(t *testing.T) {
+	service, scope := startRetry(t)
+	service.sleep = sleep
+	entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	journal := &lockedJournal{}
+	// The append observes cancellation but, like a write already past its
+	// last check, still commits once released.
+	journal.hold = func(ctx context.Context) error {
+		close(entered)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		return nil
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := service.Do(context.Background(), journal, 1, 1, "p", "k", failServer)
+		result <- err
+	}()
+	<-entered
+	closed := make(chan error, 1)
+	go func() { closed <- scope.Close(context.Background()) }()
+	select {
+	case <-cancelled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cleanup did not cancel the in-flight retry record")
+	}
+	select {
+	case err := <-closed:
+		t.Fatalf("cleanup returned with a retry in flight: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("in-flight retry = %v", err)
+	}
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	if got := journal.types(); !slices.Equal(got, []session.RecordType{session.RecordRetry}) {
+		t.Fatalf("records = %v", got)
+	}
+}
+
+func TestService_CleanupLeavesModelAttemptsToTheCaller(t *testing.T) {
+	service, scope := startRetry(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	journal := &lockedJournal{}
+	result := make(chan error, 1)
+	go func() {
+		_, err := service.Do(context.Background(), journal, 1, 1, "p", "k", func() (llm.Completion, bool, error) {
+			close(entered)
+			<-release
+			return failServer()
+		})
+		result <- err
+	}()
+	<-entered
+	closed := make(chan error, 1)
+	go func() { closed <- scope.Close(context.Background()) }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		close(release)
+		t.Fatal("cleanup waited for a model attempt the caller owns")
+	}
+	close(release)
+	if err := <-result; !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("attempt failing after cleanup = %v", err)
+	}
+	if got := journal.types(); len(got) != 0 {
+		t.Fatalf("records after cleanup = %v", got)
 	}
 }

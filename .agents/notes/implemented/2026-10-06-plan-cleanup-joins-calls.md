@@ -29,13 +29,13 @@
 
 - `goal.Service`：单把服务锁覆盖读取、校验和追加，cleanup 也要取得这把锁，因此会等待进行中的变更和轮次准入，之后的调用在锁内看到 `running = false`。无此缺陷，未修改。
 - `todo` 工具：无进程内状态，追加属于 turn 内的工具调用，由 agent 关闭 join。`skill` 工具：只注册工具和上下文 provider，不写日志。`question.Service`：不写日志。三者都无此缺陷。
-- `approval.Service`（`SetPolicy`、`Decide`）、`retry.Service.Do`、`compaction.Service.Maybe` 属于另一种模式：先检查 `active` 再在锁外写调用方的日志，cleanup 不等待。单元层面同样可能在 cleanup 返回后追加；产品关闭中这些日志已由更早的 registry cleanup 关闭，所以不可触发。修复需要逐个决定关闭时的取消语义，例如 `Decide` 正在等待 broker、配对的 `approval/decided` 使用不可取消 context，超出本 WP 范围，未修改。`compaction` 另由 B3 分支修改。
+- `approval.Service`（`SetPolicy`、`Decide`）、`retry.Service.Do`、`compaction.Service.Maybe` 属于另一种模式：先检查 `active`，再在锁外写调用方的日志，cleanup 不等待。它们由[后续 Note](2026-10-06-approval-retry-compaction-cleanup.md) 逐个修复，本 Note 只拥有 plan 的修复证据。
 
 ## Consequences
 
 `plan-mode` 现在自身满足关闭静止，不再依赖调用方的 join；只有 cleanup 窗口内的进行中调用可能以 `context.Canceled` 失败，正常运行路径不变。代价是每次调用多一次服务锁、一个派生 context 和一次 map 登记；会话之间仍互不等待。
 
-风险：日志实现若忽略取消且长时间阻塞，cleanup 会随之阻塞，与 `web` 的已知取舍相同。approval、retry、compaction 的同类窗口留给后续工作包统一处理；新增不持 agent 锁的调用方前应先补齐它们的等待。
+风险：日志实现若忽略取消且长时间阻塞，cleanup 会随之阻塞，与 `web` 的已知取舍相同。approval、retry、compaction 的同类窗口见后续 Note。
 
 与[提问与规划初始实现 Note](2026-10-04-ask-user-question-and-plan-mode.md)和[取消修补 Note](2026-10-06-spill-question-and-call-validation.md)部分重叠：前者拥有插件组装与格式决定，后者拥有 `Exit` 取消证据，本 Note 拥有 cleanup 静止的修复证据。三者都保留，不归档。与[关闭顺序 Note](2026-10-06-shutdown-quiesces-agents-first.md)互补：那里的顺序保证解释了产品关闭为何不可触发本缺陷。
 

@@ -238,6 +238,41 @@
     "test": "^TestService_CleanupWaitsForInFlightCalls$"
   },
   {
+    "id": "approval-cleanup-cancels-calls",
+    "file": "internal/app/approval/service.go",
+    "before": "for _, cancel := range service.calls {\n\t\t\tcancel()\n\t\t}",
+    "after": "for range service.calls {\n\t\t}",
+    "test": "^TestService_CleanupWaitsForInFlightPolicyChange$"
+  },
+  {
+    "id": "approval-shutdown-cancels-decision",
+    "file": "internal/app/approval/service.go",
+    "before": "case errors.Is(context.Cause(ctx), errStopped):",
+    "after": "case false:",
+    "test": "^TestService_CleanupSettlesPendingDecisions$"
+  },
+  {
+    "id": "retry-cleanup-cancels-waits",
+    "file": "internal/app/retry/service.go",
+    "before": "for _, cancel := range service.waits {\n\t\t\tcancel()\n\t\t}",
+    "after": "for range service.waits {\n\t\t}",
+    "test": "^TestService_CleanupWaitsForRetryRecords$"
+  },
+  {
+    "id": "compaction-cleanup-cancels-calls",
+    "file": "internal/app/compaction/service.go",
+    "before": "for _, cancel := range service.calls {\n\t\t\tcancel()\n\t\t}",
+    "after": "for range service.calls {\n\t\t}",
+    "test": "^TestService_CleanupWaitsForCompactionCommit$"
+  },
+  {
+    "id": "compaction-summary-closes-transaction",
+    "file": "internal/app/compaction/service.go",
+    "before": "request.Journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordCompactionEnd, Turn: request.Turn, Compaction: &session.CompactionData{ID: id}})",
+    "after": "request.Journal.Append(ctx, session.Record{Type: session.RecordCompactionEnd, Turn: request.Turn, Compaction: &session.CompactionData{ID: id}})",
+    "test": "^TestService_CleanupWaitsForCompactionCommit$"
+  },
+  {
     "id": "todo-call-kind",
     "file": "internal/adapter/session/jsonl/order.go",
     "before": "if call == nil || call.Name != \"todo_write\" || call.ArgumentsOmitted {",
