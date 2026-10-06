@@ -96,6 +96,7 @@
 | spill 清理顺序、`write` 大文件校验、spill root 位置、长工具名 | Suggestion | WP2 | 已合入 `ec3c142` |
 | 会话被内联图片写满 | Suggestion | WP9 | 已合入 `fe565ad`；WP11 迁移附件存储后容量检查已删除（`4e9d97e`） |
 | `TestComposition_SubagentsEndToEnd`、web 关闭测试偶发失败 | 测试缺陷 | WP7、WP5 | 已合入 `d9ad07b`、`87316d1` |
+| settings 写锁偶发失败 `TestProviderWatchAndAtomicFailures` | 产品缺陷 | Codex | 已合入 `ae02f02`：取消被锁超时掩盖、取消后仍写入；credentials 锁的同类排查进行中 |
 | spill 会话目录可被预置 symlink 引出存储分区（Codex 审查） | Blocker | Codex-B | 已合入（Codex-B，另修 `approval/decided` 多余 `call_id`） |
 | 目标轮次开场持久化失败后 driver 无限重排同一轮（Codex 审查） | Blocker | Codex-A | 已合入（Codex-A） |
 | 输出 token 上限截断被记为正常完成，目标继续自动推进（Codex 审查；上游在 max-tokens 时 disarm） | Blocker | Codex-A | 已合入（Codex-A） |
