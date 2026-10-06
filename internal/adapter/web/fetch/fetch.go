@@ -267,7 +267,7 @@ func (client *Client) read(ctx context.Context, response *http.Response, final *
 	if response.ContentLength > maxResponseBytes {
 		return web.FetchResult{}, &web.Error{Code: web.CodeFetchTooLarge, Message: fmt.Sprintf("response exceeds the maximum of %d bytes", maxResponseBytes)}
 	}
-	source, decoders, err := decompress(response.Body, strings.Join(response.Header.Values("Content-Encoding"), ","))
+	source, decoders, err := decompress(ctx, response.Body, strings.Join(response.Header.Values("Content-Encoding"), ","))
 	defer func() {
 		for _, decoder := range decoders {
 			_ = decoder.Close()
@@ -287,13 +287,15 @@ func (client *Client) read(ctx context.Context, response *http.Response, final *
 }
 
 // failure classifies an I/O error by the fetch context: its own deadline,
-// caller or shutdown cancellation, or a network failure.
+// caller or shutdown cancellation, then decompression limits or other failures.
 func (client *Client) failure(ctx context.Context, message string, err error) error {
 	switch {
 	case errors.Is(context.Cause(ctx), errFetchTimeout):
 		return &web.Error{Code: web.CodeFetchTimeout, Message: fmt.Sprintf("web fetch timed out after %s", client.timeout), Cause: err}
 	case ctx.Err() != nil:
 		return &web.Error{Code: web.CodeAborted, Message: "web fetch was cancelled", Cause: err}
+	case errors.Is(err, errDecompressionLimit):
+		return &web.Error{Code: web.CodeFetchTooLarge, Message: err.Error(), Cause: err}
 	default:
 		return &web.Error{Code: web.CodeProviderError, Message: message + ": " + err.Error(), Cause: err}
 	}

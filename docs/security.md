@@ -44,8 +44,9 @@
 - 连接只拨号到已校验的 IP:端口；TLS 仍按 URL 主机名校验证书和 SNI。候选保留各地址族内的解析顺序并交替 IPv4/IPv6；第一个立即拨号，尚未成功时每 250 ms 启动下一候选，失败则立即推进。首个成功连接被采用，其余拨号取消、等待结束，迟到的成功连接关闭；调用取消时同样先回收全部拨号再返回。拨号由抓取操作同步拥有，不依赖 Transport 的异步拨号取消。每跳使用独立 transport，关闭 keep-alive，结束时关闭连接，因此 DNS 重绑定不能复用旧连接或改变目的地址。
 - 最多 5 次同源（scheme、小写主机、有效端口一致）重定向，每跳重新执行以上 URL 与地址校验；跨源重定向拒绝，不联系目标。
 - 不发送 cookie、Authorization 或代理凭据，不读取 `HTTP(S)_PROXY`；User-Agent 固定为 `nano-harness (+https://github.com/jinyule/nano-harness)`。
-- 30 s 总时限，响应头最多 64 KiB。只声明 `Accept-Encoding: gzip, deflate`，支持 gzip（含 `x-gzip`）、zlib/raw deflate 和这些编码的叠加，按声明的逆序解压；br、zstd、其他未知或畸形编码明确以 `WEB_PROVIDER_ERROR` 失败，不作为成功文本返回。压缩头、正文或校验和损坏也失败，不宽松接受残缺压缩流。
-- 解压后、字符集解码前的正文最多 5,000,000 字节；声明超限的 `Content-Length`（压缩响应中是传输长度）直接失败，流式或解压超限截断并标记，恰好达到上限不误报。解码文本最多 100,000 个 UTF-16 code unit；emoji 等补充平面字符计两个单元，截断保留完整 Unicode scalar，边界放不下一个代理对时整体省略并标记截断。
+- 30 s 总时限，响应头最多 64 KiB。只声明 `Accept-Encoding: gzip, deflate`，支持 gzip（含 `x-gzip`）、zlib/raw deflate 和这些编码的叠加，按声明的逆序解压；最多 5 个声明项（含 identity），超过时在读取正文前以 `WEB_FETCH_TOO_LARGE` 拒绝；br、zstd、其他未知或畸形编码明确以 `WEB_PROVIDER_ERROR` 失败，不作为成功文本返回。压缩头、正文或校验和损坏也失败，不宽松接受残缺压缩流。
+- 每个中间解压流最多 5,000,000 字节，包含下一层消费却不产生正文的 gzip member 头尾；超限以 `WEB_FETCH_TOO_LARGE` 拒绝，不返回部分成功。最终解压后、字符集解码前的正文同样最多 5,000,000 字节；声明超限的 `Content-Length`（压缩响应中是传输长度）直接失败，最终正文流式超限截断并标记，恰好达到上限不误报。解码文本最多 100,000 个 UTF-16 code unit；emoji 等补充平面字符计两个单元，截断保留完整 Unicode scalar，边界放不下一个代理对时整体省略并标记截断。
+- 解码与网络读取共享操作 context；网络源和各层输出在读取前后检查取消与期限，单次解码输出读取最多 32 KiB。已缓存的响应和连续空 gzip member 也经过检查；抓取自身期限返回 `WEB_FETCH_TIMEOUT`，调用方或 shutdown 取消返回 `WEB_ABORTED`，优先于大小或压缩错误。解码同步执行，退出关闭全部 decoder，没有需要额外等待的解码 worker；检查点之间的标准库解码与 OS 调度不提供硬实时保证。
 - 只解码文本类内容；未知 charset 和二进制类型失败。HTML 在工具层转换，删除脚本、样式、嵌入对象与隐藏元素，嵌套超过 512 层时不转换。
 
 两个 web 工具都不请求 approval，delegated agent 同样可用：检索不改变本机状态，抓取以公网地址策略而不是逐次确认作为边界。部署需要逐次确认或禁止外联时，必须新增执行点策略和 ADR，不能依赖 prompt 或隐藏 schema。

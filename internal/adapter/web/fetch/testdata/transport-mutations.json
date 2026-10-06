@@ -1,5 +1,47 @@
 [
   {
+    "id": "fetch-expired-deadline-in-decoder",
+    "file": "internal/adapter/web/fetch/compression.go",
+    "before": "func (reader *contextReader) Read(buffer []byte) (int, error) {",
+    "after": "func (reader *contextReader) Read(buffer []byte) (int, error) {\n\treader.ctx = context.WithoutCancel(reader.ctx)",
+    "test": "^TestFetch_ExpiredDeadlineStopsBufferedMultiLayerDecoding$"
+  },
+  {
+    "id": "fetch-intermediate-decompression-budget",
+    "file": "internal/adapter/web/fetch/compression.go",
+    "before": "if len(decoders) > 0 {",
+    "after": "if false && len(decoders) > 0 {",
+    "test": "^TestFetch_RejectsIntermediateDecompressionBomb$"
+  },
+  {
+    "id": "fetch-content-encoding-layer-cap",
+    "file": "internal/adapter/web/fetch/compression.go",
+    "before": "if len(codings) > maxContentEncodings {",
+    "after": "if false && len(codings) > maxContentEncodings {",
+    "test": "^TestFetch_RejectsExcessiveContentEncodingLayersBeforeReading$"
+  },
+  {
+    "id": "fetch-cancellation-before-body-read",
+    "file": "internal/adapter/web/fetch/compression.go",
+    "before": "if err := reader.ctx.Err(); err != nil {",
+    "after": "if err := reader.ctx.Err(); false && err != nil {",
+    "test": "^TestFetch_AlreadyCancelledContextDoesNotReadBody$"
+  },
+  {
+    "id": "fetch-cancellation-after-body-read",
+    "file": "internal/adapter/web/fetch/compression.go",
+    "before": "if ctxErr := reader.ctx.Err(); ctxErr != nil {",
+    "after": "if ctxErr := reader.ctx.Err(); false && ctxErr != nil {",
+    "test": "^TestFetch_CancellationAfterFirstBodyReadStopsDecoding$"
+  },
+  {
+    "id": "fetch-cancellation-in-buffered-decoder",
+    "file": "internal/adapter/web/fetch/compression.go",
+    "before": "source = &contextReader{ctx: ctx, source: decoder}",
+    "after": "source = decoder",
+    "test": "^TestDecompress_CancellationStopsBufferedDecoder$"
+  },
+  {
     "id": "fetch-decompressed-byte-cap",
     "file": "internal/adapter/web/fetch/fetch.go",
     "before": "source: source, remaining: maxResponseBytes",

@@ -30,7 +30,7 @@ func TestDecompress_CapsExpandedBytesAtEverySupportedEncoding(t *testing.T) {
 				default:
 					data = compressed(t, coding, data)
 				}
-				source, decoders, err := decompress(bytes.NewReader(data), header)
+				source, decoders, err := decompress(t.Context(), bytes.NewReader(data), header)
 				t.Cleanup(func() {
 					for _, decoder := range decoders {
 						_ = decoder.Close()
@@ -84,7 +84,7 @@ func TestDecompress_RejectsMalformedHeadersAndPreservesCauses(t *testing.T) {
 		{"inner-header", "gzip, deflate", bytes.NewReader(compressed(t, "deflate", []byte("invalid gzip"))), gzip.ErrHeader},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, decoders, err := decompress(test.source, test.coding)
+			_, decoders, err := decompress(t.Context(), test.source, test.coding)
 			for _, decoder := range decoders {
 				_ = decoder.Close()
 			}
@@ -93,7 +93,7 @@ func TestDecompress_RejectsMalformedHeadersAndPreservesCauses(t *testing.T) {
 			}
 		})
 	}
-	if _, _, err := decompress(errorReader{failure}, "gzip, br"); err == nil || !strings.Contains(err.Error(), "unsupported content encoding") || errors.Is(err, failure) {
+	if _, _, err := decompress(t.Context(), errorReader{failure}, "gzip, br"); err == nil || !strings.Contains(err.Error(), "unsupported content encoding") || errors.Is(err, failure) {
 		t.Fatalf("unsupported declaration consumed body: %v", err)
 	}
 }

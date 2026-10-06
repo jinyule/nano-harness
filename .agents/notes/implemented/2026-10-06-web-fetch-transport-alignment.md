@@ -11,7 +11,7 @@
 
 ## Decision
 
-长期契约与偏离理由见 [ADR-0011](../../../docs/decisions/0011-provider-web-search-and-public-fetch.md#抓取传输语义)，网络边界见[安全规则](../../../docs/security.md#网络边界)。实现复用标准库 gzip/zlib/flate 和既有 BSD-3-Clause 的 `x/net/idna`，不新增或升级依赖，不引入 Brotli/zstd 解码器。显式声明 `gzip, deflate`，未支持编码失败；解压链之后继续用 bounded reader 限制字节，坏头、流和 checksum 保留错误原因。
+长期契约与偏离理由见 [ADR-0011](../../../docs/decisions/0011-provider-web-search-and-public-fetch.md#抓取传输语义)，网络边界见[安全规则](../../../docs/security.md#网络边界)。实现复用标准库 gzip/zlib/flate 和既有 BSD-3-Clause 的 `x/net/idna`，不新增或升级依赖，不引入 Brotli/zstd 解码器。显式声明 `gzip, deflate`，未支持编码失败；最终解压输出继续用 bounded reader 限制字节，坏头、流和 checksum 保留错误原因。逐层展开预算、编码层数与缓存解码的取消由[解压资源边界 Note](2026-10-06-web-fetch-decompression-boundaries.md)补充；本 Note 保留 URL、字符预算、拨号和初次传输对齐的证据。
 
 URL 规范化在解析与拨号前完成；解析器、Host、TLS、同源校验和最终 URL 共享规范化对象。URL 与正文按 UTF-16 计数，正文不拆 Unicode scalar，代理对放不下时整体省略且标记截断。异常 URL 拼写继续严格拒绝，具体集合由 ADR 拥有。
 
