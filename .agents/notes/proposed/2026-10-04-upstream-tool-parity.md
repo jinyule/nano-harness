@@ -146,7 +146,7 @@
 ### 本轮其他合入与决定
 
 - shell 审计 3 `cd6912b` 与 B5 `2d519a0`、plan cleanup `005a3a8`、K2 `576547a`（descriptor v3、`subagent-tools-v4`、委派说明改为 runtime context、`sender_session_id`）、K2 后续 `d79501d` 已合入。K2 后续让 child compaction 使用继承 route，并顺带修复已合入 compaction 的缺陷：同一会话第二次摘要的 ShadowedSeqs 无序导致必然失败。
-- plan cleanup 排查发现 approval、retry、compaction 有同类关闭窗口，已修复（`wp/cleanup-quiescence`），rebase 冲突中。五个服务各有约 20 行相同的在途调用登记代码，收尾时评估是否抽象。
+- plan cleanup 排查发现 approval、retry、compaction 有同类关闭窗口，已合入 `f0b343e`。第四轮 core 的 N1/N2 已合入 `7799a5e`。C1 已合入 `5866270`：暂停与解除分开累积；“取消后出错”与上游一致，不暂停。有意偏差：“取消后重新授权再取消”时，本仓解除新 revision，上游保留授权；这沿用 B1 的非轮次停止规则，参考分析需列出。五个服务各有约 20 行相同的在途调用登记代码，收尾时评估是否抽象。
 - 2026-10-06 23:1x Codex 再次撞上 429。维护者要求撞到即停、不重试，`codex-lane.sh` 已改为首个 429 即退出。维护者告知 Codex 限额 2026-10-07 02:29 解除，WP14、r3tools、mutgate 届时续接。
 
 ### 后续项（不在本次范围）
