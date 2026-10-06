@@ -273,6 +273,20 @@ func (record Record) requireResult() error {
 			return invalid("tool result image: %v", err)
 		}
 	}
+	if failure := record.Result.Error; failure != nil {
+		if !record.Result.IsError {
+			return invalid("successful tool result carries an error classification")
+		}
+		if err := failure.Validate(); err != nil {
+			return err
+		}
+	}
+	if meta := record.Result.Meta; meta != nil {
+		if record.Result.IsError {
+			return invalid("tool error result carries metadata")
+		}
+		return meta.Validate()
+	}
 	return nil
 }
 

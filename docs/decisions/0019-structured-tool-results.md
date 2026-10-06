@@ -68,7 +68,7 @@ runtime 用 `errors.As` 取得分类，不导入具体工具或领域包。已�
 每个调用只有一个归一出口，顺序如下：
 
 1. 按现有路径得到结果：prepare 失败、取消检查点、Check、approval、Execute 的成功或错误。
-2. 失败时：只有本节和第 3 节列出的路径写入 `error`；runtime 自有分类直接填写，Execute 和 Check 的错误经 `Failure` 提取，取不到就没有 `error`。失败结果不带 meta 和图片。
+2. 失败时：只有本节和第 3 节列出的路径写入 `error`；runtime 自有分类直接填写，Execute 和 Check 的错误经 `Failure` 提取，取不到就没有 `error`。`Failure` 给出的分类不符合标识符规则时，同样按第 3 步的 `INVALID_TOOL_OUTPUT` 处理，避免结果在追加时被拒。失败结果不带 meta 和图片。
 3. 成功且带 meta 时：先检查 meta 的工具名键等于调用的工具名，再按第 5 节裁剪并校验。检查失败说明 producer 有缺陷，结果改为 `ToolOutputError/INVALID_TOOL_OUTPUT`，文本沿用上游格式 `Error: tool "<name>" returned invalid output: <violations>`，并丢弃图片和 meta。这条路径只防御实现缺陷，不经过外部输入。
 4. 沿用现有的 UTF-8 归一、spill 和 256 KiB 截断，这些步骤只作用于 Output。
 5. 返回 `session.ToolResult`，engine 原样追加，然后才发布投影。
@@ -146,8 +146,8 @@ diff 规则：
 校验分三层，Append、Open、Inspect 和 fork seed 共用：
 
 1. JSONL 解码沿用 `decodeStrict`。DTO 是带 JSON tag 的闭合结构体，`DisallowUnknownFields` 递归拒绝未知成员和多个顶层值，不需要 RawMessage 和额外的 token 遍历。重复键与其他记录一样按标准库语义处理，不为 meta 单独检测。
-2. `Record.Validate` 校验 result：`error` 只能出现在 `is_error=true` 的结果中，且 name/code 符合标识符规则；`meta` 只能出现在成功结果中，恰好一个成员，计数和行号是不超过 2^53−1 的非负整数，read 行号从 offset 起连续且不超过 `total_lines`，`total` 不小于保留项数，`operation` 取枚举值，`status_code` 在 100–599，编码后不超过上限。错误结果仍不能带图片；成功结果可以同时带图片和 meta。分类码不设静态白名单：新增或合入的领域码由 producer 测试固定，不必修改 session 格式。
-3. JSONL order validator 要求 meta 的工具名键等于对应 tool/call 的 name；`arguments_omitted` 的结果不能带 meta。meta 中的 path、URL 不授予任何权限，也不替代调用归属。
+2. `Record.Validate` 校验 result：`error` 只能出现在 `is_error=true` 的结果中，且 name/code 符合标识符规则；`meta` 只能出现在成功结果中，恰好一个成员，计数和行号是不超过 2^53−1 的非负整数，read 行号从 offset 起连续且不超过 `total_lines`，`total` 不小于保留项数且只少于 `total` 的列表必须标 `truncated`，`operation` 取枚举值且 create 没有 diffs，`status_code` 在 100–599，编码后不超过上限。错误结果仍不能带图片；成功结果可以同时带图片和 meta。分类码不设静态白名单：新增或合入的领域码由 producer 测试固定，不必修改 session 格式。
+3. JSONL order validator 要求 meta 的工具名键等于对应 tool/call 的 name。`arguments_omitted` 的结果必须是错误，错误结果又不能带 meta，所以它不会带 meta。meta 中的 path、URL 不授予任何权限，也不替代调用归属。
 
 字段可选只表示格式层允许没有结构化数据，不从旧 output 补造。producer 的义务由永久测试固定：上述 8 个工具的每个成功结果都有 meta，第 3 节的每条失败路径都有对应分类。非法持久化数据整体拒绝，原文件不改写；写入或 fsync 失败不发布新投影。
 

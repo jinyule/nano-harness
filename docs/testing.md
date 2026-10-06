@@ -227,7 +227,9 @@ Anthropic 与 OpenRouter 的常规门禁使用完整 loopback protocol server；
 
 修改持久化字段、枚举、顺序、版本或恢复语义时，PR 明确选择同版本兼容、严格拒绝旧版或迁移，给出样本与因果/事务证据并更新架构和 ADR。固定样本不是全部记录类型的 schema catalog，也不代替现有图片、compaction、subagent、错误恢复和 I/O rollback 测试。CI 不重写样本，nano v2 严格拒绝旧格式的承诺不变。
 
-`testdata/session-v2-arguments.jsonl` 冻结 `tool/call.arguments_omitted:true` 与空 arguments、唯一错误结果和 completed turn。`TestSessionV2Arguments_FrozenContract` 比较独立 writer 字节、真实 Inspect/Open 及 surface；负例截成合法中断尾部，证明非法标记类型、保留参数、approval、todo 副作用和成功结果由各自目标规则拒绝。`TestComposition_ArgumentRuntimeRejectsOldSessionsWithoutChangingThem` 验证 `tool-runtime-v2` 身份拒绝旧 composition，原文件字节不变。
+`testdata/session-v2-arguments.jsonl` 冻结 `tool/call.arguments_omitted:true` 与空 arguments、唯一错误结果和 completed turn。`TestSessionV2Arguments_FrozenContract` 比较独立 writer 字节、真实 Inspect/Open 及 surface；负例截成合法中断尾部，证明非法标记类型、保留参数、approval、todo 副作用和成功结果由各自目标规则拒绝。`TestComposition_ArgumentRuntimeRejectsOldSessionsWithoutChangingThem` 验证引入 `tool-runtime` 身份前的 composition 被拒绝，原文件字节不变。
+
+`testdata/session-v2-structured-results.jsonl` 冻结 8 种工具 metadata、带图片引用和 metadata 的成功结果，以及带 `error` 分类的失败结果（ADR-0019）。`TestSessionV2StructuredResults_FrozenContract` 比较独立 writer 字节、真实 Inspect/Open 与 surface；`TestSessionV2StructuredResults_RejectsChangedContract` 证明未知工具成员或字段、两个成员、null 列表、total 与保留项不一致、成功结果带分类、错误结果带 metadata、非法 code 和 metadata 不属于对应 call 的工具都被拒绝。`core/session` 的 metadata 测试覆盖每个字段规则、预算边界（恰好等于上限保留、超出一字节必须丢项）、各种列表的最大前缀裁剪、answer 与空文件组的移除、UTF-8 修复及深复制隔离。runtime 测试证明只有未知工具、schema、两类取消和 metadata 违规由 runtime 分类，`tool.Failure` 的分类穿过 `%w` 包装、在调用取消后仍保留，非法分类与他人成员变为 `INVALID_TOOL_OUTPUT`，spill 保留 metadata 而 spill panic 丢弃它；`TestLog_RepairClassifiesAnUnknownOutcome` 固定 resume 补写的分类。`TestComposition_PersistsRuntimeClassificationsOutsideTheModelInput` 经真实组装证明分类写入磁盘而下一次模型请求不含它们，`TestComposition_StructuredResultsRejectOldRuntimeSessions` 证明旧 `tool-runtime` 身份的会话在 Open 与 Inspect 中都被拒绝且文件不变。
 
 ## 模型可见工具目录
 

@@ -44,6 +44,8 @@
 | S shell | `adapter/tool/shell` 的 `SANDBOX_UNAVAILABLE` 与 `AbortError/ABORTED` 分类 | F 与 WP14 合入 | WP14（bash.go） | shell +1 | 1–2 h |
 | K 收尾 | 跨 provider 的 wire、token 估算和 compaction 摘要输入排除 error/meta 的测试；跨批 assembled 场景；security/reference 文档；ADR-0019 与实际 token 同步；本 Note 移至 implemented | 以上全部合入 | 只有文档与测试 | 无 | 5–7 h |
 
+实施进度：R 已实施，见[取消只替换成功结果](../implemented/2026-10-07-tool-cancel-keeps-body-failure.md)；F 已实施，见[基础批记录](../implemented/2026-10-07-structured-tool-results-base.md)，`tool-runtime` 为 v3。
+
 F 合入后，E、H、I、G 可以立即开始；C、D、S 等 WP14。估算按一名熟悉本仓的工程师在干净基线上工作计算，包含永久测试和逐文件 coverage，不包含等待合并、TUI 卡片和数据迁移。合计 **41–60 工时，约 5–8 个工作日**。主要不确定性是 write 的旧内容读取与 hunk 生成、WP14 合入后的文件和 sandbox 错误路径，以及严格校验对既有样本的影响。
 
 ### 每批的验收证据

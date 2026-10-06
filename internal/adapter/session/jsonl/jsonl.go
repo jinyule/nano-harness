@@ -398,8 +398,10 @@ func (log *Log) repairInterrupted(ctx context.Context) error {
 			return fmt.Errorf("repair approval: %w", err)
 		}
 	}
+	// tool/call precedes execution, so a call without a result may have run.
+	unknownOutcome := coresession.ToolOutcomeUnknown
 	for _, callID := range state.calls {
-		_, err = log.Append(ctx, coresession.Record{Type: coresession.RecordToolResult, Turn: state.turn, Step: state.step, Result: &coresession.ToolResult{CallID: callID, Output: "Error: interrupted before a result was committed", IsError: true}})
+		_, err = log.Append(ctx, coresession.Record{Type: coresession.RecordToolResult, Turn: state.turn, Step: state.step, Result: &coresession.ToolResult{CallID: callID, Output: "Error: interrupted before a result was committed", IsError: true, Error: &unknownOutcome}})
 		if err != nil {
 			return fmt.Errorf("repair tool result: %w", err)
 		}

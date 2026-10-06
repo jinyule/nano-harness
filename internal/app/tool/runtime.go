@@ -28,6 +28,16 @@ var (
 	ErrNotRunning = errors.New("tool runtime is not running")
 )
 
+// Classifications the runtime owns, named as upstream's ToolRegistry names
+// them. Results take copies with new, so none shares these values.
+var (
+	unknownTool           = session.ToolError{Name: "ToolNotFoundError", Code: "UNKNOWN_TOOL"}
+	invalidArguments      = session.ToolError{Name: "ToolArgsError", Code: "INVALID_ARGS"}
+	invalidToolOutput     = session.ToolError{Name: "ToolOutputError", Code: "INVALID_TOOL_OUTPUT"}
+	abortedBeforeDispatch = session.ToolError{Name: "AbortError", Code: "ABORTED_BEFORE_DISPATCH"}
+	aborted               = session.ToolError{Name: "AbortError", Code: "ABORTED"}
+)
+
 // ApprovalRequest is the app-level approval envelope.
 type ApprovalRequest struct {
 	SessionID string
@@ -244,13 +254,14 @@ func (runtime *Runtime) prepare(candidate session.ToolCall) (result prepared) {
 	}
 	runtime.mu.RUnlock()
 	if registered == nil {
-		result.result.Output, result.result.IsError = fmt.Sprintf("Error: unknown tool %q", candidate.Name), true
+		result.result.Output, result.result.IsError, result.result.Error = fmt.Sprintf("Error: unknown tool %q", candidate.Name), true, new(unknownTool)
 		return result
 	}
 	result.keepInline = registered.keepInline
 	validated, err := registered.prepare(candidate.Arguments)
 	if err != nil {
-		result.result.Output, result.result.IsError = errorText(err), true
+		// prepare fails only on schema validation and decoding.
+		result.result.Output, result.result.IsError, result.result.Error = errorText(err), true, new(invalidArguments)
 		return result
 	}
 	result.call = validated
@@ -268,6 +279,7 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			result.Output, result.IsError = "Error: implementation panicked", true
+			result.Image, result.Error, result.Meta = nil, nil, nil
 		}
 		result.Output = finishText(result.Output)
 	}()
@@ -285,11 +297,12 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 	}
 	result.CallID = candidate.ID
 	if ctx.Err() != nil {
-		result.Output, result.IsError = "Error: tool call aborted before dispatch", true
+		result.Output, result.IsError, result.Error = "Error: tool call aborted before dispatch", true, new(abortedBeforeDispatch)
 		return result
 	}
 	if err := validated.call.check(invocation); err != nil {
-		result.Output, result.IsError = errorText(err), true
+		result.Output, result.Error = failureText(candidate.Name, err)
+		result.IsError = true
 		return result
 	}
 	if reason := validated.call.reason(); reason != "" {
@@ -308,19 +321,28 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 		invocation.Approved = true
 	}
 	if ctx.Err() != nil {
-		result.Output, result.IsError = "Error: tool call aborted before dispatch", true
+		result.Output, result.IsError, result.Error = "Error: tool call aborted before dispatch", true, new(abortedBeforeDispatch)
 		return result
 	}
 	output, err := validated.call.execute(ctx, invocation)
 	// Like upstream, cancellation supersedes only a successful body result;
-	// a failure the body returned keeps its own text.
+	// a failure the body returned keeps its own text and classification.
 	if err != nil {
-		result.Output, result.IsError = errorText(err), true
+		result.Output, result.Error = failureText(candidate.Name, err)
+		result.IsError = true
 		return result
 	}
 	if ctx.Err() != nil {
-		result.Output, result.IsError = "Error: tool call aborted", true
+		result.Output, result.IsError, result.Error = "Error: tool call aborted", true, new(aborted)
 		return result
+	}
+	if output.Meta != nil {
+		meta := output.Meta.Fit()
+		if reason := metaViolation(candidate.Name, meta); reason != "" {
+			result.Output, result.IsError, result.Error = invalidOutputText(candidate.Name, reason), true, new(invalidToolOutput)
+			return result
+		}
+		result.Meta = &meta
 	}
 	result.Output = output.Text
 	result.Image = output.Image
@@ -329,6 +351,43 @@ func (runtime *Runtime) execute(ctx context.Context, request BatchRequest, candi
 
 // errorText renders a failed call with the upstream "Error: " envelope.
 func errorText(err error) string { return "Error: " + err.Error() }
+
+// failureText renders a Check or Execute error and its classification, if
+// any. A classification that would not persist is a tool defect.
+func failureText(name string, err error) (string, *session.ToolError) {
+	var failure Failure
+	if !errors.As(err, &failure) {
+		return errorText(err), nil
+	}
+	classification := failure.ToolError()
+	if invalid := classification.Validate(); invalid != nil {
+		return invalidOutputText(name, violation(invalid)), new(invalidToolOutput)
+	}
+	return errorText(err), &classification
+}
+
+// metaViolation reports why fitted metadata cannot be recorded for the
+// named tool, or "" when it can.
+func metaViolation(name string, meta session.ToolMeta) string {
+	if err := meta.Validate(); err != nil {
+		return violation(err)
+	}
+	if owner := meta.Tool(); owner != name {
+		return fmt.Sprintf("metadata belongs to tool %q", owner)
+	}
+	return ""
+}
+
+// invalidOutputText is upstream's ToolOutputError message in the "Error: " envelope.
+func invalidOutputText(name, reason string) string {
+	return fmt.Sprintf("Error: tool %q returned invalid output: %s", name, reason)
+}
+
+// violation strips the record-validation prefix from a metadata or
+// classification error.
+func violation(err error) string {
+	return strings.TrimPrefix(err.Error(), session.ErrInvalidRecord.Error()+": ")
+}
 
 // finishText makes tool output durable: invalid UTF-8 is replaced and the
 // complete text, including the truncation marker, fits one tool result.

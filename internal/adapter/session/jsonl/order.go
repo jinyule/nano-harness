@@ -120,6 +120,9 @@ func validateOrder(events []coresession.Event, requireClosed bool) (orderState, 
 			if call.ArgumentsOmitted && !record.Result.IsError {
 				return state, orderError("omitted tool arguments require an error result")
 			}
+			if meta := record.Result.Meta; meta != nil && meta.Tool() != call.Name {
+				return state, orderError("tool/result metadata does not belong to %q", call.Name)
+			}
 			for _, callID := range approvalCalls {
 				if callID == record.Result.CallID {
 					return state, orderError("tool/result precedes approval decision")

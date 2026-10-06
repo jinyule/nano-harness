@@ -106,7 +106,7 @@ func cloneSurface(nodes []SurfaceNode) []SurfaceNode {
 	return cloned
 }
 
-// cloneResult detaches a tool result, including its optional image.
+// cloneResult detaches a tool result, including its image, error, and metadata.
 func cloneResult(result *ToolResult) *ToolResult {
 	if result == nil {
 		return nil
@@ -115,6 +115,14 @@ func cloneResult(result *ToolResult) *ToolResult {
 	if result.Image != nil {
 		image := *result.Image
 		copyResult.Image = &image
+	}
+	if result.Error != nil {
+		failure := *result.Error
+		copyResult.Error = &failure
+	}
+	if result.Meta != nil {
+		meta := result.Meta.clone(func(text string) string { return text })
+		copyResult.Meta = &meta
 	}
 	return &copyResult
 }

@@ -71,9 +71,20 @@ type Route struct {
 // Result is the model-visible content of one successful execution. Image is
 // an optional normalized image the model sees after Text; a result that
 // carries one keeps its text inline instead of entering the spill policy.
+// Meta is optional presentation data for replay, never shown to the model;
+// its member must be this tool's, and the runtime fits it to its budget.
 type Result struct {
 	Text  string
 	Image *session.Image
+	Meta  *session.ToolMeta
+}
+
+// Failure is an error whose tool/result carries a stable classification.
+// The runtime finds it with errors.As in errors returned by Check and
+// Execute; other errors leave the result unclassified.
+type Failure interface {
+	error
+	ToolError() session.ToolError
 }
 
 // Text returns a text-only result.

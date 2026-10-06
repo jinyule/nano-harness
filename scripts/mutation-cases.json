@@ -471,8 +471,8 @@
   {
     "id": "tool-cancel-keeps-body-failure",
     "file": "internal/app/tool/runtime.go",
-    "before": "// a failure the body returned keeps its own text.\n\tif err != nil {",
-    "after": "// a failure the body returned keeps its own text.\n\tif err != nil && ctx.Err() == nil {",
+    "before": "// a failure the body returned keeps its own text and classification.\n\tif err != nil {",
+    "after": "// a failure the body returned keeps its own text and classification.\n\tif err != nil && ctx.Err() == nil {",
     "test": "^TestRuntime_CancellationKeepsTheBodyFailure$"
   },
   {
@@ -768,5 +768,47 @@
     "before": "slices.Sort(sequences)",
     "after": "sequences = slices.Clip(sequences)",
     "test": "^TestMaybe_SecondCompactionRecordsSortedShadowedSequences$"
+  },
+  {
+    "id": "tool-failure-classification",
+    "file": "internal/app/tool/runtime.go",
+    "before": "\treturn errorText(err), &classification\n",
+    "after": "\treturn errorText(err), nil\n",
+    "test": "^TestRuntime_RecordsDeclaredFailureClassifications$"
+  },
+  {
+    "id": "tool-meta-recorded",
+    "file": "internal/app/tool/runtime.go",
+    "before": "\t\tresult.Meta = &meta\n",
+    "after": "\t\t_ = meta\n",
+    "test": "^TestRuntime_FitsMetadataAndRejectsAnotherToolsMember$"
+  },
+  {
+    "id": "tool-meta-owner-order",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": "meta != nil && meta.Tool() != call.Name",
+    "after": "meta != nil && false",
+    "test": "^TestSessionV2StructuredResults_RejectsChangedContract$"
+  },
+  {
+    "id": "tool-meta-fit-drops-an-item",
+    "file": "internal/core/session/toolresult.go",
+    "before": "sort.Search(n, func(count int) bool",
+    "after": "sort.Search(n+1, func(count int) bool",
+    "test": "^TestToolMeta_FitKeepsTheEncodingWithinTheBudget$"
+  },
+  {
+    "id": "tool-repair-unknown-outcome",
+    "file": "internal/adapter/session/jsonl/jsonl.go",
+    "before": "unknownOutcome := coresession.ToolOutcomeUnknown",
+    "after": "unknownOutcome := coresession.ToolError{Name: \"ToolNotStartedError\", Code: \"TOOL_NOT_STARTED\"}",
+    "test": "^TestLog_RepairClassifiesAnUnknownOutcome$"
+  },
+  {
+    "id": "tool-error-only-on-failure",
+    "file": "internal/core/session/validate.go",
+    "before": "\t\tif !record.Result.IsError {\n\t\t\treturn invalid(\"successful tool result carries an error classification\")",
+    "after": "\t\tif false {\n\t\t\treturn invalid(\"successful tool result carries an error classification\")",
+    "test": "^TestRecord_ResultErrorAndMetaFollowTheOutcome$"
   }
 ]
