@@ -136,12 +136,14 @@
 - tools：无 Blocker。S1 单层压缩响应的网络输入没有上限，N1 审计记录未核对检索词与调用参数，N2 空白判断重复实现，交 Codex。
 - wiring：B1“运行时把已执行的成功结果改成 aborted”**驳回**：上游 `packages/core/tools/src/index.ts:1581-1584` 同样在 body 执行后发现取消时返回 `toolAbortedResult`，agent 审查者也核对为一致。B2 后台命令超过约 256 KiB 时完成通知被拒且 job 服务吞掉错误（726a95f 的参数上限与 WP16 的跨提交冲突），交 opus。S1 ADR-0022 的 query 上限与代码不一致、S2 省略参数的 web_search 审计条件无测试保护、S3 fetch/file 附加 mutation 清单不进门禁、N3 composition token 注释口径，交 Codex。
 - 集成分支另有偶发失败 `TestService_SendMessageRoundTripAndColdResume`（`release` 先关闭 done 再投递结算通知），多次打断合入门禁，已修复合入 `1f2aa37`（先投递通知再关闭 done，对齐上游 finishDisposal 顺序）。
-- 处理进度：W-B2 已合入 `3966344`（按上游 `fitCompletionNotice` 截断整条通知，投递失败写入 job detail）。A1/A2/A3 修复进行中。
+- 处理进度：W-B2 已合入 `3966344`（按上游 `fitCompletionNotice` 截断整条通知，投递失败写入 job detail）。A1/A2/R3 已合入 `4f4c193`：turn 开场记录不受取消影响并必有 `turn/end`；开场前取消时，通知放回队首；turn 开始时清除过期唤醒；K2 step context 被打断时记为 canceled。A3 只在 ADR-0023 记录 one-shot 窗口。
 
 ### 第四轮增量审查（`d7d199d..005a3a8`，opus）
 
 - core：C1 Blocker，B1 修复（`27ad50b`）引入回归：同一结算窗口里，被取消的目标轮次之后又有 turn 被取消，暂停会被覆盖，目标停在 active+disarmed。上游“取消后再取消”仍会暂停。已交 opus 修复。N1 `Maybe` 返回值与 ADR-0020 定义不符、N2 fork surface 的措辞，一并修。pruner、B3、plan cleanup、release 顺序均核对为与上游一致。
-- tools：无 Blocker。S1 sandbox 不可用文案与上游不同；S2 管道排空 1 s 而上游为 3 s；N1、N2 job 文案和顺序细节与上游不同；N3 sandbox 故障误判与上游相同，记为已知限制。按“对齐上游”交 opus 修复。
+- tools：无 Blocker。S1 sandbox 不可用文案与上游不同；S2 管道排空 1 s 而上游为 3 s；N1、N2 job 文案和顺序细节与上游不同；N3 sandbox 故障误判与上游相同，记为已知限制。已对齐上游并合入 `7667d02`：排空窗口等于终止宽限，搜索仍为 1 s。
+- 另修复 subagent 包中 4 处随执行时序而变的覆盖路径（`52d3715`，只改测试），消除逐文件 coverage 门禁随机失败的隐患。
+- WP12 设计已答复（`626c28d`）：错误只存上游的 `{name, code}`，不新造码；read meta 不存语言提示、write diff 单段写入 ADR-0019，待 UI 工作开始时复审；分批合入，基础批先行，文件、搜索、shell 批等 WP14。设计者另发现 runtime 在工具出错后被取消时也会改写为 aborted，而上游只改写非错误结果（`index.ts:1624/1652` 的 `!isError`），作为 WP12 之前的独立修复。
 
 ### 本轮其他合入与决定
 
