@@ -296,8 +296,8 @@
   {
     "id": "approval-shutdown-cancels-decision",
     "file": "internal/app/approval/service.go",
-    "before": "case errors.Is(context.Cause(ctx), errStopped):",
-    "after": "case false:",
+    "before": "if !service.active {\n\t\toutcome, source = session.ApprovalCancelled, \"cancellation\"\n\t}",
+    "after": "if false {\n\t\toutcome, source = session.ApprovalCancelled, \"cancellation\"\n\t}",
     "test": "^TestService_CleanupSettlesPendingDecisions$"
   },
   {
@@ -1090,5 +1090,12 @@
     "before": "if len(before)+count >= maxEditBytes {",
     "after": "if len(before)+count > maxEditBytes {",
     "test": "^TestDigestFile_RetentionAndCancellation$"
+  },
+  {
+    "id": "approval-decision-commit-serializes-stop",
+    "file": "internal/app/approval/service.go",
+    "before": "service.mu.Lock()\n\tdefer service.mu.Unlock()\n\t// The stop transition and durable outcome must serialize; cleanup cannot",
+    "after": "service.mu.Lock()\n\tservice.mu.Unlock()\n\t// The stop transition and durable outcome must serialize; cleanup cannot",
+    "test": "^TestService_CleanupDuringDecisionCommit$"
   }
 ]

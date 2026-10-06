@@ -72,6 +72,8 @@ workspace provider 安装 `read_file`、`list_files`、`search_files`、`apply_p
 
 模型生成的 arguments strict decode。所有文件操作限定解析后的 workspace；patch 拒绝 binary/rename/copy/symlink 并先 check。写入和 shell 在实际执行点请求一次性 approval；无 broker、取消、policy never、非法决定或 journal failure 都拒绝。
 
+approval 的最终决定提交与插件停止互斥：停止先发生时，已提交问题的结局为 `cancelled`（来源 `cancellation`）；提交先发生时，保留已提交结局。持久化决定与返回结果必须一致，cleanup 等待配对收尾；具体锁边界与关闭顺序见[架构](../architecture.md#工具approval-与调度)。
+
 普通 shell 在 macOS `sandbox-exec` 或 Linux `bwrap` 中执行，只可写 workspace/owned temp；sandbox 缺失即失败。host shell 需要显式一次性 approval。subagent 永不 elevation，并在工具层再次禁止 host mode。子进程使用 secret-free allowlist 环境、deadline、进程组回收和有界 combined output。
 
 ### 6. 进程内 Subagent

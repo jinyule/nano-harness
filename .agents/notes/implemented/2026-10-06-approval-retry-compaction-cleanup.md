@@ -24,7 +24,7 @@
 
 三个插件沿用 `web.Service` 与 `plan.Service` 的在途登记模式：`begin` 在服务锁内检查运行状态、派生可取消的调用 context、登记 cancel 并 `group.Add(1)`；cleanup 置 `active = false`、取消全部登记的调用，释放锁后 `group.Wait()`。停止后不再有 `Add`，所以 `Wait` 不会与 `Add` 竞争。各插件关闭时的取消语义分别如下，当前描述在[架构](../../../docs/architecture.md)与 [ADR-0020](../../../docs/decisions/0020-tool-result-pruning.md#摘要发布与失败)：
 
-- approval：`SetPolicy` 与 `Decide` 整体登记，cleanup 以内部停止原因取消。`approval/asked` 写入时被取消，就直接返回错误，不留下未配对的问题。问题已提交后，如果取消原因是停止，无论 broker 回答什么，都记为 `cancelled`（来源 `cancellation`），并沿用原有不可取消、5 秒有界的提交补写 `approval/decided`。因此 cleanup 返回前每个已提交的问题都已配对，关闭期间的获批不会让调用方的工具执行；调用方自己的 context 仍然有效，所以只能靠这个原因区分关闭和普通取消。broker 和策略表在等待结束后才清空，迟到的 `SetPolicy` 不会把策略留在已停止的服务里。`Broker` 文档要求 `Ask` 在 context 结束后及时返回，TUI broker 已经满足。
+- approval：`SetPolicy` 与 `Decide` 整体登记，cleanup 以内部停止原因取消。问题尚未提交时直接返回错误；已提交的问题在不可取消、5 秒有界的提交中补齐 `approval/decided`。最终结局与停止状态切换的串行化由[决定提交修补 Note](2026-10-06-approval-decision-commit.md)补充；停止先发生时，落盘与返回都为 `cancelled`（来源 `cancellation`），不能授权工具执行。broker 和策略表在等待结束后才清空，迟到的 `SetPolicy` 不会把策略留在已停止的服务里。`Broker` 文档要求 `Ask` 在 context 结束后及时返回，TUI broker 满足。
 - retry：只登记“重试决定”这一段，即读取策略、追加 `llm/retry`、退避等待、追加 `llm/retry-started`。模型尝试由调用方的闭包使用调用方的 context 发起，属于调用方，cleanup 不能取消也不等待；尝试在 cleanup 之后失败时，`Do` 返回 `ErrNotRunning`。退避中被取消的重试只留下 `llm/retry`，与 turn 取消时相同。
 - compaction：`Maybe` 整体登记，摘要模型请求由服务自己发起，所以同样被取消。事务开始后的失败沿用不可取消的错误收尾；本变更把摘要提交后的成功 `compaction/end` 也改为不继承取消，这样摘要落盘之后被取消的请求仍关闭事务并返回成功，cleanup 返回前不会留下打开的事务。这一改动同样适用于调用方取消，此前该窗口要靠 resume repair 关闭。
 

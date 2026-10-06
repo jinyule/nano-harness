@@ -162,8 +162,9 @@ func (service *Service) SetPolicy(ctx context.Context, sessionID string, journal
 
 // Decide records a paired question and outcome. Delegated sessions can never
 // elevate. Once the question is recorded its outcome is always committed,
-// even after cancellation; a decision pending when cleanup begins settles
-// as cancelled, whatever the broker answers, before cleanup returns.
+// even after cancellation. Final outcome selection and its commit serialize
+// with cleanup's stop transition: stopping first commits cancellation;
+// committing first preserves that outcome and cleanup waits for the call.
 func (service *Service) Decide(ctx context.Context, request tool.ApprovalRequest) (session.ApprovalOutcome, error) {
 	if request.SessionID == "" || request.Turn == 0 || request.Step == 0 || request.Call.ID == "" || request.Call.Name == "" || request.Reason == "" || request.Journal == nil {
 		return "", ErrInvalidRequest
@@ -199,14 +200,16 @@ func (service *Service) Decide(ctx context.Context, request tool.ApprovalRequest
 	case broker == nil:
 	default:
 		outcome, source = broker.Ask(ctx, Question{ID: id, Session: request.SessionID, ToolName: request.Call.Name, CallID: request.Call.ID, Reason: request.Reason}), "operator"
-		switch {
-		case errors.Is(context.Cause(ctx), errStopped):
-			// The caller's context is still live, so an approval here would
-			// let the tool run while the service shuts down.
-			outcome, source = session.ApprovalCancelled, "cancellation"
-		case outcome != session.ApprovalAllowedOnce && outcome != session.ApprovalRejected && outcome != session.ApprovalCancelled:
+		if outcome != session.ApprovalAllowedOnce && outcome != session.ApprovalRejected && outcome != session.ApprovalCancelled {
 			outcome, source = session.ApprovalUnavailable, "unavailable"
 		}
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	// The stop transition and durable outcome must serialize; cleanup cannot
+	// revise a committed outcome. Once stopped, even a live caller is denied.
+	if !service.active {
+		outcome, source = session.ApprovalCancelled, "cancellation"
 	}
 	commitContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()

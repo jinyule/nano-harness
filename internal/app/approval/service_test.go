@@ -82,6 +82,13 @@ func (broker testBroker) Ask(context.Context, Question) session.ApprovalOutcome 
 	return broker.outcome
 }
 
+type contextBroker struct{ contexts chan context.Context }
+
+func (broker contextBroker) Ask(ctx context.Context, _ Question) session.ApprovalOutcome {
+	broker.contexts <- ctx
+	return session.ApprovalAllowedOnce
+}
+
 func startApproval(t *testing.T) (*Service, *plugin.Scope) {
 	t.Helper()
 	service := New()
@@ -330,5 +337,84 @@ func TestService_CleanupSettlesPendingDecisions(t *testing.T) {
 	}
 	if settled := <-result; settled.err != nil || settled.outcome != session.ApprovalCancelled {
 		t.Fatalf("pending decision = %s, %v", settled.outcome, settled.err)
+	}
+}
+
+func TestService_CleanupDuringDecisionCommit(t *testing.T) {
+	service, scope := startApproval(t)
+	cleanupEntered := make(chan struct{})
+	if err := scope.Defer(func(context.Context) error {
+		close(cleanupEntered)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	broker := contextBroker{contexts: make(chan context.Context, 1)}
+	brokerScope := &plugin.Scope{}
+	t.Cleanup(func() { _ = brokerScope.Close(context.Background()) })
+	if err := service.RegisterBroker(broker, brokerScope); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var callContext context.Context
+	var stoppedDuringCommit bool
+	journal := &lockedJournal{holdFor: session.RecordApprovalDecided, hold: func(context.Context) error {
+		close(entered)
+		<-release
+		stoppedDuringCommit = callContext.Err() != nil
+		return nil
+	}}
+	type decision struct {
+		outcome session.ApprovalOutcome
+		err     error
+	}
+	result := make(chan decision, 1)
+	go func() {
+		outcome, err := service.Decide(t.Context(), approvalRequest(journal))
+		result <- decision{outcome, err}
+	}()
+	<-entered
+	callContext = <-broker.contexts
+	// Only Decide can own the mutex here. If it leaves the commit unlocked,
+	// let real cleanup cancel the call before releasing the append. Otherwise
+	// the commit precedes stopping, and cleanup must join that same outcome.
+	commitLocked := !service.mu.TryLock()
+	if !commitLocked {
+		service.mu.Unlock()
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- scope.Close(context.Background()) }()
+	<-cleanupEntered
+	if !commitLocked {
+		<-callContext.Done()
+	}
+	select {
+	case err := <-closed:
+		t.Errorf("cleanup returned during decided append: %v", err)
+		closed <- err
+	default:
+	}
+	close(release)
+	settled := <-result
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	got := journal.snapshot()
+	if len(got) != 2 || got[0].Type != session.RecordApprovalAsked || got[1].Type != session.RecordApprovalDecided {
+		t.Fatalf("cleanup returned before the decision was paired: %v", types(got))
+	}
+	data := got[1].Approval
+	want, source := session.ApprovalAllowedOnce, "operator"
+	if stoppedDuringCommit {
+		want, source = session.ApprovalCancelled, "cancellation"
+	}
+	if settled.err != nil || settled.outcome != want || data.Outcome != settled.outcome || data.Source != source || data.ID != got[0].Approval.ID {
+		t.Fatalf("cleanup during decided append: commitLocked=%t outcome=%s err=%v durable=%+v; want %s/%s", commitLocked, settled.outcome, settled.err, data, want, source)
+	}
+	if t.Context().Err() != nil {
+		t.Fatal("approval cleanup cancelled the caller")
+	}
+	if _, err := service.Decide(t.Context(), approvalRequest(journal)); !errors.Is(err, ErrNotRunning) || len(journal.snapshot()) != 2 {
+		t.Fatalf("stopped service admitted a decision: %v", err)
 	}
 }
