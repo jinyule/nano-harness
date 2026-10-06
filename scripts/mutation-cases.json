@@ -390,5 +390,33 @@
     "before": "if call == nil || call.Name != \"web_search\" || call.ArgumentsOmitted {",
     "after": "if call == nil || call.ArgumentsOmitted {",
     "test": "^TestSessionV2WebSearch_RejectsChangedContract$"
+  },
+  {
+    "id": "credential-lock-canceled-entry",
+    "file": "internal/adapter/credential/file/store.go",
+    "before": "for {\n\t\tif err := ctx.Err(); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tfile, err := credentialOpenFile",
+    "after": "for {\n\t\tfile, err := credentialOpenFile",
+    "test": "^TestWithLock_PreCanceledDoesNotCreateLock$"
+  },
+  {
+    "id": "credential-lock-acquired-cancellation",
+    "file": "internal/adapter/credential/file/store.go",
+    "before": "defer func() { _ = credentialRemove(path) }()\n\t\t\tif err := ctx.Err(); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\treturn operation()",
+    "after": "defer func() { _ = credentialRemove(path) }()\n\t\t\treturn operation()",
+    "test": "^TestStore_CanceledDuringAcquisitionAndRead$"
+  },
+  {
+    "id": "credential-lock-cancellation-priority",
+    "file": "internal/adapter/credential/file/store.go",
+    "before": "case <-deadline.C:\n\t\t\tif err := ctx.Err(); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\treturn errors.New(\"credential writer lock timed out\")",
+    "after": "case <-deadline.C:\n\t\t\treturn errors.New(\"credential writer lock timed out\")",
+    "test": "^TestWithLock_CancellationWinsExpiredWait$"
+  },
+  {
+    "id": "credential-mutation-cancellation",
+    "file": "internal/adapter/credential/file/store.go",
+    "before": "\t\tif err := ctx.Err(); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tvar current *llm.Credential",
+    "after": "\t\tvar current *llm.Credential",
+    "test": "^TestStore_CanceledDuringAcquisitionAndRead$"
   }
 ]

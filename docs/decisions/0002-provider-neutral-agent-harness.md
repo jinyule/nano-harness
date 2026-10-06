@@ -30,6 +30,8 @@ settings 文件 provider 每次尝试取得跨进程 writer lock 前、取得锁
 
 账户 store 支持 API key 和 OAuth。OpenAI 支持 browser PKCE、device code 和显式只读 Codex cache import；Anthropic/OpenRouter 支持 browser flow。import 会复制有效 grant 到 nano-harness 自己的 `0600` store，不修改 Codex cache。
 
+credential store 的 modify、refresh 与 delete 共用 `O_EXCL` 文件锁串行化 read-decide-write，同进程也沿同一可取消等待路径，不另排队在不可取消的 mutex 后。锁等待期限为 30 s，每 25 ms 重试；每次 open 前、取得锁后及读完文件后进入 mutation 前检查 context，期限与取消同时就绪时返回原 context 错误。取消的等待者只退出自身调用，不删除持有者的锁；mutation 尚未开始时取消不写入。mutation/refresh 开始后，回调返回错误就不写；返回合法成功结果则完成原子保存，迟到取消不丢弃可能已在远端轮换的新 OAuth grant。锁期限只约束取得锁，不中断已开始的事务。
+
 产品不实现 ChatGPT/Codex subscription 用量查询或 quota gate。用户账户的远端限制照常由 provider 返回；本地仍强制 step、context、字节、tool count、timeout 和并发上限。真实验证前的 3% 用量检查属于产品外的操作者步骤。
 
 ### 3. v2 append-only session 是权威来源

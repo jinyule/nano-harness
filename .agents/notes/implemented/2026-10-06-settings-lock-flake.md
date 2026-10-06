@@ -25,7 +25,7 @@
 
 调用方可以稳定用 `errors.Is(err, context.Canceled)` 识别锁等待取消，预先取消和取得锁期间取消不再替换设置文件或提交新 revision。原子写入开始后的提交语义由文件证据固定。没有增加配置、接口、等待时长或 sleep，也没有串行化测试或更改持久化格式。
 
-同步 OS open 不能被 context 中断；取消在其返回后被观察。已开始的原子写入仍可能因 I/O 失败返回错误。并发样本只证明本机观察条件下的稳定性，不能代替 Linux/Windows 原生执行；credentials 的独立锁实现不属于此次 settings 修复范围。
+同步 OS open 不能被 context 中断；取消在其返回后被观察。已开始的原子写入仍可能因 I/O 失败返回错误。并发样本只证明本机观察条件下的稳定性，不能代替 Linux/Windows 原生执行。credentials 的独立锁由后续 [credential 锁调查记录](2026-10-06-credential-lock-cancellation.md) 处理，本 Note 继续拥有 settings 的修复证据。
 
 ## Verification
 

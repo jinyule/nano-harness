@@ -102,6 +102,8 @@ spill 与先读后写另有专门证据：预览算法用上游 retention 的 Py
 
 settings 锁的取消测试使用 channel 固定取得锁期间的取消；`testing/synctest` 让被屏障阻塞的 open 与虚拟锁期限交错，并在释放前取消，验证取消与超时同时就绪时仍返回 context 错误。另覆盖纯等待取消和原子写入开始后的完整提交；真实 `cmd` composition 从磁盘文件、snapshot revision 和残留 lock/temp 文件验证取消更新没有提交。负载重复使用 race 测试二进制的 `-test.count`、`-test.cpu=1,4,8` 与其他包的并发 race 测试，具体前后样本见 [settings 锁调查记录](../.agents/notes/implemented/2026-10-06-settings-lock-flake.md)。
 
+credential 锁的永久测试覆盖预先取消的 modify/delete、取得锁与读取期间取消、取消与锁期限同时就绪，以及同进程等待者在 holder 未退出时返回取消。channel 与虚拟时间固定交错；旧 mutex 的不可取消等待在私有测试子进程中成为具名失败，外层拥有子进程与临时目录。独立子进程实际持锁，主测试的取消等待者不得删除它的锁或修改文件，holder 退出后锁可复用。回调开始后的成功刷新完整保存，取消错误保留原文件；真实 `cmd` composition 的 logout 从磁盘字节与无密钥账户列表验证取消不删除账户。负载样本与证据见 [credential 锁调查记录](../.agents/notes/implemented/2026-10-06-credential-lock-cancellation.md)。
+
 ## TUI 与真实 cmd
 
 TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event forwarding/backpressure、所有 durable presentation event、text/reasoning stream、图片附加、普通/approval/auth 输入模式、全部命令、UI 消失与 cancellation。

@@ -356,6 +356,8 @@ settings owner 将内建 defaults 与稀疏用户 YAML 合并。模型目录的�
 
 credential store 按 provider 保存一个 API key 或 OAuth grant，使用 strict versioned YAML、`0600` 文件、随机临时文件、原子 rename 与跨进程 lock。认证与 refresh token 不进入 session、prompt、TUI 列表或错误。环境 API key 是无持久化 fallback；显式 login 会原子替换对应 provider record。
 
+同进程的 credential 修改也使用该文件锁等待，取消不会等待另一个 refresh 完成；mutation 开始前拒绝取消，已成功返回的刷新结果完整保存。锁仲裁与提交边界由 [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#2-provider-neutral-llm-与-provider-owned-wireauth) 定义。
+
 ## TUI 与投影
 
 `internal/adapter/tui` 是使用 Bubble Tea v2、Lip Gloss v2 与 Bubbles v2 的 alternate-screen 插件。`tea.View` 声明终端模式，输入、viewport、命令与事件投影保留在 adapter；app/core 不依赖 Charm。它从 durable event replay 初始化，再订阅已提交事件，展示 route、streamed text/reasoning、tool call/result、approval、retry、compaction 和 turn outcome。当前计划固定显示在输入区上方，最多占 transcript 剩余行数的一半并保留至少一行 transcript；条目溢出时从第一个未完成项开始显示，标题保留各状态计数。TUI 同时实现本地 approval broker、用户提问 broker 与 auth interaction；secret prompt 使用 password echo。提问逐题显示标题、详情和编号选项，数字列表选择、其他文本作为自由回答、空输入跳过，推荐选项预填，Ctrl+C 取消整批。`/plan`、`/plan off` 和 `/plan TEXT` 调用 `Registry.SetPlanMode`，状态栏在规划模式下显示 `mode=plan`，模式变化与切换提示显示为 `mode>` 行。`/goal` 按上游语法显示、创建、编辑、暂停、恢复或清除根 session 的目标，输出只留在终端；待发送图片不能伴随 `/goal`。状态栏从日志折叠显示 `goal=<阶段> <轮次>/<上限>`，`goal/change`、目标轮次和收尾指令显示为 `goal>` 行。

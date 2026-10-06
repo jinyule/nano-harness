@@ -9,7 +9,7 @@
 ## 凭据、OAuth 与日志
 
 - provider 账户只来自 owner-only credential store、明确的 TUI login 或 provider 配置指定的环境变量。凭据不进入仓库、命令行参数、session、prompt、TUI account 列表、错误或测试 snapshot。
-- credential YAML 是 versioned strict document，目录使用 `0700`，文件、lock 和随机临时文件使用 `0600`。写入在进程内 mutex 与跨进程独占 lock 中完成，经 `fsync` 后原子 rename；symlink target 与 group/other 可读文件拒绝。
+- credential YAML 是 versioned strict document，目录使用 `0700`，文件、lock 和随机临时文件使用 `0600`。同进程与跨进程写入均由同一 `O_EXCL` 文件锁保护 read-decide-write，经 `fsync` 后原子 rename；symlink target 与 group/other 可读文件拒绝。取消与提交边界见 [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#2-provider-neutral-llm-与-provider-owned-wireauth)。
 - OpenAI browser login 使用 loopback callback、随机 state 和 PKCE；device login 只显示 verification URL 与 user code。Anthropic 和 OpenRouter browser login 同样由各自 provider 拥有随机 state/PKCE 与 token exchange。
 - OAuth access token 临近过期时，LLM runtime 在 credential store 的串行 read-decide-write 事务内调用 provider refresh，避免并发刷新覆盖新 grant。refresh 失败不回退到过期 token。
 - `codex-import` 只有用户显式执行时才读取 `<codex-home>/auth.json`。它要求普通 owner-only 小文件和 `chatgpt` 登录，strict decode access/refresh token 与 account ID，然后写入 nano-harness 自己的 store；绝不修改 Codex cache，也不会在每次请求重新读取它。
