@@ -313,17 +313,17 @@ func TestFormatSearch_MatchesReferencePresentation(t *testing.T) {
 }
 
 func TestFormatFetch_BoundsCompleteOutput(t *testing.T) {
-	text := formatFetch(appWeb.FetchResult{URL: "https://x.example/a", StatusCode: 404, Kind: appWeb.FetchText, Content: "<b>raw</b>"}, 1024)
-	if text != "Fetched https://x.example/a (HTTP 404)\n\n"+externalNotice+"\n\n<b>raw</b>" {
+	text, truncated := formatFetch(appWeb.FetchResult{URL: "https://x.example/a", StatusCode: 404, Kind: appWeb.FetchText, Content: "<b>raw</b>"}, 1024)
+	if text != "Fetched https://x.example/a (HTTP 404)\n\n"+externalNotice+"\n\n<b>raw</b>" || truncated {
 		t.Fatalf("text output=%q", text)
 	}
-	flagged := formatFetch(appWeb.FetchResult{URL: "https://x.example", StatusCode: 200, Kind: appWeb.FetchText, Content: "partial", Truncated: true}, 1024)
-	if !strings.HasSuffix(flagged, "partial"+fetchFooter) {
+	flagged, truncated := formatFetch(appWeb.FetchResult{URL: "https://x.example", StatusCode: 200, Kind: appWeb.FetchText, Content: "partial", Truncated: true}, 1024)
+	if !strings.HasSuffix(flagged, "partial"+fetchFooter) || !truncated {
 		t.Fatalf("provider truncation=%q", flagged)
 	}
 	limit := 200
-	cut := formatFetch(appWeb.FetchResult{URL: "https://x.example", StatusCode: 200, Kind: appWeb.FetchText, Content: strings.Repeat("界", 100)}, limit)
-	if len(utf16.Encode([]rune(cut))) > limit || !utf8.ValidString(cut) || !strings.HasSuffix(cut, fetchFooter) {
+	cut, truncated := formatFetch(appWeb.FetchResult{URL: "https://x.example", StatusCode: 200, Kind: appWeb.FetchText, Content: strings.Repeat("界", 100)}, limit)
+	if len(utf16.Encode([]rune(cut))) > limit || !utf8.ValidString(cut) || !strings.HasSuffix(cut, fetchFooter) || !truncated {
 		t.Fatalf("bounded output len=%d valid=%v %q", len(cut), utf8.ValidString(cut), cut)
 	}
 }
@@ -346,8 +346,8 @@ func TestFormatFetch_MatchesUpstreamUTF16Budget(t *testing.T) {
 		{"provider footer over cap", strings.Repeat("界", available), header + strings.Repeat("界", available-len(fetchFooter)) + fetchFooter, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := formatFetch(appWeb.FetchResult{URL: url, StatusCode: 200, Kind: appWeb.FetchText, Content: test.content, Truncated: test.truncated}, limit)
-			if got != test.want || !utf8.ValidString(got) {
+			got, truncated := formatFetch(appWeb.FetchResult{URL: url, StatusCode: 200, Kind: appWeb.FetchText, Content: test.content, Truncated: test.truncated}, limit)
+			if got != test.want || !utf8.ValidString(got) || truncated != strings.HasSuffix(test.want, fetchFooter) {
 				t.Fatalf("got=%q\nwant=%q", got, test.want)
 			}
 		})
@@ -365,8 +365,9 @@ func TestFormatFetch_BoundsConversionSourceAndSmallBudgets(t *testing.T) {
 		{"source cut before conversion", "<script>" + strings.Repeat("x", 256) + "</script><p>tail</p>", 256, "Fetched https://x.example (HTTP 200)\n\n" + externalNotice + "\n\n" + fetchFooter},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := formatFetch(appWeb.FetchResult{URL: "https://x.example", StatusCode: 200, Kind: appWeb.FetchHTML, Content: test.source}, test.limit)
-			if got != test.want {
+			got, truncated := formatFetch(appWeb.FetchResult{URL: "https://x.example", StatusCode: 200, Kind: appWeb.FetchHTML, Content: test.source}, test.limit)
+			// Every case here cuts something, including the footer itself.
+			if got != test.want || !truncated {
 				t.Fatalf("got=%q\nwant=%q", got, test.want)
 			}
 		})

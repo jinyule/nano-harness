@@ -133,6 +133,8 @@ credential 锁的永久测试覆盖预先取消的 modify/delete、取得锁与�
 
 `TestComposition_PersistsSearchAndShellStructuredResults` 走真实配置/composition 与 loopback SSE，从磁盘独立比较两个 meta 和两种分类，并逐字比较下一模型请求的正文，排除 error/meta 字段。旧 search/shell composition 的 Open/Inspect 拒绝且文件不变。修复前测试在原 producer 上以缺失字段失败；默认 mutation 覆盖分类传播、SaveText 后丢 meta、重复文件分组与 runtime spill 丢 meta。
 
+web 工具层的 `TestProvider_PersistsWebErrorClassifications` 经真实 tool runtime 让检索与抓取各返回全部 12 个 `app/web` 代码，结果必须是 `WebError` 与原代码且正文不变；查询校验、服务停止和无 journal 的失败没有分类。`TestProvider_PersistsSearchMetadata` 证明来源、回答与截断等于正文所渲染的值，来源顺序与正文链接一致，空结果是空列表。`TestProvider_PersistsFetchMetadata` 覆盖非 2xx 结果、provider 截断、转换输入超限、header 使完整输出超限和重定向后的最终 URL，`truncated` 恰好在正文带截断 footer 时为 true，metadata 不含页面内容；`formatFetch` 的预算表驱动测试同时断言返回的截断标记。`TestComposition_PersistsWebStructuredResults` 走真实组装、loopback 模型与页面，从磁盘比较两种 metadata 和未配置检索的 `WebError/WEB_PROVIDER_UNAVAILABLE`，并证明下一次聊天请求不含它们；该测试在原 producer 的 Go overlay 上以缺失 metadata 失败。
+
 ## 会话 sandbox 证据
 
 `TestRecord_SandboxModeContract` 与 `session-v2-sandbox.jsonl` 的 frozen writer/reader 测试固定三档枚举、严格字段、零 turn/step、即刻切换、resume 修复保留模式与旧 composition 拒绝。反例覆盖未知/重复/null 字段、非法 source、root/child 归属与 descriptor 后 delegation 的因果顺序。`TestService_SandboxCapturedAtDelegationAndRestored` 比较 spawn/fork 的当前父 override、较旧种子与冷恢复，子会话保持 `never`，父后续切换不传播。

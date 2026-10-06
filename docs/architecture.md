@@ -185,7 +185,7 @@ Submit user message
 | `internal/adapter/tool/skill` | `skill-tools` | `skill`，以及 step 前的 skill 目录与 `/name` 注入 |
 | `internal/adapter/tool/goal` | `goal-tools` | `get_goal`、`create_goal`、`update_goal` |
 
-`search-tools` 从实际 rg 结果生成 glob/grep metadata，沿用正文的结果上限、首次出现分组和行预览；runtime 对最终 JSON 执行 65,536 字节硬上限，SaveText 降级或正文 spill 保留 metadata。搜索 adapter 在失败产生处声明 `SearchError`；shell adapter 为前台 sandbox 不可用和工具自身取消声明分类，保留平台按实际模式生成的文案与错误链。映射与字段由 [ADR-0019](decisions/0019-structured-tool-results.md) 拥有；这些纯值包装不增加运行时 effect，既有 Scope 所有权与关闭顺序不变。
+`web-tools` 的 `web_search` metadata 复制正文渲染的去重来源、合并回答与截断标记，`web_fetch` metadata 记录最终 URL、HTTP 状态和正文渲染的实际截断，不复制页面内容；`app/web.Error` 声明 `WebError` 与原代码。`search-tools` 从实际 rg 结果生成 glob/grep metadata，沿用正文的结果上限、首次出现分组和行预览；runtime 对最终 JSON 执行 65,536 字节硬上限，SaveText 降级或正文 spill 保留 metadata。搜索 adapter 在失败产生处声明 `SearchError`；shell adapter 为前台 sandbox 不可用和工具自身取消声明分类，保留平台按实际模式生成的文案与错误链。映射与字段由 [ADR-0019](decisions/0019-structured-tool-results.md) 拥有；这些纯值包装不增加运行时 effect，既有 Scope 所有权与关闭顺序不变。
 
 goal 领域拒绝 `app/goal.Error` 声明 `GoalError` 加原有 `GOAL_*` 码，goal 工具的权限与参数拒绝声明上游 `new HarnessError` 的 `HarnessError` 加 `GOAL_TOOL_*`；提问接缝的哨兵与空请求、intent 违规是 `question.Error`，声明 `UserQuestionError` 加上游码，`exit_plan_mode` 原样传播它们，自己的继续规划、关闭与未激活错误不分类。正文、`errors.Is/As` 与模型请求不变；这些纯值不增加运行时 effect。
 
@@ -345,7 +345,7 @@ notice/queued, step/end, turn/end
 ```
 
 - 第一行是严格 `session` header，包含 format version、session ID、SHA-256 composition ID、创建时间、workspace、parent 和 delegation depth；后续行是连续 `seq` 与一个严格 record。
-- composition ID 绑定 harness v2、解析后的 workspace、工具运行时（`tool-runtime-v3`，含结构化错误分类与结果 metadata）、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、持久化的完成通知（`job-tools-v2`）、goal 停止语义（`goal-tools-v2`）、检索请求审计（`web-tools-v2`）、spill 策略、附件引用格式（`attachments-v1`）与工具结果裁剪（`tool-result-prune-v1`）的语义版本和 session v2。会话 sandbox 与完整 runtime 快照使用 `sandbox-policy-v2`，版本拒绝与保留规则见 [ADR-0021](decisions/0021-session-sandbox-modes.md#版本识别拒绝与保留)；sandbox 命令策略使用 `shell-tools-v5`；文件结构化结果使用 `fs-tools-v5`（含 sandbox 文件策略）；subagent 工具的结构化错误分类使用 `subagent-tools-v5`；工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
+- composition ID 绑定 harness v2、解析后的 workspace、工具运行时（`tool-runtime-v3`，含结构化错误分类与结果 metadata）、各工具 provider（fs、search、shell、job、subagent、todo、web、question、plan、skill、goal）、持久化的完成通知（`job-tools-v2`）、goal 停止语义（`goal-tools-v2`）、检索请求审计与 web 结构化结果（`web-tools-v3`）、spill 策略、附件引用格式（`attachments-v1`）与工具结果裁剪（`tool-result-prune-v1`）的语义版本和 session v2。会话 sandbox 与完整 runtime 快照使用 `sandbox-policy-v2`，版本拒绝与保留规则见 [ADR-0021](decisions/0021-session-sandbox-modes.md#版本识别拒绝与保留)；sandbox 命令策略使用 `shell-tools-v5`；文件结构化结果使用 `fs-tools-v5`（含 sandbox 文件策略）；subagent 工具的结构化错误分类使用 `subagent-tools-v5`；工具改名或定义变化提升对应版本，旧会话按 composition mismatch 拒绝恢复。route 可热切换，所以每次 `request/header` 另行记录实际 provider/model/effort/tool/system，`compaction/summary` 记录摘要调用的 provider/model/effort。
 - 未知字段、未知记录、未来版本、torn line、非连续序号、非法因果顺序、unsafe 权限和 composition mismatch 均拒绝。`approval/asked` 的工具名必须等于 pending call 的名称；`approval/decided` 仅通过 approval ID 关联问题，不允许携带 `call_id`。
 - 单 session 64 MiB、单 record 6 MiB。append 在更新内存投影与 subscriber 之前写入并 `fsync`；写入或同步失败回滚到原长度。
 - session root 是 `0700`，transcript/lock 是 `0600`，每个打开 session 有独占 writer lock。

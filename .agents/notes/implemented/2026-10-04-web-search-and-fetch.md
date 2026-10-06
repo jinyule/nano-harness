@@ -24,7 +24,7 @@
 - **settings。** `Document.Web.Search{Provider,Model}` 默认为空，YAML/JSON 在为空时省略；两者必须同时给出且 model 在 provider 目录中。
 - **工具定义。** 两个工具用 `tool.Spec` 声明，`Concurrent` 恒为 true，没有 `Approval`，也没有 `Check`（语义校验只在 `app/web`）。根对象未声明参数按 ADR-0007 被拒绝且不触达 service。`internal/app/tool/define.go` 增加参考 section 表的 `OrderWebSearch = 2000`、`OrderWebFetch = 2100`；guidance 由 `Runtime.Catalog` 渲染，prompt assembler 没有 web 专用分支。
 - **证据 fixture。** `cmd/nano-harness/testdata/tool-catalog.json` 与 `upstream-base-tools.json` 收录两个工具，后者的条目已与参考 `docs/tool-catalog.md` 的 JSON 块逐项比对。
-- **composition ID** 的 web 工具 token 使用 `web-tools-v2`，发送前审计语义由 ADR-0022 定义。
+- **composition ID** 的 web 工具 token 使用 `web-tools-v2`，发送前审计语义由 ADR-0022 定义。WP12 E 批为结构化结果提升到 `web-tools-v3`，见[web 结构化结果](2026-10-07-structured-web-results.md)。
 - **依赖。** `golang.org/x/net` v0.59.0 提供 HTML tokenizer 与 WHATWG charset 查找，`golang.org/x/text` v0.42.0 提供编码表；两者 Go 团队维护、BSD-3-Clause、纯 Go。`golang.org/x/sync` 作为传递依赖从 v0.22.0 升到 v0.23.0。`CGO_ENABLED=0 go build -trimpath` 的 darwin/arm64 二进制从 14,395,842 增至 15,676,146 字节（+1.28 MB，含本 WP 全部代码）。替代方案是自写 tokenizer 与多字节编码表或只支持 UTF-8，前者安全负担高，后者无法解码 GBK/Shift_JIS 等页面，与参考 `TextDecoder` 不一致。依赖只承担词法与字符集边界，Markdown 转换、元素栈和容错规则仍为本仓实现。
 - **定向 mutation** 增加 `web-fetch-public-address` 与 `web-fetch-redirect-origin`。
 

@@ -14,6 +14,7 @@ import (
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	appWeb "github.com/jinyule/nano-harness/internal/app/web"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
+	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
 // externalNotice keeps provider-controlled text visibly outside instructions.
@@ -94,7 +95,7 @@ func (provider *Provider) searchTool() *appTool.Tool {
 			if err != nil {
 				return appTool.Result{}, err
 			}
-			return appTool.Text(formatSearch(result)), nil
+			return appTool.Result{Text: formatSearch(result), Meta: searchMeta(result)}, nil
 		},
 	})
 }
@@ -119,7 +120,10 @@ func (provider *Provider) fetchTool() *appTool.Tool {
 			if err != nil {
 				return appTool.Result{}, err
 			}
-			return appTool.Text(formatFetch(result, maxFetchOutputUnits)), nil
+			text, truncated := formatFetch(result, maxFetchOutputUnits)
+			return appTool.Result{Text: text, Meta: &session.ToolMeta{WebFetch: &session.WebFetchMeta{
+				URL: result.URL, StatusCode: result.StatusCode, Truncated: truncated,
+			}}}, nil
 		},
 	})
 }
@@ -158,6 +162,15 @@ func formatSearch(result appWeb.SearchResult) string {
 	return strings.Join(parts, "\n\n")
 }
 
+// searchMeta copies the sources, answer, and truncation formatSearch renders.
+func searchMeta(result appWeb.SearchResult) *session.ToolMeta {
+	sources := make([]session.WebSource, len(result.Sources))
+	for index, source := range result.Sources {
+		sources[index] = session.WebSource{URL: source.URL, Title: source.Title, Snippet: source.Snippet, PublishedAt: source.PublishedAt}
+	}
+	return &session.ToolMeta{WebSearch: &session.WebSearchMeta{Sources: sources, Answer: result.Content, Truncated: result.Truncated}}
+}
+
 // sourceLabel prefers the title, then the hostname, then the raw URL.
 func sourceLabel(rawURL, title string) string {
 	if title != "" {
@@ -171,8 +184,10 @@ func sourceLabel(rawURL, title string) string {
 
 // formatFetch renders a header, the converted body, and a truncation footer,
 // bounding both conversion input and complete output to limit UTF-16 units.
-// Cuts preserve UTF-8 and never split a supplementary character.
-func formatFetch(result appWeb.FetchResult, limit int) string {
+// Cuts preserve UTF-8 and never split a supplementary character. truncated
+// reports the effective cut: by the provider, of the conversion input, or of
+// the complete output, which is exactly when the footer is added.
+func formatFetch(result appWeb.FetchResult, limit int) (text string, truncated bool) {
 	header := fmt.Sprintf("Fetched %s (HTTP %d)\n\n%s\n\n", result.URL, result.StatusCode, externalNotice)
 	body, sourceTruncated := utf16Prefix(result.Content, limit)
 	if result.Kind == appWeb.FetchHTML {
@@ -181,14 +196,14 @@ func formatFetch(result appWeb.FetchResult, limit int) string {
 	prefix := header + body
 	_, outputTruncated := utf16Prefix(prefix, limit)
 	if !result.Truncated && !sourceTruncated && !outputTruncated {
-		return prefix
+		return prefix, false
 	}
 	if limit < len(fetchFooter) {
-		text, _ := utf16Prefix(prefix+fetchFooter, limit)
-		return text
+		text, _ = utf16Prefix(prefix+fetchFooter, limit)
+		return text, true
 	}
-	text, _ := utf16Prefix(prefix, limit-len(fetchFooter))
-	return text + fetchFooter
+	text, _ = utf16Prefix(prefix, limit-len(fetchFooter))
+	return text + fetchFooter, true
 }
 
 func utf16Prefix(text string, limit int) (string, bool) {

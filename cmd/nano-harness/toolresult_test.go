@@ -119,6 +119,7 @@ func TestComposition_StructuredResultsRejectOldRuntimeSessions(t *testing.T) {
 		{"goal-tools-v3", "goal-tools-v2"},
 		{"question-tools-v2", "question-tools-v1"},
 		{"plan-tools-v2", "plan-tools-v1"},
+		{"web-tools-v3", "web-tools-v2"},
 	} {
 		t.Run(token.current, func(t *testing.T) {
 			config := applicationConfig{workspaceRoot: "/workspace", attachmentRoot: filepath.Join(t.TempDir(), "attachments")}

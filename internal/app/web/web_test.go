@@ -481,3 +481,14 @@ func (acceptingJournal) Append(_ context.Context, record session.Record) (sessio
 func searchOwner() SearchInvocation {
 	return SearchInvocation{Journal: acceptingJournal{}, Turn: 1, Step: 1, CallID: "search"}
 }
+
+func TestError_ToolErrorKeepsTheCodeAndText(t *testing.T) {
+	failure := &Error{Code: CodeBlockedURL, Message: "blocked", Cause: errors.New("private")}
+	var classified interface{ ToolError() session.ToolError }
+	if !errors.As(fmt.Errorf("fetch: %w", failure), &classified) || classified.ToolError() != (session.ToolError{Name: "WebError", Code: "WEB_BLOCKED_URL"}) || failure.Error() != "WEB_BLOCKED_URL: blocked" {
+		t.Fatalf("classification=%+v text=%q", classified, failure.Error())
+	}
+	if err := classified.ToolError().Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -1146,5 +1146,26 @@
     "before": "return classified(\"BAD_INTENT\", \"question %s declares intent %s without the detail it reviews\", question.ID, intent.Kind)",
     "after": "return invalid(\"question %s declares intent %s without the detail it reviews\", question.ID, intent.Kind)",
     "test": "^TestError_ClassifiesTheUpstreamFailures$"
+  },
+  {
+    "id": "web-error-keeps-code",
+    "file": "internal/app/web/web.go",
+    "before": "return session.ToolError{Name: \"WebError\", Code: string(failure.Code)}",
+    "after": "return session.ToolError{Name: \"WebError\", Code: string(CodeProviderError)}",
+    "test": "^TestError_ToolErrorKeepsTheCodeAndText$"
+  },
+  {
+    "id": "web-search-meta-answer",
+    "file": "internal/adapter/tool/web/web.go",
+    "before": "Answer: result.Content, Truncated: result.Truncated",
+    "after": "Answer: \"\", Truncated: result.Truncated",
+    "test": "^TestProvider_PersistsSearchMetadata$"
+  },
+  {
+    "id": "web-fetch-meta-effective-truncation",
+    "file": "internal/adapter/tool/web/web.go",
+    "before": "\treturn text + fetchFooter, true\n",
+    "after": "\treturn text + fetchFooter, result.Truncated\n",
+    "test": "^TestProvider_PersistsFetchMetadata$"
   }
 ]

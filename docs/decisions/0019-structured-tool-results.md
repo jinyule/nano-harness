@@ -168,6 +168,7 @@ diff 规则：
 - 基础批把 `tool-runtime` 提升一档：runtime 自有分类、meta 通道和 resume 修复分类都在这一档。
 - 搜索 D 批把 `search-tools-v3` 提升为 v4；shell S 批在 WP14 的 v4 上提升为 v5。
 - goal H 批把 `goal-tools-v2` 提升为 v3；question I 批把 `question-tools-v1` 与 `plan-tools-v1` 提升为 v2。
+- web E 批把 `web-tools-v2` 提升为 v3。
 - 每个 producer 批提升自己的 provider token：fs、search、web、shell、subagent、goal、question。question 批同时提升 plan，因为 exit_plan_mode 的结果会带上传播来的提问分类。
 - jobs、todo、skill 自身的结果契约不变，token 不变；它们的 runtime 分类随 `tool-runtime` 一起变化。
 - `session-v2`、`spill-v1`、`attachments-v1` 不因这些加法字段改变。

@@ -394,3 +394,30 @@ func TestComposition_WebSearchAuditsConcurrentQueriesOnDisk(t *testing.T) {
 		}
 	}
 }
+
+// The assembled web tools persist WebError classifications and both
+// metadata kinds, while the next chat request carries only the result text.
+func TestComposition_PersistsWebStructuredResults(t *testing.T) {
+	records, models, _ := runWebTurn(t, "web:\n  search:\n    provider: openai\n    model: test-model\n")
+	results := toolResults(records)
+	search, fetch := results["call-search"], results["call-fetch"]
+	wantSearch := session.WebSearchMeta{Sources: []session.WebSource{{URL: "https://go.dev/doc/go1.27", Title: "Go 1.27 Release Notes"}}, Answer: "Go 1.27 shipped."}
+	if search.IsError || search.Meta == nil || search.Meta.WebSearch == nil || fmt.Sprint(*search.Meta.WebSearch) != fmt.Sprint(wantSearch) {
+		t.Fatalf("search metadata = %+v", search.Meta)
+	}
+	if fetch.IsError || fetch.Meta == nil || fetch.Meta.WebFetch == nil || *fetch.Meta.WebFetch != (session.WebFetchMeta{URL: "http://docs.example.test/guide", StatusCode: 200}) {
+		t.Fatalf("fetch metadata = %+v", fetch.Meta)
+	}
+	models.mu.Lock()
+	next, err := json.Marshal(models.chatRequests[len(models.chatRequests)-1]["input"])
+	models.mu.Unlock()
+	if err != nil || !strings.Contains(string(next), "Go 1.27 shipped.") || strings.Contains(string(next), "status_code") || strings.Contains(string(next), `\"web_search\":{`) || strings.Contains(string(next), "WebError") {
+		t.Fatalf("next model input = %s", next)
+	}
+
+	records, _, _ = runWebTurn(t, "")
+	failed := toolResults(records)["call-search"]
+	if !failed.IsError || !strings.HasPrefix(failed.Output, "Error: WEB_PROVIDER_UNAVAILABLE: ") || failed.Error == nil || *failed.Error != (session.ToolError{Name: "WebError", Code: "WEB_PROVIDER_UNAVAILABLE"}) || failed.Meta != nil {
+		t.Fatalf("unconfigured search = %+v", failed)
+	}
+}

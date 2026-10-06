@@ -77,6 +77,12 @@ func (failure *Error) Error() string { return string(failure.Code) + ": " + fail
 
 func (failure *Error) Unwrap() error { return failure.Cause }
 
+// ToolError classifies the failure for its tool/result as upstream's
+// WebError with the same code.
+func (failure *Error) ToolError() session.ToolError {
+	return session.ToolError{Name: "WebError", Code: string(failure.Code)}
+}
+
 // SearchResult is the merged outcome of one search call.
 type SearchResult struct {
 	Content   string
