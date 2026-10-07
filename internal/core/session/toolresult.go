@@ -39,6 +39,13 @@ type ToolError struct {
 // committed without a result: the call may have run.
 var ToolOutcomeUnknown = ToolError{Name: "ToolOutcomeUnknownError", Code: "TOOL_OUTCOME_UNKNOWN"}
 
+// InterruptedToolResult is the result that closes a call committed without
+// one, written by resume repair and by a step that ends abnormally.
+func InterruptedToolResult(callID string) ToolResult {
+	unknown := ToolOutcomeUnknown
+	return ToolResult{CallID: callID, Output: "Error: interrupted before a result was committed", IsError: true, Error: &unknown}
+}
+
 // ToolMeta is the presentation data of one successful result, recorded for
 // replay and never sent to the model. Exactly one member is set; its JSON
 // key is the name of the tool that produced it.

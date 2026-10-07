@@ -111,6 +111,9 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 	turnOpen := false
 	stepOpen := false
 	var openStep uint64
+	// unresolved lists the open step's committed calls still without a
+	// result, in call order.
+	var unresolved []string
 	// Like upstream's finally block, this closes every turn whose
 	// turn/start committed, whatever ends it, including its opening.
 	defer func() {
@@ -119,6 +122,13 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			result.Outcome = session.OutcomeError
 		}
 		if stepOpen {
+			// A step cannot close over a committed call without a result;
+			// like resume repair, a call that may have run gets one.
+			for _, callID := range unresolved {
+				interrupted := session.InterruptedToolResult(callID)
+				_, resultErr := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordToolResult, Turn: turn, Step: openStep, Result: &interrupted})
+				result.Err = errors.Join(result.Err, resultErr)
+			}
 			_, closeErr := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordStepEnd, Turn: turn, Step: openStep})
 			result.Err = errors.Join(result.Err, closeErr)
 		}
@@ -289,13 +299,18 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			}
 			return result
 		}
+		// A completion's calls commit as one unit, unaffected by
+		// cancellation: the batch below observes it and answers every
+		// recorded call as aborted before dispatch, as upstream records
+		// results for the calls an abort skipped.
 		for index := range completion.Calls {
 			completion.Calls[index] = completion.Calls[index].LimitArguments()
 			call := completion.Calls[index]
-			if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordToolCall, Turn: turn, Step: step, Call: &call}); err != nil {
+			if _, err := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordToolCall, Turn: turn, Step: step, Call: &call}); err != nil {
 				result.Err, result.Outcome = err, session.OutcomeError
 				return result
 			}
+			unresolved = append(unresolved, call.ID)
 		}
 		result.Text = session.Text(message)
 		if len(completion.Calls) == 0 {
@@ -332,11 +347,13 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			SessionID: result.SessionID, Cwd: input.journal.Header().Cwd, Route: toolRoute, Turn: turn, Step: step,
 			Calls: completion.Calls, Delegated: input.delegated, Journal: input.journal,
 		})
+		// Results keep call order, so each commit resolves the oldest call.
 		for index := range toolResults {
 			if _, err := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordToolResult, Turn: turn, Step: step, Result: &toolResults[index]}); err != nil {
 				result.Err, result.Outcome = err, session.OutcomeError
 				return result
 			}
+			unresolved = unresolved[1:]
 		}
 		if _, err := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordStepEnd, Turn: turn, Step: step, Usage: completion.Usage}); err != nil {
 			result.Err, result.Outcome = err, session.OutcomeError

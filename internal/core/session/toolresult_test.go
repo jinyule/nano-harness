@@ -274,6 +274,20 @@ func TestToolError_ValidateRequiresIdentifiers(t *testing.T) {
 	}
 }
 
+func TestInterruptedToolResult_IsAValidDetachedUnknownOutcome(t *testing.T) {
+	result := InterruptedToolResult("call")
+	if err := (Record{Type: RecordToolResult, Turn: 1, Step: 1, Result: &result}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if result.CallID != "call" || result.Output != "Error: interrupted before a result was committed" || !result.IsError || *result.Error != ToolOutcomeUnknown {
+		t.Fatalf("result = %+v", result)
+	}
+	result.Error.Code = "CHANGED"
+	if ToolOutcomeUnknown.Code != "TOOL_OUTCOME_UNKNOWN" {
+		t.Fatal("result shares the classification")
+	}
+}
+
 func TestRecord_ResultErrorAndMetaFollowTheOutcome(t *testing.T) {
 	result := func(change func(*ToolResult)) Record {
 		data := &ToolResult{CallID: "call", Output: "ok"}

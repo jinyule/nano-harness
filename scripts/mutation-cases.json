@@ -800,8 +800,8 @@
   {
     "id": "tool-repair-unknown-outcome",
     "file": "internal/adapter/session/jsonl/jsonl.go",
-    "before": "unknownOutcome := coresession.ToolOutcomeUnknown",
-    "after": "unknownOutcome := coresession.ToolError{Name: \"ToolNotStartedError\", Code: \"TOOL_NOT_STARTED\"}",
+    "before": "interrupted := coresession.InterruptedToolResult(callID)",
+    "after": "interrupted := coresession.ToolResult{CallID: callID, Output: \"Error: interrupted before a result was committed\", IsError: true, Error: &coresession.ToolError{Name: \"ToolNotStartedError\", Code: \"TOOL_NOT_STARTED\"}}",
     "test": "^TestLog_RepairClassifiesAnUnknownOutcome$"
   },
   {
@@ -1391,5 +1391,33 @@
     "before": "normalized, err := normalizeConfig(config)\n\tif err != nil {\n\t\t_, _ = fmt.Fprintln(stderr, err)",
     "after": "normalized, err := normalizeConfig(config)\n\tif err != nil {\n\t\t_ = stderr",
     "test": "^TestRunTUI_RefusesAHomeWorkspaceHoldingTheDefaultPrivateFiles$"
+  },
+  {
+    "id": "session-interrupted-result-unknown-outcome",
+    "file": "internal/core/session/toolresult.go",
+    "before": "unknown := ToolOutcomeUnknown",
+    "after": "unknown := ToolError{Name: \"ToolNotStartedError\", Code: \"TOOL_NOT_STARTED\"}",
+    "test": "^TestInterruptedToolResult_IsAValidDetachedUnknownOutcome$"
+  },
+  {
+    "id": "agent-batch-calls-cancellable",
+    "file": "internal/app/agent/engine.go",
+    "before": "input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordToolCall,",
+    "after": "input.journal.Append(ctx, session.Record{Type: session.RecordToolCall,",
+    "test": "^TestEngine_CancelWhileRecordingToolCallsClosesTheStep$"
+  },
+  {
+    "id": "agent-step-skips-call-recovery",
+    "file": "internal/app/agent/engine.go",
+    "before": "for _, callID := range unresolved {",
+    "after": "for _, callID := range unresolved[:0] {",
+    "test": "^TestEngine_FailedToolRecordingResolvesCommittedCalls$"
+  },
+  {
+    "id": "agent-result-keeps-call-unresolved",
+    "file": "internal/app/agent/engine.go",
+    "before": "\t\t\tunresolved = unresolved[1:]\n",
+    "after": "\n",
+    "test": "^TestEngine_FailedToolRecordingResolvesCommittedCalls$"
   }
 ]

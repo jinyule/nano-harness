@@ -85,7 +85,7 @@ producer 要在外部提交前完成可能失败的 meta 构造。write 的单 h
 | `ToolArgsError` / `INVALID_ARGS` | prepare 的 schema 解码与校验失败，即文本以 `invalid arguments:` 开头的结果。工具 Check 中的语义检查是普通错误，不归这一类。 |
 | `ToolOutputError` / `INVALID_TOOL_OUTPUT` | 第 2 节的 meta 契约违规。 |
 | `AbortError` / `ABORTED_BEFORE_DISPATCH`、`ABORTED` | 第 2 节的取消检查点。bash 自己返回的 `tool call aborted`（后台启动前、前台等待或交接、job 上限回退执行时调用被取消，或关闭已撤销交接记录）同样是 `AbortError/ABORTED`，与上游 tool-bash 设置的 name 和 code 一致。 |
-| `ToolOutcomeUnknownError` / `TOOL_OUTCOME_UNKNOWN` | JSONL resume 修复写入的 `Error: interrupted before a result was committed`。nano 在执行批次前提交全部 tool/call，未决调用都可能已经开始，因此不写 `TOOL_NOT_STARTED`。 |
+| `ToolOutcomeUnknownError` / `TOOL_OUTCOME_UNKNOWN` | JSONL resume 修复，以及 engine 在 step 异常结束时为已提交但无结果的调用写入的 `Error: interrupted before a result was committed`。nano 在执行批次前提交全部 tool/call，未决调用都可能已经开始，因此不写 `TOOL_NOT_STARTED`。 |
 | `FsError` / `FS_NOT_FOUND`、`FS_NOT_REGULAR_FILE` | 路径解析或 read/read_image 的前置 stat 发现目标不存在、路径中间段不是目录（ENOTDIR）；edit 观察到目标缺失；目标是目录或特殊文件，包括 guarded create 的 link 发布失败后检查到非普通文件，此时正文与上游一样是 `cannot write "<p>": not a regular file`。前置 stat 成功后的普通 open/read 错误不分类。上游的 `FS_NOT_DIRECTORY` 只用于目录列举，本仓文件工具没有对应路径。 |
 | `FsError` / `FS_NOT_TEXT`、`FS_TOO_LARGE` | read/edit 遇到二进制或非法 UTF-8；edit 超过 10 MiB；read_image 超过源字节上限。read 的窗口截断是成功，不是 `FS_TOO_LARGE`。 |
 | `FsError` / `FS_NOT_OBSERVED`、`FS_STALE_VERSION` | write/edit 的 `errNotRead`、`errStale`，`FS_NOT_OBSERVED` 包括未读目标、并发创建普通文件导致的盲覆盖拒绝，以及 link 报 EEXIST 后目标已消失；与上游 `remediateFsError` 一样，这三种情况的正文都是统一的读取指引 `cannot modify "<p>": file has not been read — read the file, then retry`；非普通目标使用 `FS_NOT_REGULAR_FILE`。`FS_STALE_VERSION` 包括已读后变化或删除。 |
