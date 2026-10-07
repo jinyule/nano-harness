@@ -185,3 +185,83 @@ func TestNormalizeConfig_JudgesContainmentByFileIdentity(t *testing.T) {
 		t.Fatalf("workspace identity failure = %v", err)
 	}
 }
+
+// TestParseTUIConfig_RejectsACaseAliasedWorkingDirectory starts without
+// flags after `cd` into home typed in another case: the default root keeps
+// that spelling from Getwd, and every default private location still lies
+// inside it on a case-insensitive file system.
+func TestParseTUIConfig_RejectsACaseAliasedWorkingDirectory(t *testing.T) {
+	restoreMainHooks(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(base, "Users", "me")
+	if err := os.MkdirAll(filepath.Join(home, ".config"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	typed := filepath.Join(base, "USERS", "ME")
+	if !sameDirectory(t, home, typed) {
+		t.Skip("the temporary file system is case-sensitive, so the typed spelling would be a different directory")
+	}
+	currentWorkingDirectory = func() (string, error) { return typed, nil }
+	userConfigDirectory = func() (string, error) { return filepath.Join(home, ".config"), nil }
+	userHomeDirectory = func() (string, error) { return home, nil }
+	var stderr strings.Builder
+	if _, err := parseTUIConfig(nil, &stderr); err == nil {
+		t.Fatal("defaults inside a case-aliased working directory were accepted")
+	}
+	for _, flag := range []string{"--session-root", "--spill-root", "--attachment-root", "--credentials", "--settings"} {
+		if !strings.Contains(stderr.String(), "choose another "+flag) {
+			t.Errorf("stderr lacks %s: %q", flag, stderr.String())
+		}
+	}
+}
+
+// TestNormalizeConfig_RejectsPrivatePathsThroughWorkspaceLinks refuses a
+// private path spelled through the workspace even when a link there leads
+// outside: an approved command may later retarget that link into the
+// workspace, and new private data would follow it.
+func TestNormalizeConfig_RejectsPrivatePathsThroughWorkspaceLinks(t *testing.T) {
+	restoreMainHooks(t)
+	base, valid := privateLayout(t, "workspace")
+	workspace, outside := filepath.Join(base, "workspace"), filepath.Join(base, "outside")
+	for _, dir := range []string{filepath.Join(outside, "sessions"), filepath.Join(outside, "config")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(outside, "credentials.yaml"), []byte("synthetic: credential\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for link, target := range map[string]string{
+		filepath.Join(workspace, "sessions-link"):    filepath.Join(outside, "sessions"),
+		filepath.Join(workspace, "config-link"):      filepath.Join(outside, "config"),
+		filepath.Join(workspace, "credentials.yaml"): filepath.Join(outside, "credentials.yaml"),
+		filepath.Join(outside, "sessions-alias"):     filepath.Join(outside, "sessions"),
+	} {
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, test := range []struct {
+		name, flag string
+		set        func(*applicationConfig)
+		allowed    bool
+	}{
+		{"store root through a workspace link", "--session-root", func(c *applicationConfig) { c.sessionRoot = filepath.Join(workspace, "sessions-link") }, false},
+		{"missing store root below a workspace link", "--spill-root", func(c *applicationConfig) { c.spillRoot = filepath.Join(workspace, "sessions-link", "spill") }, false},
+		{"file through a workspace directory link", "--settings", func(c *applicationConfig) { c.settingsPath = filepath.Join(workspace, "config-link", "settings.yaml") }, false},
+		{"file that is a workspace link", "--credentials", func(c *applicationConfig) { c.credentialPath = filepath.Join(workspace, "credentials.yaml") }, false},
+		{"store root through a link outside the workspace", "", func(c *applicationConfig) { c.sessionRoot = filepath.Join(outside, "sessions-alias") }, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := valid()
+			test.set(&config)
+			_, err := normalizeConfig(config)
+			if test.allowed != (err == nil) || !test.allowed && !strings.Contains(err.Error(), "choose another "+test.flag) {
+				t.Fatalf("normalizeConfig = %v", err)
+			}
+		})
+	}
+}

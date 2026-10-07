@@ -1374,8 +1374,8 @@
   {
     "id": "private-files-stay-outside-workspace",
     "file": "cmd/nano-harness/main.go",
-    "before": "overlaps, err := within(workspaceRoot, resolved)",
-    "after": "overlaps, err := private.directory && contains(workspaceRoot, resolved), error(nil)",
+    "before": "\t\toverlaps, err = within(workspaceRoot, resolved)\n",
+    "after": "\t\toverlaps, err = private.directory && contains(workspaceRoot, resolved), error(nil)\n",
     "test": "^TestNormalizeConfig_KeepsSecretsAndSessionsOutsideTheWorkspace$"
   },
   {
@@ -1475,5 +1475,12 @@
     "before": "overlaps, err = within(resolved, workspaceRoot)",
     "after": "overlaps, err = contains(resolved, workspaceRoot), nil",
     "test": "^TestNormalizeConfig_JudgesContainmentByFileIdentity$"
+  },
+  {
+    "id": "private-lexical-path-outside-workspace",
+    "file": "cmd/nano-harness/main.go",
+    "before": "overlaps, err := within(workspaceRoot, private.path)",
+    "after": "overlaps, err := false, error(nil)",
+    "test": "^TestNormalizeConfig_RejectsPrivatePathsThroughWorkspaceLinks$"
   }
 ]

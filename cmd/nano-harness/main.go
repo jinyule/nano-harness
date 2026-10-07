@@ -284,15 +284,21 @@ type privatePath struct {
 // reach of write, edit, and sandboxed bash. A store directory and the
 // workspace may not contain each other, so tools neither see its entries
 // nor write beside them. A file only has to lie outside the workspace; a
-// workspace inside the file's directory exposes nothing. The path may not
-// exist yet, so links are resolved on its longest existing prefix,
+// workspace inside the file's directory exposes nothing. Both spellings
+// are judged: the path as given may not pass through the workspace, since
+// an approved command could retarget a link there and redirect later
+// writes into it; and its resolved location may not lie inside. The path
+// may not exist yet, so links are resolved on its longest existing prefix,
 // including a final link when the path exists.
 func separatePrivatePath(workspaceRoot string, private privatePath) error {
 	resolved, err := resolveExisting(private.path)
 	if err != nil {
 		return fmt.Errorf("resolve %s links: %w", private.name, err)
 	}
-	overlaps, err := within(workspaceRoot, resolved)
+	overlaps, err := within(workspaceRoot, private.path)
+	if err == nil && !overlaps {
+		overlaps, err = within(workspaceRoot, resolved)
+	}
 	if err == nil && !overlaps && private.directory {
 		overlaps, err = within(resolved, workspaceRoot)
 	}
