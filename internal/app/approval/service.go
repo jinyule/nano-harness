@@ -3,10 +3,9 @@ package approval
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
-	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/jinyule/nano-harness/internal/app/tool"
@@ -44,7 +43,6 @@ type Service struct {
 	active   bool
 	broker   Broker
 	policies map[string]session.ApprovalPolicy
-	nextID   atomic.Uint64
 	// calls cancels and joins each SetPolicy or Decide in flight.
 	calls *plugin.Calls
 }
@@ -179,7 +177,10 @@ func (service *Service) Decide(ctx context.Context, request tool.ApprovalRequest
 	}
 	broker := service.broker
 	service.mu.Unlock()
-	id := fmt.Sprintf("approval-%d", service.nextID.Add(1))
+	// Like upstream's random request IDs, the ID needs no process state: a
+	// restarted process, or another one appending to the same log, cannot
+	// repeat an ID the log already holds.
+	id := "approval-" + rand.Text()
 	asked := session.Record{Type: session.RecordApprovalAsked, Turn: request.Turn, Step: request.Step, Approval: &session.ApprovalData{
 		ID: id, ToolName: request.Call.Name, CallID: request.Call.ID, Reason: request.Reason,
 	}}

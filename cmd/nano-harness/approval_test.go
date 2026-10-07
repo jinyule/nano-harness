@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/approval"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
@@ -114,5 +115,97 @@ func TestComposition_ApprovalCleanupRejectsLateConsent(t *testing.T) {
 	}
 	if t.Context().Err() != nil || len(seen()) != 2 {
 		t.Fatal("the caller did not remain live after approval cleanup")
+	}
+}
+
+func TestComposition_ApprovalAfterRestartReachesTheOperator(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	server, seen := scriptedModel(t, []modelStep{
+		{tool: "write", arguments: `{"file_path":"first.txt","content":"one"}`},
+		{text: "first done"},
+		{tool: "write", arguments: `{"file_path":"second.txt","content":"two"}`},
+		{text: "second done"},
+	})
+	root, data := t.TempDir(), t.TempDir()
+	settingsPath := filepath.Join(data, "settings.yaml")
+	settingsYAML := fmt.Sprintf("route:\n  provider: openai\n  model: test-model\nproviders:\n  openai:\n    base_url: %s\n    models:\n      - id: test-model\n        name: Test\n        context_window: 65536\n        tools: true\n", server.URL)
+	if err := os.WriteFile(settingsPath, []byte(settingsYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(data, "sessions", "approval-restart.jsonl")
+	// Each pass builds the whole composition from configuration, as a new
+	// process does; the second pass resumes the transcript the first wrote.
+	run := func(text string) (agent.TurnResult, *assembledApp) {
+		t.Helper()
+		config, err := normalizeConfig(applicationConfig{
+			workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"), attachmentRoot: filepath.Join(data, "attachments"), settingsPath: settingsPath,
+			credentialPath: filepath.Join(data, "credentials.yaml"), skillsDir: filepath.Join(data, "skills"),
+			agentsSkillsDir: filepath.Join(data, "agents-skills"), sessionID: "approval-restart", maxSteps: 8,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		app, err := composeApplication(config, dependencies{httpClient: server.Client()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime, err := plugin.New(append(app.plugins, &approvingFrontend{app: app})...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.Start(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+		controller, err := app.root.Agent()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assembled := &assembledApp{app: app, root: controller, runtime: runtime, transcript: transcript}
+		return assembled.turn(t, text), assembled
+	}
+	if result, first := run("write the first file"); result.Err != nil || result.Text != "first done" {
+		t.Fatalf("first process turn = %+v", result)
+	} else {
+		first.records(t)
+	}
+	result, second := run("write the second file")
+	if result.Err != nil || result.Text != "second done" {
+		t.Fatalf("turn after restart = %+v", result)
+	}
+	records := second.records(t)
+	var asked, decided []*session.ApprovalData
+	for _, record := range records {
+		if record.Type == session.RecordApprovalAsked {
+			asked = append(asked, record.Approval)
+		}
+		if record.Type == session.RecordApprovalDecided {
+			decided = append(decided, record.Approval)
+		}
+	}
+	if len(asked) != 2 || len(decided) != 2 || asked[0].ID == asked[1].ID {
+		var failures []string
+		for _, result := range orderedToolResults(records) {
+			if result.IsError {
+				failures = append(failures, result.Output)
+			}
+		}
+		t.Fatalf("approvals across restart: %d asked, %d decided, failed results %q", len(asked), len(decided), failures)
+	}
+	for index, question := range asked {
+		if decided[index].ID != question.ID || decided[index].Outcome != session.ApprovalAllowedOnce || decided[index].Source != "operator" {
+			t.Fatalf("decision %d = %+v for question %+v", index, decided[index], question)
+		}
+	}
+	for _, name := range []string{"first.txt", "second.txt"} {
+		if _, err := os.Stat(filepath.Join(root, name)); err != nil {
+			t.Fatalf("approved write %s: %v", name, err)
+		}
+	}
+	if results := orderedToolResults(records); len(results) != 2 || results[0].IsError || results[1].IsError {
+		t.Fatalf("tool results = %+v", results)
+	}
+	if len(seen()) != 4 {
+		t.Fatalf("model requests = %d", len(seen()))
 	}
 }

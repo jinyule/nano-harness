@@ -1099,6 +1099,13 @@
     "test": "^TestService_CleanupDuringDecisionCommit$"
   },
   {
+    "id": "approval-id-process-independent",
+    "file": "internal/app/approval/service.go",
+    "before": "id := \"approval-\" + rand.Text()",
+    "after": "id := \"approval-\" + request.Call.ID + rand.Text()[:0]",
+    "test": "^TestService_QuestionIDsNeedNoProcessState$"
+  },
+  {
     "id": "sandbox-complete-snapshot-resume",
     "file": "internal/app/agent/context.go",
     "before": "if session.Text(*node.Message) == text {",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -416,5 +417,36 @@ func TestService_CleanupDuringDecisionCommit(t *testing.T) {
 	}
 	if _, err := service.Decide(t.Context(), approvalRequest(journal)); !errors.Is(err, ErrNotRunning) || len(journal.snapshot()) != 2 {
 		t.Fatalf("stopped service admitted a decision: %v", err)
+	}
+}
+
+func TestService_QuestionIDsNeedNoProcessState(t *testing.T) {
+	journal := &lockedJournal{}
+	// A second service stands in for a restarted process on the same log.
+	for range 2 {
+		service, _ := startApproval(t)
+		var group sync.WaitGroup
+		for range 8 {
+			group.Go(func() {
+				if _, err := service.Decide(context.Background(), approvalRequest(journal)); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		group.Wait()
+	}
+	seen := map[string]bool{}
+	for _, record := range journal.snapshot() {
+		if record.Type != session.RecordApprovalAsked {
+			continue
+		}
+		id := record.Approval.ID
+		if !strings.HasPrefix(id, "approval-") || seen[id] {
+			t.Fatalf("question ID %q repeats or lacks its prefix", id)
+		}
+		seen[id] = true
+	}
+	if len(seen) != 16 {
+		t.Fatalf("questions = %d", len(seen))
 	}
 }
