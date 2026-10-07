@@ -1,6 +1,8 @@
 package web
 
 import (
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -274,6 +276,83 @@ func TestRenderHTML_RemovesForeignScriptAndStyle(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if got := renderHTML(test.source); got != test.want {
 				t.Fatalf("got=%q\nwant=%q\nupstream=%q", got, test.want, test.upstream)
+			}
+		})
+	}
+}
+
+// amplifiedHTML opens formatting elements whose attributes all differ, so the
+// Noah's Ark clause keeps every one of them in the active formatting list and
+// the parser reconstructs all of them in each following paragraph. closer ends
+// the opener without closing the formatting run.
+func amplifiedHTML(opener, closer string, formatting, paragraphs int) string {
+	var source strings.Builder
+	source.WriteString(opener)
+	for index := range formatting {
+		source.WriteString(`<b x="` + strconv.Itoa(index) + `">`)
+	}
+	source.WriteString("x" + closer)
+	source.WriteString(strings.Repeat("<p>x</p>", paragraphs))
+	return source.String()
+}
+
+// Tree construction runs before hidden content is removed and before the output
+// budget applies, so only a pre-parse bound keeps a small page from expanding
+// into millions of nodes.
+func TestRenderHTML_OmitsAmplifiedTreeConstruction(t *testing.T) {
+	for _, test := range []struct {
+		name, source, want string
+	}{
+		{"unclosed formatting run", amplifiedHTML("<p><b hidden>", "", 499, 1000), omittedHTML},
+		{"formatting run left open by its paragraph", amplifiedHTML("<p>", "</p>", 500, 1000), omittedHTML},
+		{"scripting disabled keeps noscript markup", amplifiedHTML("<noscript>", "</noscript>", 500, 1000), omittedHTML},
+		{"self-closing formatting elements stay open", strings.ReplaceAll(amplifiedHTML("<p>", "</p>", 500, 1000), `">`, `"/>`), omittedHTML},
+		{"start tags beyond the budget", strings.Repeat("<p>x</p>", maxConversionCost+1), omittedHTML},
+		{"start tags at the budget convert", strings.Repeat("<p>x</p>", maxConversionCost), strings.TrimSuffix(strings.Repeat("x\n\n", maxConversionCost), "\n\n")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := renderHTML(test.source); got != test.want {
+				t.Fatalf("got=%.80q… (%d bytes)\nwant=%.80q… (%d bytes)", got, len(got), test.want, len(test.want))
+			}
+		})
+	}
+}
+
+// The budget bounds allocation, not elapsed time: the reviewer's 8 KB sample
+// allocated about 80 MB building its 502,502-node tree before the bound existed.
+func TestRenderHTML_BoundsAmplifiedAllocation(t *testing.T) {
+	const maxBytes = 4 << 20
+	source := amplifiedHTML("<p><b hidden>", "", 499, 1000)
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	text := renderHTML(source)
+	runtime.ReadMemStats(&after)
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > maxBytes {
+		t.Fatalf("converting %d bytes allocated %d bytes, want at most %d", len(source), allocated, maxBytes)
+	}
+	if text != omittedHTML {
+		t.Fatalf("got=%q want=%q", text, omittedHTML)
+	}
+}
+
+// The scan models tree construction, not markup: comments and raw text hold no
+// elements, and a matching end tag releases the reconstruction pressure.
+func TestExceedsConversionCost_ScansLikeTreeConstruction(t *testing.T) {
+	for _, test := range []struct {
+		name, source string
+		want         bool
+	}{
+		{"empty", "", false},
+		{"comments hold no elements", strings.Repeat("<!-- <b x=1> -->", maxConversionCost), false},
+		{"raw text holds no elements", "<style>" + strings.Repeat("<b x=1>", maxConversionCost) + "</style>", false},
+		{"void elements never nest", strings.Repeat("<br>", maxConversionCost), false},
+		{"closed formatting releases pressure", strings.Repeat("<b x=1>y</b>", 1000) + strings.Repeat("<p>x</p>", 1000), false},
+		{"unclosed formatting multiplies paragraphs", amplifiedHTML("<p>", "</p>", 500, 1000), true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := exceedsConversionCost(test.source); got != test.want {
+				t.Fatalf("got=%v want=%v", got, test.want)
 			}
 		})
 	}

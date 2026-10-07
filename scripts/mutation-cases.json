@@ -1510,5 +1510,40 @@
     "before": "if templateStartTags(source) > parsed {",
     "after": "if false && templateStartTags(source) > parsed {",
     "test": "^TestRenderHTML_(MatchesUpstreamSemantics|OmitsPathologicalNesting|MarksTemplateDroppedInForeignContent)$"
+  },
+  {
+    "id": "web-html-conversion-cost",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "if exceedsConversionCost(source) {",
+    "after": "if false && exceedsConversionCost(source) {",
+    "test": "^Test(RenderHTML_OmitsAmplifiedTreeConstruction|ExceedsConversionCost_ScansLikeTreeConstruction)$"
+  },
+  {
+    "id": "web-html-cost-formatting-pressure",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\t\tcost += formatting\n",
+    "after": "\t\t\t\tcost += 0\n",
+    "test": "^Test(RenderHTML_OmitsAmplifiedTreeConstruction|ExceedsConversionCost_ScansLikeTreeConstruction)$"
+  },
+  {
+    "id": "web-html-cost-self-closing",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "case html.StartTagToken, html.SelfClosingTagToken:\n\t\t\tname, _ := tokenizer.TagName()\n\t\t\ttag := string(name)",
+    "after": "case html.StartTagToken:\n\t\t\tname, _ := tokenizer.TagName()\n\t\t\ttag := string(name)",
+    "test": "^Test(RenderHTML_OmitsAmplifiedTreeConstruction|ExceedsConversionCost_ScansLikeTreeConstruction)$"
+  },
+  {
+    "id": "web-html-cost-noscript-markup",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\tif tag == \"noscript\" {\n\t\t\t\ttokenizer.NextIsNotRawText()",
+    "after": "\t\t\tif false && tag == \"noscript\" {\n\t\t\t\ttokenizer.NextIsNotRawText()",
+    "test": "^Test(RenderHTML_OmitsAmplifiedTreeConstruction|ExceedsConversionCost_ScansLikeTreeConstruction)$"
+  },
+  {
+    "id": "web-html-cost-release",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\t\t\tformatting--\n",
+    "after": "\t\t\t\t\tformatting -= 0\n",
+    "test": "^Test(RenderHTML_OmitsAmplifiedTreeConstruction|ExceedsConversionCost_ScansLikeTreeConstruction)$"
   }
 ]

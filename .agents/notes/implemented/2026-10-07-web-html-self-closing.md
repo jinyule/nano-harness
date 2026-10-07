@@ -11,6 +11,8 @@
 
 上游参照为 submodule `5badb15009ae` 的 `packages/web/tool-web/src/fetch.ts`，锁定 Turndown 7.2.4、`@joplin/turndown-plugin-gfm` 1.0.67 和 `@mixmark-io/domino` 2.2.0（与上游 `pnpm-lock.yaml` 一致）。差分输出来自仓库外安装的同版本依赖，转换配置直接从 submodule 的 `fetch.ts` 截取。本 Note 接管 [HTML 语义与格式化预算 Note](2026-10-06-web-fetch-html-and-output-budget.md) 中隐式闭合与作用域的部分；该 Note 仍负责格式化规则与输出预算。[WP5 Note](2026-10-04-web-search-and-fetch.md) 保留能力与生命周期证据，两者都不归档。
 
+astra 复审合入的 `4c8d690` 时报告 B1：512 层开放元素上限不约束累计建树量。属性各不相同的格式元素都留在活动格式元素列表中，后续每个块都会重建它们；8,395 字节输入生成 502,502 个节点，12,395 字节输入累计分配约 161 MB，而且建树发生在隐藏过滤和输出截断之前，同步解析也无法取消。上游的词法深度 guard 拒绝 astra 的样本，但同类样本只要不超过词法深度就能通过，并在 domino 中同样生成约 50 万个节点。
+
 ## Decision
 
 长期契约写在 [ADR-0011](../../../docs/decisions/0011-provider-web-search-and-public-fetch.md) 第 7 条与第 10 条，组件事实归[架构](../../../docs/architecture.md#web-检索与抓取)，边界归[安全规则](../../../docs/security.md#网络边界)，差异登记在[参考分析](../../../docs/reference-deepseek-harness.md)。
@@ -25,13 +27,14 @@
   - 上述 x/net template 偏差。
   - 深度计数方式不同。
   - 误嵌套产生的空格式包装（上游输出 `~~~~`、`[](/a)`）不输出，归入等价排版。
+- 建树前，`exceedsConversionCost` 用 tokenizer 扫描一次：每个开始标签（含自闭合标签）计一个元素，再加上词法栈上仍打开的格式元素数；只有匹配栈顶的结束标签出栈，noscript 内容按标记扫描。累计超过固定上限 `maxConversionCost`（65,536）时输出同一省略标记，不建树。扫描不模拟 Noah's Ark 和 marker，只会高估。转换不接收 context：扫描为线性，接受的输入建树量有固定上界。
 - 运行时 composition、插件 effect、session 格式和工具定义都不变。依赖仍是已有的 `golang.org/x/net` v0.59.0，未改变 `go.mod`。
 
 ## Consequences
 
 隐藏范围由完整的 HTML 树构建决定，不再取决于自写规则的覆盖程度；`html.go` 相对 `92e3599` 净减少 107 行，三轮复审报告的泄漏类别都由解析器处理。误嵌套格式元素的泄漏选择对齐而不是记为偏差：泄漏会把应隐藏的文本交给模型，在流式渲染中补齐 adoption agency 需要移动已输出的子树，改动面比换用解析器更大，风险也更高。
 
-代价有三项。第一，引入 x/net 的 template 偏差：只会少输出内容，可检测时有标记，SVG title/style 中的情形无标记。第二，foreign `</p>`、`</br>` 之后的文本与上游不同。第三，深度上限改按解析器的开放元素栈计算，与上游的词法计数在边界处不同。x/net 修复 template 偏差、参考指针更新 domino，或上游改变移除规则时，需要重新评估这些差异和对应测试。隐藏检测仍是尽力而为，样式层的视觉隐藏（白色文字、零字号、屏幕外定位）不在范围内。
+代价有三项。第一，引入 x/net 的 template 偏差：只会少输出内容，可检测时有标记，SVG title/style 中的情形无标记。第二，foreign `</p>`、`</br>` 之后的文本与上游不同。第三，深度上限改按解析器的开放元素栈计算，与上游的词法计数在边界处不同。x/net 修复 template 偏差、参考指针更新 domino，或上游改变移除规则时，需要重新评估这些差异和对应测试。建树成本上限比上游更严：格式元素长期不闭合、又跟着大量块的页面会被省略；已测真实页面得分不超过约 7,400，上限留有约 9 倍余量。上游加入累计建树预算或解析器提供节点预算时，重新评估这项上限。隐藏检测仍是尽力而为，样式层的视觉隐藏（白色文字、零字号、屏幕外定位）不在范围内。
 
 ## Verification
 
@@ -52,6 +55,14 @@
   - `web-html-body-context`：上下文改为 head。
   - `web-html-depth-omission`：深度错误输出空串。
   - `web-html-template-marker`：禁用 template 标记。
-- `make check`（私有 `GOLANGCI_LINT_CACHE`）：通过；逐产品文件 coverage 100.0%，lint `0 issues`，清单中 207 个 mutation 全部 killed，build smoke 输出 `nano-harness dev`。
+- 解析器切换（`4c8d690`）时的 `make check`（私有 `GOLANGCI_LINT_CACHE`）：通过；逐产品文件 coverage 100.0%，lint `0 issues`，当时清单中 207 个 mutation 全部 killed，build smoke 输出 `nano-harness dev`。
 
-未获得的证据：没有对真实网页做批量差分；差分覆盖测试表和合成语料。
+### 建树成本上限（astra B1）
+
+- 修复前：用 `d8b4090` 的 `html.go` 加一个不拦截的桩替换进当前测试，`go test -count=1 -overlay <map> -run 'TestRenderHTML_(OmitsAmplifiedTreeConstruction|BoundsAmplifiedAllocation)' ./internal/adapter/tool/web/` 失败：未闭合格式元素、被段落留下的格式元素、noscript 和自闭合四种放大形式都没有省略标记，超过上限的开始标签数也照常转换；13,393 字节的放大样本分配 80,500,152 字节，超过 4 MiB 断言。
+- 修复后：astra 复现材料中的三个输入（4,795、8,395、12,395 字节）都输出省略标记，分配约 32 KB（此前分别约 8.3 MB、80.5 MB、160.8 MB）。仓库外保存的 8 个真实页面按 200,000 单元截断后得分 1,106–7,342，全部正常转换，分配 0.8–3.2 MB。恰在上限的输入（65,536 个块）可转换，分配约 25–29 MB；多一个开始标签即省略。
+- `go test -race -count=1 ./internal/adapter/tool/web/`：通过，逐语句 coverage 100.0%。
+- 新增 5 个 mutation，单独运行均被杀死：`web-html-conversion-cost`（跳过检查）、`web-html-cost-formatting-pressure`（不计格式元素）、`web-html-cost-self-closing`（不计自闭合标签）、`web-html-cost-noscript-markup`（noscript 按 raw text 扫描）、`web-html-cost-release`（结束标签不释放格式元素）。自闭合用例最初用不带引号的属性值，斜杠被并入属性值，mutation 存活；改为带引号的属性后被杀死。
+- `make check`（私有 `GOLANGCI_LINT_CACHE`）：通过；逐产品文件 coverage 100.0%，lint `0 issues`，清单中 221 个 mutation 全部 killed，build smoke 输出 `nano-harness dev`。第一次运行因测试辅助函数的循环写法被 modernize 报告，改为 range over int 后重跑通过。
+
+未获得的证据：没有对真实网页做批量差分；差分覆盖测试表和合成语料。成本上限只用 8 个真实页面校准，没有大规模网页语料。

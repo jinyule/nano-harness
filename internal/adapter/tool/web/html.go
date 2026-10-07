@@ -10,9 +10,24 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-// omittedHTML replaces HTML the parser refuses: x/net/html rejects input whose
-// open-element stack exceeds 512 elements, which bounds tree construction.
+// omittedHTML replaces HTML whose tree construction is unbounded: input over
+// the conversion cost budget, or input the parser refuses because its
+// open-element stack would exceed 512 elements.
 const omittedHTML = "[HTML content omitted: unable to convert safely.]"
+
+// maxConversionCost bounds the elements tree construction may create. The
+// parser's depth limit does not bound cumulative work: formatting elements with
+// distinct attributes all stay in the active formatting list, and every later
+// block reconstructs them, so 8 KB can expand to 500,000 nodes. Fetched pages at
+// the 200,000-unit input cap score at most about 7,400, and the ceiling caps the
+// accepted tree at roughly 130,000 nodes.
+const maxConversionCost = 65_536
+
+// Elements the parser keeps in the list of active formatting elements.
+var formattingElements = map[string]bool{
+	"a": true, "b": true, "big": true, "code": true, "em": true, "font": true, "i": true, "nobr": true,
+	"s": true, "small": true, "strike": true, "strong": true, "tt": true, "u": true,
+}
 
 // Elements removed with their content, matching the reference converter.
 var removedElements = map[string]bool{
@@ -119,6 +134,9 @@ type renderer struct {
 // reference converter's body context and with scripting disabled as in its
 // parser; the renderer then removes non-visible content while walking it.
 func renderHTML(source string) string {
+	if exceedsConversionCost(source) {
+		return omittedHTML
+	}
 	// The reader is in memory, so the only parse error is the depth limit.
 	nodes, err := html.ParseFragmentWithOptions(strings.NewReader(source), &html.Node{Type: html.ElementNode, Data: "body", DataAtom: atom.Body}, html.ParseOptionEnableScripting(false))
 	if err != nil {
@@ -156,6 +174,52 @@ func (state *renderer) walk(node *html.Node) {
 		}
 		state.pop()
 	case html.ErrorNode, html.DocumentNode, html.CommentNode, html.DoctypeNode, html.RawNode:
+	}
+}
+
+// exceedsConversionCost reports, before any tree is built, whether tree
+// construction could create more than maxConversionCost elements. Each start
+// tag scores one element plus every formatting element still open on a lexical
+// stack, which the parser may reconstruct before inserting it. Only a matching
+// end tag pops the stack, and the scan ignores the Noah's Ark clause and the
+// markers that stop reconstruction, so malformed input over-counts. Self-closing
+// tags count as start tags because HTML ignores their slash; noscript contents
+// are markup because the parser runs with scripting disabled.
+func exceedsConversionCost(source string) bool {
+	tokenizer := html.NewTokenizer(strings.NewReader(source))
+	var open []string
+	cost, formatting := 0, 0
+	for {
+		switch tokenizer.Next() {
+		case html.ErrorToken:
+			return false
+		case html.StartTagToken, html.SelfClosingTagToken:
+			name, _ := tokenizer.TagName()
+			tag := string(name)
+			if tag == "noscript" {
+				tokenizer.NextIsNotRawText()
+			}
+			cost++
+			if !voidElements[tag] {
+				open = append(open, tag)
+				if formattingElements[tag] {
+					formatting++
+				}
+				cost += formatting
+			}
+			if cost > maxConversionCost {
+				return true
+			}
+		case html.EndTagToken:
+			name, _ := tokenizer.TagName()
+			if last := len(open) - 1; last >= 0 && open[last] == string(name) {
+				if formattingElements[open[last]] {
+					formatting--
+				}
+				open = open[:last]
+			}
+		case html.TextToken, html.CommentToken, html.DoctypeToken:
+		}
 	}
 }
 
