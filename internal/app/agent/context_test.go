@@ -338,3 +338,37 @@ func TestEngine_SnapshotSectionsFollowOrderNotRegistration(t *testing.T) {
 		t.Fatalf("snapshot = %+v", log.events)
 	}
 }
+
+// Go sorts slices of at most 12 elements by insertion, which is stable by
+// accident; 48 sections, 16 per order and interleaved against their order,
+// make an unstable sort reorder ties.
+func TestEngine_SnapshotKeepsRegistrationOrderAmongManyTiedSections(t *testing.T) {
+	h := startEngineHarness(t, 1)
+	scope := &plugin.Scope{}
+	t.Cleanup(func() { _ = scope.Close(context.Background()) })
+	orders := []int{OrderSubagentDelegation, OrderSandboxPolicy, OrderSubagentDelegation + 80}
+	byOrder := map[int][]string{}
+	for index := range 48 {
+		order := orders[index%len(orders)]
+		text := "section " + strings.Repeat("·", index)
+		byOrder[order] = append(byOrder[order], text)
+		if err := h.engine.RegisterContext(&contextProbe{sections: []ContextSection{{Order: order, Text: text}}}, scope); err != nil {
+			t.Fatal(err)
+		}
+	}
+	journal, log := turnJournal()
+	if err := h.engine.stepContext(t.Context(), runInput{journal: journal}, 1); err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for _, order := range []int{OrderSandboxPolicy, OrderSubagentDelegation, OrderSubagentDelegation + 80} {
+		if len(byOrder[order]) != 16 {
+			t.Fatalf("order %d has %d sections", order, len(byOrder[order]))
+		}
+		want = append(want, byOrder[order]...)
+	}
+	text := "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n" + strings.Join(want, "\n\n")
+	if len(log.events) != 1 || session.Text(*log.events[0].Record.Message) != text {
+		t.Fatalf("tied sections lost their registration order:\n%s", session.Text(*log.events[0].Record.Message))
+	}
+}

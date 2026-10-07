@@ -1225,6 +1225,13 @@
     "test": "^TestEngine_SnapshotSectionsFollowOrderNotRegistration$"
   },
   {
+    "id": "context-sections-sort-stably",
+    "file": "internal/app/agent/context.go",
+    "before": "slices.SortStableFunc(sections, func(left, right ContextSection) int {",
+    "after": "slices.SortFunc(sections, func(left, right ContextSection) int {",
+    "test": "^TestEngine_SnapshotKeepsRegistrationOrderAmongManyTiedSections$"
+  },
+  {
     "id": "file-edit-actual-line-changes",
     "file": "internal/adapter/tool/file/diff.go",
     "before": "changes, complete := work.changedLines(ctx, a, b, 0, 0)",
