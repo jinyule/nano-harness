@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,7 +39,7 @@ type snapshot struct {
 
 type settingsSource interface {
 	Snapshot() (appsettings.Document, uint64, error)
-	Watch(func(appsettings.Document)) (func(), error)
+	Watch(func(appsettings.Document)) (func(context.Context) error, error)
 }
 
 // Provider owns one provider catalog, account flow, and wire implementation.
@@ -49,6 +50,11 @@ type Provider struct {
 	client   *http.Client
 	auth     authConfig
 	current  atomic.Pointer[snapshot]
+
+	// installMu orders catalog installs against stop, so a settings callback
+	// that outlives cleanup cannot republish the catalog.
+	installMu sync.Mutex
+	stopped   bool
 }
 
 // New constructs one of the installed providers.
@@ -84,10 +90,15 @@ func (provider *Provider) Start(_ context.Context, scope *plugin.Scope) error {
 	if err != nil {
 		return err
 	}
-	stop := func(context.Context) error {
-		dispose()
+	// Stop withdraws the watch and waits for its running callbacks, then
+	// withdraws the catalog; installs after that are ignored.
+	stop := func(ctx context.Context) error {
+		err := dispose(ctx)
+		provider.installMu.Lock()
+		provider.stopped = true
 		provider.current.Store(nil)
-		return nil
+		provider.installMu.Unlock()
+		return err
 	}
 	if err := scope.Defer(stop); err != nil {
 		_ = stop(context.Background()) // undo the watch and catalog published above
@@ -105,7 +116,12 @@ func (provider *Provider) install(document appsettings.Document) {
 			Effort: model.Effort, ContextWindow: model.ContextWindow, Vision: model.Vision, Tools: model.Tools,
 		}
 	}
-	provider.current.Store(&snapshot{baseURL: strings.TrimRight(configured.BaseURL, "/"), apiKeyEnv: configured.APIKeyEnv, models: models})
+	installed := &snapshot{baseURL: strings.TrimRight(configured.BaseURL, "/"), apiKeyEnv: configured.APIKeyEnv, models: models}
+	provider.installMu.Lock()
+	defer provider.installMu.Unlock()
+	if !provider.stopped {
+		provider.current.Store(installed)
+	}
 }
 
 // Models returns a detached current provider catalog.

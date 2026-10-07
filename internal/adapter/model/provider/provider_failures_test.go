@@ -39,20 +39,26 @@ type sourceStub struct {
 	hook     func()
 	// disposed counts calls to the dispose function Watch returned.
 	disposed *int
+	// watcher receives the callback Watch registered.
+	watcher *func(appsettings.Document)
 }
 
 func (source sourceStub) Snapshot() (appsettings.Document, uint64, error) {
 	return source.document, 1, source.snapshot
 }
 
-func (source sourceStub) Watch(func(appsettings.Document)) (func(), error) {
+func (source sourceStub) Watch(watcher func(appsettings.Document)) (func(context.Context) error, error) {
+	if source.watcher != nil {
+		*source.watcher = watcher
+	}
 	if source.hook != nil {
 		source.hook()
 	}
-	return func() {
+	return func(context.Context) error {
 		if source.disposed != nil {
 			*source.disposed++
 		}
+		return nil
 	}, source.watch
 }
 
@@ -876,5 +882,32 @@ func TestJWTHelpersAndImportOpenFailures(t *testing.T) {
 	provider := &Provider{id: "openai", auth: authConfig{codexHome: home}}
 	if _, err := provider.importCodex(); !errors.Is(err, llm.ErrNoCredential) {
 		t.Fatalf("import open error=%v", err)
+	}
+}
+
+// TestProviderStop_IgnoresCallbacksThatOutliveCleanup proves that a settings
+// callback captured before cleanup cannot republish the catalog after the
+// provider stopped.
+func TestProviderStop_IgnoresCallbacksThatOutliveCleanup(t *testing.T) {
+	store := &providerStore{credential: llm.Credential{Kind: llm.CredentialAPIKey, APIKey: "key"}}
+	runtime, _ := llm.New(store, noImages{})
+	runtimeScope := &plugin.Scope{}
+	if err := runtime.Start(context.Background(), runtimeScope); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtimeScope.Close(context.Background()) })
+	var watcher func(appsettings.Document)
+	document := appsettings.Defaults()
+	provider := &Provider{id: "openai", runtime: runtime, settings: sourceStub{document: document, watcher: &watcher}}
+	scope := &plugin.Scope{}
+	if err := provider.Start(context.Background(), scope); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	watcher(document)
+	if models := provider.Models(); models != nil {
+		t.Fatalf("a late callback republished the catalog: %v", models)
 	}
 }

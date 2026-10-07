@@ -271,13 +271,21 @@ type Service struct {
 	provider ProviderBackend
 	document Document
 	revision uint64
-	watchers map[uint64]func(Document)
-	nextID   uint64
+	watchers map[*watcher]struct{}
 	lastErr  error
 }
 
+// watcher is one Watch registration. calls counts the callbacks commits are
+// running; idle closes when the last one returns after dispose withdrew the
+// registration. Both are guarded by the service mutex.
+type watcher struct {
+	notify func(Document)
+	calls  int
+	idle   chan struct{}
+}
+
 // New constructs an empty Service Definition.
-func New() *Service { return &Service{watchers: map[uint64]func(Document){}} }
+func New() *Service { return &Service{watchers: map[*watcher]struct{}{}} }
 
 // ID returns the stable settings-service plugin identity.
 func (*Service) ID() string { return "settings" }
@@ -292,7 +300,7 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	if err := scope.Defer(func(context.Context) error {
 		service.mu.Lock()
 		service.active = false
-		service.watchers = map[uint64]func(Document){}
+		service.watchers = map[*watcher]struct{}{}
 		service.mu.Unlock()
 		return nil
 	}); err != nil {
@@ -375,14 +383,24 @@ func (service *Service) commit(document Document) {
 		return
 	}
 	service.document, service.revision, service.lastErr = cloneDocument(document), service.revision+1, nil
-	watchers := make([]func(Document), 0, len(service.watchers))
-	for _, watcher := range service.watchers {
-		watchers = append(watchers, watcher)
+	// Each captured watcher counts as running until its callback returns,
+	// so disposing it waits instead of racing this commit.
+	watchers := make([]*watcher, 0, len(service.watchers))
+	for entry := range service.watchers {
+		entry.calls++
+		watchers = append(watchers, entry)
 	}
 	snapshot := cloneDocument(document)
 	service.mu.Unlock()
-	for _, watcher := range watchers {
-		callWatcher(watcher, cloneDocument(snapshot))
+	for _, entry := range watchers {
+		callWatcher(entry.notify, cloneDocument(snapshot))
+		service.mu.Lock()
+		entry.calls--
+		if entry.calls == 0 && entry.idle != nil {
+			close(entry.idle)
+			entry.idle = nil
+		}
+		service.mu.Unlock()
 	}
 }
 
@@ -408,9 +426,12 @@ func (service *Service) LastReloadError() error {
 	return service.lastErr
 }
 
-// Watch registers a contained synchronous observer.
-func (service *Service) Watch(watcher func(Document)) (func(), error) {
-	if watcher == nil {
+// Watch calls notify with every committed document until the returned
+// dispose runs; a panic in notify is contained. Dispose withdraws the registration, so no later commit calls
+// notify, and waits until callbacks already running return or ctx ends. It
+// must not be called from notify itself.
+func (service *Service) Watch(notify func(Document)) (func(context.Context) error, error) {
+	if notify == nil {
 		return nil, ErrInvalidDocument
 	}
 	service.mu.Lock()
@@ -418,15 +439,30 @@ func (service *Service) Watch(watcher func(Document)) (func(), error) {
 		service.mu.Unlock()
 		return nil, ErrNotRunning
 	}
-	service.nextID++
-	id := service.nextID
-	service.watchers[id] = watcher
+	entry := &watcher{notify: notify}
+	service.watchers[entry] = struct{}{}
 	service.mu.Unlock()
-	return func() {
-		service.mu.Lock()
-		delete(service.watchers, id)
+	return func(ctx context.Context) error { return service.unwatch(ctx, entry) }, nil
+}
+
+func (service *Service) unwatch(ctx context.Context, entry *watcher) error {
+	service.mu.Lock()
+	delete(service.watchers, entry)
+	if entry.calls == 0 {
 		service.mu.Unlock()
-	}, nil
+		return nil
+	}
+	if entry.idle == nil {
+		entry.idle = make(chan struct{})
+	}
+	idle := entry.idle
+	service.mu.Unlock()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for settings watcher callbacks: %w", ctx.Err())
+	}
 }
 
 // Update persists and commits one revision-checked mutation.

@@ -1440,5 +1440,19 @@
     "before": "foreignBreakout[token.Data] ||",
     "after": "false && foreignBreakout[token.Data] ||",
     "test": "^TestRenderHTML_MatchesUpstreamSemantics$"
+  },
+  {
+    "id": "settings-watch-quiescence",
+    "file": "internal/app/settings/settings.go",
+    "before": "if entry.calls == 0 {",
+    "after": "if entry.calls >= 0 {",
+    "test": "^TestServiceWatch_DisposeWaitsForRunningCallbacks$"
+  },
+  {
+    "id": "provider-stopped-install",
+    "file": "internal/adapter/model/provider/provider.go",
+    "before": "if !provider.stopped {",
+    "after": "if true {",
+    "test": "^TestProviderStop_IgnoresCallbacksThatOutliveCleanup$"
   }
 ]

@@ -61,13 +61,17 @@ func TestProviderPersistLoadWatchAndLifecycle(t *testing.T) {
 	changed := make(chan appsettings.Document, 1)
 	dispose, err := service.Watch(func(document appsettings.Document) {
 		if document.Route.Provider == "openrouter" {
-			changed <- document
+			// Never block the commit: dispose waits for running callbacks.
+			select {
+			case changed <- document:
+			default:
+			}
 		}
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer dispose()
+	defer func() { _ = dispose(context.Background()) }()
 	encoded := []byte("route:\n  provider: openrouter\n  model: openai/gpt-5.4\n")
 	if err := os.WriteFile(path, encoded, 0o600); err != nil {
 		t.Fatal(err)

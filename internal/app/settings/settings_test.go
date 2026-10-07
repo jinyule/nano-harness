@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
@@ -211,7 +212,9 @@ func TestServiceLifecycleHotReloadAndUpdate(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	dispose()
+	if err := dispose(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	mu.Lock()
 	if seen != 1 {
 		t.Fatalf("watch count=%d", seen)
@@ -308,3 +311,98 @@ func TestServiceUpdateValidationStorageAndUnmountedFailures(t *testing.T) {
 	}
 	_ = mountScope.Close(context.Background())
 }
+
+// TestServiceWatch_DisposeWaitsForRunningCallbacks proves quiescence with a
+// barrier: a commit that already captured the watcher is inside its
+// callback, so dispose must not return until that callback finishes, and no
+// later commit reaches the watcher.
+func TestServiceWatch_DisposeWaitsForRunningCallbacks(t *testing.T) {
+	service, _ := startService(t)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	releaseAll := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseAll)
+	var mu sync.Mutex
+	running, after, disposed := false, 0, false
+	dispose, err := service.Watch(func(Document) {
+		mu.Lock()
+		if disposed {
+			after++
+		}
+		running = true
+		mu.Unlock()
+		select {
+		case entered <- struct{}{}:
+			<-release
+		default:
+		}
+		mu.Lock()
+		running = false
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed := make(chan struct{})
+	go func() {
+		defer close(committed)
+		service.commit(Defaults())
+	}()
+	<-entered
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		disposeWatch(dispose)
+	}()
+	select {
+	case <-returned:
+		t.Fatal("dispose returned while the watcher's callback ran")
+	case <-time.After(50 * time.Millisecond):
+	}
+	releaseAll()
+	<-returned
+	mu.Lock()
+	disposed = true
+	stillRunning := running
+	mu.Unlock()
+	if stillRunning {
+		t.Fatal("a callback was running after dispose returned")
+	}
+	<-committed
+	service.commit(Defaults())
+	mu.Lock()
+	defer mu.Unlock()
+	if after != 0 {
+		t.Fatalf("%d callbacks ran after dispose returned", after)
+	}
+}
+
+func TestServiceWatch_DisposeReportsAnExpiredWait(t *testing.T) {
+	service, _ := startService(t)
+	hold := make(chan struct{})
+	block := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(block) })
+	t.Cleanup(unblock)
+	dispose, err := service.Watch(func(Document) {
+		close(hold)
+		<-block
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed := make(chan struct{})
+	go func() {
+		defer close(committed)
+		service.commit(Defaults())
+	}()
+	<-hold
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := dispose(expired); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expired dispose = %v", err)
+	}
+	unblock()
+	<-committed
+}
+
+func disposeWatch(dispose func(context.Context) error) { _ = dispose(context.Background()) }
