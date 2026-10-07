@@ -1,10 +1,18 @@
 package web
 
 import (
+	"math/rand"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf16"
+	"unicode/utf8"
+
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
+
+	appWeb "github.com/jinyule/nano-harness/internal/app/web"
 )
 
 // Expected semantics come from Turndown 7.2.4 with @joplin/turndown-plugin-gfm
@@ -282,9 +290,9 @@ func TestRenderHTML_RemovesForeignScriptAndStyle(t *testing.T) {
 }
 
 // amplifiedHTML opens formatting elements whose attributes all differ, so the
-// Noah's Ark clause keeps every one of them in the active formatting list and
-// the parser reconstructs all of them in each following paragraph. closer ends
-// the opener without closing the formatting run.
+// Noah's Ark clause keeps every one of them in the list of active formatting
+// elements and the parser clones all of them, attributes included, at each
+// following insertion point. closer ends the opener without closing the run.
 func amplifiedHTML(opener, closer string, formatting, paragraphs int) string {
 	var source strings.Builder
 	source.WriteString(opener)
@@ -296,30 +304,146 @@ func amplifiedHTML(opener, closer string, formatting, paragraphs int) string {
 	return source.String()
 }
 
-// Tree construction runs before hidden content is removed and before the output
-// budget applies, so only a pre-parse bound keeps a small page from expanding
-// into millions of nodes.
-func TestRenderHTML_OmitsAmplifiedTreeConstruction(t *testing.T) {
-	for _, test := range []struct {
-		name, source, want string
-	}{
-		{"unclosed formatting run", amplifiedHTML("<p><b hidden>", "", 499, 1000), omittedHTML},
-		{"formatting run left open by its paragraph", amplifiedHTML("<p>", "</p>", 500, 1000), omittedHTML},
-		{"scripting disabled keeps noscript markup", amplifiedHTML("<noscript>", "</noscript>", 500, 1000), omittedHTML},
-		{"self-closing formatting elements stay open", strings.ReplaceAll(amplifiedHTML("<p>", "</p>", 500, 1000), `">`, `"/>`), omittedHTML},
-		{"start tags beyond the budget", strings.Repeat("<p>x</p>", maxConversionCost+1), omittedHTML},
-		{"start tags at the budget convert", strings.Repeat("<p>x</p>", maxConversionCost), strings.TrimSuffix(strings.Repeat("x\n\n", maxConversionCost), "\n\n")},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := renderHTML(test.source); got != test.want {
-				t.Fatalf("got=%.80q… (%d bytes)\nwant=%.80q… (%d bytes)", got, len(got), test.want, len(test.want))
-			}
-		})
+// parsedWeight is what conversionCost bounds: the weight of the tree the
+// production parser builds, where an element weighs one plus its attributes
+// because a clone copies the whole attribute slice, and any other node weighs
+// one. It returns false for input the parser rejects, which never reaches the
+// renderer.
+func parsedWeight(source string) (int, bool) {
+	roots, err := html.ParseFragmentWithOptions(strings.NewReader(source), &html.Node{Type: html.ElementNode, Data: "body", DataAtom: atom.Body}, html.ParseOptionEnableScripting(false))
+	if err != nil {
+		return 0, false
+	}
+	weight := 0
+	var walk func(*html.Node)
+	walk = func(node *html.Node) {
+		if node.Type == html.ElementNode {
+			weight += 1 + len(node.Attr)
+		} else {
+			weight++
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	for _, root := range roots {
+		walk(root)
+	}
+	return weight, true
+}
+
+// reviewVectors are the amplifications four review rounds found. Each stays a
+// few KB and expands to hundreds of thousands of elements, or to hundreds of MB
+// of copied attributes, unless the scan rejects it before the parse.
+func reviewVectors() map[string]string {
+	vectors := map[string]string{
+		"unclosed formatting run":                    amplifiedHTML("<p><b hidden>", "", 499, 1000),
+		"unclosed paragraphs":                        strings.ReplaceAll(amplifiedHTML("<p><b hidden>", "", 499, 1000), "</p>", ""),
+		"formatting run left open by its paragraph":  amplifiedHTML("<p>", "</p>", 500, 1000),
+		"scripting disabled keeps noscript markup":   amplifiedHTML("<noscript>", "</noscript>", 500, 1000),
+		"self-closing formatting elements stay open": strings.ReplaceAll(amplifiedHTML("<p>", "</p>", 500, 1000), `">`, `"/>`),
+		"end tags ignored inside a cell":             amplifiedHTML("<p>", "", 500, 0) + "<table><tr><td>" + strings.Repeat("</b>", 500) + "</td>" + strings.Repeat("<p>x</p>", 1000),
+		"end tags ignored inside select":             amplifiedHTML("<p>", "", 500, 0) + "<select>" + strings.Repeat("</b>", 500) + "</select>" + strings.Repeat("<p>x</p>", 1000),
+	}
+	// A comment opened inside raw text is text to the parser, so a scan that
+	// honoured comments would stop counting here.
+	for _, wrapper := range []string{"script", "style", "title", "textarea"} {
+		vectors["comment inside "+wrapper] = "<" + wrapper + "><!--</" + wrapper + ">" + amplifiedHTML("<p><b hidden>", "", 100, 1000)
+	}
+	vectors["comment inside script after a breakout"] = "<svg><p></p><script>var s='<!--';</script>" + amplifiedHTML("<p><b hidden>", "", 100, 1000)
+	// Raw text in a foreign namespace is markup to the parser, so a scan that
+	// honoured raw text would stop counting here.
+	for _, wrapper := range []string{"title", "style", "script", "xmp", "iframe", "noembed", "noframes", "textarea", "plaintext"} {
+		vectors["svg "+wrapper] = "<svg><" + wrapper + ">" + amplifiedHTML("<p><b hidden>", "", 100, 1000) + "</" + wrapper + "></svg>"
+	}
+	vectors["mathml title"] = "<math><title>" + amplifiedHTML("<p><b hidden>", "", 100, 1000) + "</title></math>"
+	// The adoption agency stops after eight iterations and leaves its clone in
+	// the list, so the element keeps being reconstructed. <a> start tags run it
+	// too, and the clone outlives the pointer the parser removes.
+	var limit, anchors strings.Builder
+	for index := range 50 {
+		limit.WriteString(`<b x="` + strconv.Itoa(index) + `">` + strings.Repeat("<div>", 9) + "</b>")
+		anchors.WriteString(`<a href="/` + strconv.Itoa(index) + `">` + strings.Repeat("<div>", 9))
+	}
+	tail := strings.Repeat("</div>", 450) + strings.Repeat("<p>x</p>", 1000)
+	vectors["adoption agency iteration limit"] = limit.String() + tail
+	vectors["anchor clones outlive their pointer"] = anchors.String() + tail
+	// Cloning copies every attribute, so few elements can still copy megabytes.
+	var attributes strings.Builder
+	attributes.WriteString("<p><b")
+	for index := range 8000 {
+		attributes.WriteString(" a" + strconv.Itoa(index))
+	}
+	attributes.WriteString(">x</p>" + strings.Repeat("<p>x</p>", 1000))
+	vectors["attribute copies"] = attributes.String()
+	// Each of these tags hides a "<" inside its value, so the scan cannot
+	// compare them faithfully and each has to count as its own element.
+	var cut strings.Builder
+	cut.WriteString("<p>")
+	for index := range 500 {
+		cut.WriteString(`<b x="<` + strconv.Itoa(index) + `">`)
+	}
+	cut.WriteString("x</p>" + strings.Repeat("<p>x</p>", 1000))
+	vectors["markup inside distinct attribute values"] = cut.String()
+	return vectors
+}
+
+// ordinaryPages must keep converting: the scan is conservative, so its headroom
+// on real markup is the evidence that it does not reject what it should keep.
+func ordinaryPages() map[string]string {
+	return map[string]string{
+		"links":          "<div>" + strings.Repeat(`<a href="/x">link</a> `, 3000) + "</div>",
+		"article":        "<article><h1>A</h1>" + strings.Repeat("<section><h2>H</h2><p>This is <strong>important</strong> content with <a href='/ref'>a reference</a>.</p></section>", 800) + "</article>",
+		"documentation":  "<main>" + strings.Repeat("<section><h2>API</h2><p>Use <code>run()</code> to start.</p><pre><code class='language-go'>run(ctx)\n</code></pre><ul><li>First</li><li>Second</li></ul></section>", 600) + "</main>",
+		"table":          "<table><thead><tr><th>N</th><th>V</th></tr></thead><tbody>" + strings.Repeat("<tr><td><a href='/item'>Item</a></td><td>42</td></tr>", 1800) + "</tbody></table>",
+		"dense markup":   strings.Repeat("<p>x</p>", 25000),
+		"wide text":      strings.Repeat("<p>\u8fd9\u662f\u4e00\u6bb5\u4e2d\u6587\u5185\u5bb9\uff0c\u7528\u4e8e\u68c0\u67e5\u6e32\u67d3\u4e0a\u9650\u3002</p>", 4000),
+		"stray end tags": strings.Repeat("x</p>", 1000),
+		"implied tables": strings.Repeat("<table><td>x</table>", 200),
+		"quoted markup":  strings.Repeat(`<div title="<b x=1>">text</div>`, 1000),
 	}
 }
 
+// Tree construction runs before hidden content is removed and before the output
+// budget applies, so only a pre-parse bound keeps a few KB from expanding into
+// millions of elements or hundreds of MB of copied attributes.
+func TestRenderHTML_OmitsAmplifiedTreeConstruction(t *testing.T) {
+	for name, source := range reviewVectors() {
+		t.Run(name, func(t *testing.T) {
+			if got := renderHTML(source); got != omittedHTML {
+				t.Fatalf("%d bytes scored %d and converted to %.60q…", len(source), conversionCost(source), got)
+			}
+		})
+	}
+	for name, source := range ordinaryPages() {
+		t.Run("ordinary/"+name, func(t *testing.T) {
+			if cost := conversionCost(source); cost > maxConversionCost {
+				t.Fatalf("%d bytes scored %d, over the %d budget", len(source), cost, maxConversionCost)
+			}
+		})
+	}
+	// Text and end tags cost one each with nothing open, so this is the exact
+	// comparison boundary.
+	t.Run("at the budget", func(t *testing.T) {
+		source := strings.Repeat("<p>x", maxConversionCost/2)
+		if cost := conversionCost(source); cost != maxConversionCost {
+			t.Fatalf("got=%d want=%d", cost, maxConversionCost)
+		}
+		if got := renderHTML(source); got == omittedHTML {
+			t.Fatal("input at the budget must convert")
+		}
+	})
+	t.Run("one insertion point past the budget", func(t *testing.T) {
+		source := strings.Repeat("<p>x", maxConversionCost/2) + "<p>"
+		if got := renderHTML(source); got != omittedHTML {
+			t.Fatalf("got=%.60q… want the omission marker", got)
+		}
+	})
+}
+
 // The budget bounds allocation, not elapsed time: the reviewer's 8 KB sample
-// allocated about 80 MB building its 502,502-node tree before the bound existed.
+// allocated about 80 MB building its 502,502-node tree before the bound existed,
+// and its visible variant about 18.9 GiB through the renderer.
 func TestRenderHTML_BoundsAmplifiedAllocation(t *testing.T) {
 	const maxBytes = 4 << 20
 	source := amplifiedHTML("<p><b hidden>", "", 499, 1000)
@@ -336,23 +460,138 @@ func TestRenderHTML_BoundsAmplifiedAllocation(t *testing.T) {
 	}
 }
 
-// The scan models tree construction, not markup: comments and raw text hold no
-// elements, and a matching end tag releases the reconstruction pressure.
-func TestExceedsConversionCost_ScansLikeTreeConstruction(t *testing.T) {
-	for _, test := range []struct {
-		name, source string
-		want         bool
-	}{
-		{"empty", "", false},
-		{"comments hold no elements", strings.Repeat("<!-- <b x=1> -->", maxConversionCost), false},
-		{"raw text holds no elements", "<style>" + strings.Repeat("<b x=1>", maxConversionCost) + "</style>", false},
-		{"void elements never nest", strings.Repeat("<br>", maxConversionCost), false},
-		{"closed formatting releases pressure", strings.Repeat("<b x=1>y</b>", 1000) + strings.Repeat("<p>x</p>", 1000), false},
-		{"unclosed formatting multiplies paragraphs", amplifiedHTML("<p>", "</p>", 500, 1000), true},
+// Nested visible formatting makes every level copy the level below it, so the
+// renderer stops at the output budget instead of formatting everything and
+// truncating afterwards.
+func TestRenderHTML_StopsAtTheOutputBudget(t *testing.T) {
+	for _, test := range []struct{ name, source string }{
+		{"ascii", "<p>" + strings.Repeat("x", 4*maxRenderBytes) + "</p>"},
+		{"closing markup after the budget", "<p><b>" + strings.Repeat("x", 4*maxRenderBytes) + "</b></p>"},
+		{"a cut between bytes of one rune", "<p>x" + strings.Repeat("\u4e2d", maxRenderBytes) + "</p>"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := exceedsConversionCost(test.source); got != test.want {
-				t.Fatalf("got=%v want=%v", got, test.want)
+			text := renderHTML(test.source)
+			if len(text) > maxRenderBytes+len(omittedHTML)+2 {
+				t.Fatalf("rendered %d bytes, want at most %d", len(text), maxRenderBytes)
+			}
+			if !strings.HasSuffix(text, omittedHTML) {
+				t.Fatalf("got=%.40q…, want the omission marker at the end", text)
+			}
+			if !utf8.ValidString(text) {
+				t.Fatal("rendered text is not valid UTF-8")
+			}
+		})
+	}
+	// Once the budget is spent the walk stops: later siblings are not rendered
+	// and nothing more is written.
+	t.Run("drops what follows", func(t *testing.T) {
+		source := "<p>" + strings.Repeat("x", 2*maxRenderBytes) + "</p>" + strings.Repeat("<p>tail</p>", 3)
+		text := renderHTML(source)
+		if strings.Contains(text, "tail") {
+			t.Fatal("rendering continued past the output budget")
+		}
+		if !strings.HasSuffix(text, omittedHTML) {
+			t.Fatalf("got=%.40q…, want the omission marker at the end", text)
+		}
+	})
+
+	// The budget is counted in bytes, so the widest text still fills the whole
+	// UTF-16 output budget.
+	t.Run("keeps the whole output budget", func(t *testing.T) {
+		source := "<p>" + strings.Repeat("\u4e2d", maxFetchOutputUnits) + "</p>"
+		text, truncated := formatFetch(appWeb.FetchResult{URL: "https://example.test/", StatusCode: 200, Kind: appWeb.FetchHTML, Content: source}, maxFetchOutputUnits)
+		if !truncated {
+			t.Fatal("want truncated")
+		}
+		if units := len(utf16.Encode([]rune(text))); units < maxFetchOutputUnits-len(fetchFooter) {
+			t.Fatalf("delivered %d units, want the output budget", units)
+		}
+	})
+}
+
+// The scan has to over-approximate the weight the parser creates for every
+// input, in every context. The fixed samples are the amplifications four
+// review rounds found; the generated ones mix formatting elements, their
+// attributes and the contexts that change how their tags are read.
+func TestConversionCost_BoundsParsedWeight(t *testing.T) {
+	assert := func(t *testing.T, source string) {
+		t.Helper()
+		cost := conversionCost(source)
+		if cost > maxConversionCost {
+			// Rejected input is never parsed, so there is no tree to bound.
+			return
+		}
+		weight, parsed := parsedWeight(source)
+		if parsed && weight > cost {
+			t.Fatalf("%.120q…: parsed weight %d, scored %d", source, weight, cost)
+		}
+	}
+	for name, source := range reviewVectors() {
+		t.Run(name, func(t *testing.T) { assert(t, source) })
+	}
+	for name, source := range ordinaryPages() {
+		t.Run("ordinary/"+name, func(t *testing.T) { assert(t, source) })
+	}
+	for name, source := range map[string]string{
+		"quoted greater-than in a signature": "<p>" + strings.Repeat(`<b x=">" y=k>`, 500) + "x</p>" + strings.Repeat("<p>x</p>", 1000),
+		"unterminated quote":                 `<p><b x='` + strings.Repeat("<p>x</p>", 100),
+		"unterminated quote inside raw text": `<xmp><b x='</xmp><em><b x="1">` + strings.Repeat("<p>x</p>", 100),
+		"markup inside an attribute value":   `<div title="<b x=1>">` + strings.Repeat("<p>x</p>", 100),
+		"bare attribute names":               "<b a b c d e>x",
+		"solidus between attributes":         "<b x='v'</div>x",
+		"unterminated tag":                   "<b x",
+		"not a tag":                          "<3 < <!",
+	} {
+		t.Run(name, func(t *testing.T) { assert(t, source) })
+	}
+	pieces := []string{
+		`<b x="1">`, `<b x="2">`, `<b x=">" y=k>`, "<b a b c d e>", `<b x='`, "</b>", `<i x="1">`, "</i>",
+		`<a href="/1">`, `<a href="/2">`, "</a>", "<nobr>", "</nobr>", `<font color="">`, "</font>", "<em>", "</em>",
+		"<code>", "</code>", "<u>", "</u>", "<s>", "</s>", "<p>", "</p>", "</br>", "<div>", "</div>",
+		"x", " ", "y", "<!-- c -->", "<!--", "-->", "<br>", "<hr>", "<img src=x>", `<div title="<b x=1>">`,
+		"<table>", "</table>", "<tr>", "<td>", "</td>", "<th>", "</th>", "<caption>", "</caption>", "<tbody>", "<col>",
+		"<template>", "</template>", "<object>", "</object>", "<applet>", "</applet>", "<marquee>", "</marquee>",
+		"<select>", "</select>", "<option>", "<svg>", "</svg>", "<math>", "</math>", "<title>", "</title>",
+		"<style>", "</style>", "<script>", "</script>", "<textarea>", "</textarea>", "<noscript>", "</noscript>",
+		"<plaintext>", "<xmp>", "</xmp>", "<iframe>", "</iframe>", "<noembed>", "<foreignObject>", "</foreignObject>",
+		"<mi>", "</mi>", `<annotation-xml encoding="text/html">`, "<![CDATA[z]]>", "<li>", "<ul>", "</ul>",
+		"<h1>", "</h1>", "<b/>", "<svg/>", "<", "<!", "</>", "<3",
+	}
+	// Samples only need to be varied and reproducible, not unpredictable.
+	random := rand.New(rand.NewSource(1)) //nolint:gosec // deterministic test input, not a security decision
+	for sample := range 4000 {
+		var source strings.Builder
+		for range 1 + random.Intn(60) {
+			source.WriteString(pieces[random.Intn(len(pieces))])
+		}
+		t.Run("generated/"+strconv.Itoa(sample), func(t *testing.T) { assert(t, source.String()) })
+	}
+}
+
+// The model charges each insertion point the weight the parser may clone there,
+// each element its own attributes, and each run of the adoption agency its
+// clones. Raw text, comments and quoting never hide markup from it.
+func TestConversionCost_ChargesWeightedFormatting(t *testing.T) {
+	for _, test := range []struct {
+		name, source string
+		want         int
+	}{
+		{"empty", "", 0},
+		{"text alone", "x", 1},
+		{"an element weighs one plus its attributes", `<b x="1" y="2">`, 3},
+		{"paragraphs cost one each", strings.Repeat("<p>x</p>", 10), 30},
+		{"a cell implies tbody and tr", "<td>", 3},
+		{"an open element is charged at every later point", `<b x="1">` + strings.Repeat("<p>x</p>", 10), 92},
+		{"a closed element stops being charged", `<b x="1">y</b>` + strings.Repeat("<p>x</p>", 10), 38},
+		{"Noah's Ark caps identical elements", strings.Repeat(`<b x="1">`, 10) + "y", 75},
+		{"raw text is scanned", "<style>" + strings.Repeat(`<b x="1">`, 3) + "</style>y", 27},
+		{"an end tag off the stack top runs the adoption agency", `<b x="1"><p></b>`, 104},
+		{"a repeated anchor runs it too", `<a href="/1"><a href="/2">`, 102},
+		{"stray end tags never go negative", strings.Repeat("</b>", 10) + "x", 331},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if cost := conversionCost(test.source); cost != test.want {
+				t.Fatalf("got=%d want=%d", cost, test.want)
 			}
 		})
 	}

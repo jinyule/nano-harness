@@ -1514,36 +1514,92 @@
   {
     "id": "web-html-conversion-cost",
     "file": "internal/adapter/tool/web/html.go",
-    "before": "if exceedsConversionCost(source) {",
-    "after": "if false && exceedsConversionCost(source) {",
-    "test": "^Test(RenderHTML_OmitsAmplifiedTreeConstruction|ExceedsConversionCost_ScansLikeTreeConstruction)$"
+    "before": "if conversionCost(source) > maxConversionCost {",
+    "after": "if false && conversionCost(source) > maxConversionCost {",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight))$"
   },
   {
-    "id": "web-html-cost-formatting-pressure",
+    "id": "web-html-cost-boundary",
     "file": "internal/adapter/tool/web/html.go",
-    "before": "\t\t\t\tcost += formatting\n",
-    "after": "\t\t\t\tcost += 0\n",
-    "test": "^Test(RenderHTML_OmitsAmplifiedTreeConstruction|ExceedsConversionCost_ScansLikeTreeConstruction)$"
+    "before": "if conversionCost(source) > maxConversionCost {",
+    "after": "if conversionCost(source) >= maxConversionCost {",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight))$"
   },
   {
-    "id": "web-html-cost-self-closing",
+    "id": "web-html-cost-reversed",
     "file": "internal/adapter/tool/web/html.go",
-    "before": "case html.StartTagToken, html.SelfClosingTagToken:\n\t\t\tname, _ := tokenizer.TagName()\n\t\t\ttag := string(name)",
-    "after": "case html.StartTagToken:\n\t\t\tname, _ := tokenizer.TagName()\n\t\t\ttag := string(name)",
-    "test": "^Test(RenderHTML_OmitsAmplifiedTreeConstruction|ExceedsConversionCost_ScansLikeTreeConstruction)$"
+    "before": "if conversionCost(source) > maxConversionCost {",
+    "after": "if conversionCost(source) < maxConversionCost {",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight))$"
   },
   {
-    "id": "web-html-cost-noscript-markup",
+    "id": "web-html-cost-attribute-weight",
     "file": "internal/adapter/tool/web/html.go",
-    "before": "\t\t\tif tag == \"noscript\" {\n\t\t\t\ttokenizer.NextIsNotRawText()",
-    "after": "\t\t\tif false && tag == \"noscript\" {\n\t\t\t\ttokenizer.NextIsNotRawText()",
-    "test": "^Test(RenderHTML_OmitsAmplifiedTreeConstruction|ExceedsConversionCost_ScansLikeTreeConstruction)$"
+    "before": "\t\t\t\telement.weight = 1 + attributes\n",
+    "after": "\t\t\t\telement.weight = 1\n",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight))$"
   },
   {
-    "id": "web-html-cost-release",
+    "id": "web-html-cost-element-weight",
     "file": "internal/adapter/tool/web/html.go",
-    "before": "\t\t\t\t\tformatting--\n",
-    "after": "\t\t\t\t\tformatting -= 0\n",
-    "test": "^Test(RenderHTML_OmitsAmplifiedTreeConstruction|ExceedsConversionCost_ScansLikeTreeConstruction)$"
+    "before": "\t\tcost += weight + 1 + attributes\n",
+    "after": "\t\tcost += weight + 1\n",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight))$"
+  },
+  {
+    "id": "web-html-cost-text-points",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\t// One run of text inserts one text node.\n\t\t\tcost += weight + 1\n",
+    "after": "\t\t\t// One run of text inserts one text node.\n\t\t\tcost += 0\n",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight))$"
+  },
+  {
+    "id": "web-html-cost-adoption",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\t\tcost += adoptionClones * (heaviest + 1)\n\t\t\t}\n\t\t\tpopMatching",
+    "after": "\t\t\t\tcost += 0\n\t\t\t}\n\t\t\tpopMatching",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight))$"
+  },
+  {
+    "id": "web-html-cost-anchor-adoption",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\t\tcost += adoptionClones * (heaviest + 1)\n\t\t\t}\n\t\t\telement := openElement",
+    "after": "\t\t\t\tcost += 0\n\t\t\t}\n\t\t\telement := openElement",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight))$"
+  },
+  {
+    "id": "web-html-cost-stack-top",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\treturn len(open) > 0 && open[len(open)-1].tag == name",
+    "after": "\treturn len(open) > 0",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight))$"
+  },
+  {
+    "id": "web-html-cost-tag-cut",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\tif char == '<' && cut < 0 {",
+    "after": "\t\tif false && char == '<' && cut < 0 {",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight))$"
+  },
+  {
+    "id": "web-html-cost-unique-signature",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\tsignature = \"\\x01\" + strconv.Itoa(index)",
+    "after": "\t\t\tsignature = \"\\x01\"",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight))$"
+  },
+  {
+    "id": "web-html-render-budget",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\tif state.written > maxRenderBytes {\n\t\t// Rendering stopped at the output budget; mark what it dropped.",
+    "after": "\tif false && state.written > maxRenderBytes {\n\t\t// Rendering stopped at the output budget; mark what it dropped.",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight))$"
+  },
+  {
+    "id": "web-html-render-write-stop",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\tremaining := maxRenderBytes - state.written\n",
+    "after": "\tremaining := maxRenderBytes - state.written + len(value)\n",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight))$"
   }
 ]

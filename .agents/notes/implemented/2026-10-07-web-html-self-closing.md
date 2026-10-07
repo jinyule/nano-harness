@@ -27,14 +27,15 @@ astra 复审合入的 `4c8d690` 时报告 B1：512 层开放元素上限不约�
   - 上述 x/net template 偏差。
   - 深度计数方式不同。
   - 误嵌套产生的空格式包装（上游输出 `~~~~`、`[](/a)`）不输出，归入等价排版。
-- 建树前，`exceedsConversionCost` 用 tokenizer 扫描一次：每个开始标签（含自闭合标签）计一个元素，再加上词法栈上仍打开的格式元素数；只有匹配栈顶的结束标签出栈，noscript 内容按标记扫描。累计超过固定上限 `maxConversionCost`（65,536）时输出同一省略标记，不建树。扫描不模拟 Noah's Ark 和 marker，只会高估。转换不接收 context：扫描为线性，接受的输入建树量有固定上界。
+- 建树前，`conversionCost` 做一次纯字节扫描，按「1 + 属性数」的权重过估计建树量，因为 x/net 的 clone 复制整份属性切片。扫描不解释注释、CDATA、raw text 与 foreign 上下文：这些区段的起止取决于解析器上下文，任何不依赖上下文的词法选择都会在某个方向低估。每个 `<字母`、`</字母` 和每段其他字节都是插入点，计当前活动格式权重 F\* 加它自身建出的部分；表格标签另加 `impliedElements`（2），格式元素的非栈顶结束标签与活动列表中已有 a/nobr 时的 `<a>`、`<nobr>` 开始标签另加 `adoptionClones`（32）乘当时最大格式权重。F\* 只在结束标签等于词法栈顶时扣除；同一签名最多计 3 次（Noah's Ark）；签名按标签语法求出，无法忠实比较的标签按唯一身份计，且扫描绝不消费过 `<`。累计超过 `maxConversionCost`（2^18）时输出省略标记，不建树。上界论证与取舍写在 ADR-0011。
+- 渲染器在输出预算处停止：写入量达到 `maxRenderBytes`（200,000 个 UTF-16 单元对应的字节上限）时停止拼接、不切断 rune，并追加同一省略标记；捕获内容在写回上层时再次计入，所以嵌套的可见格式元素不能无界复制。
 - 运行时 composition、插件 effect、session 格式和工具定义都不变。依赖仍是已有的 `golang.org/x/net` v0.59.0，未改变 `go.mod`。
 
 ## Consequences
 
 隐藏范围由完整的 HTML 树构建决定，不再取决于自写规则的覆盖程度；`html.go` 相对 `92e3599` 净减少 107 行，三轮复审报告的泄漏类别都由解析器处理。误嵌套格式元素的泄漏选择对齐而不是记为偏差：泄漏会把应隐藏的文本交给模型，在流式渲染中补齐 adoption agency 需要移动已输出的子树，改动面比换用解析器更大，风险也更高。
 
-代价有三项。第一，引入 x/net 的 template 偏差：只会少输出内容，可检测时有标记，SVG title/style 中的情形无标记。第二，foreign `</p>`、`</br>` 之后的文本与上游不同。第三，深度上限改按解析器的开放元素栈计算，与上游的词法计数在边界处不同。x/net 修复 template 偏差、参考指针更新 domino，或上游改变移除规则时，需要重新评估这些差异和对应测试。建树成本上限比上游更严：格式元素长期不闭合、又跟着大量块的页面会被省略；已测真实页面得分不超过约 7,400，上限留有约 9 倍余量。上游加入累计建树预算或解析器提供节点预算时，重新评估这项上限。隐藏检测仍是尽力而为，样式层的视觉隐藏（白色文字、零字号、屏幕外定位）不在范围内。
+代价有四项。第一，引入 x/net 的 template 偏差：只会少输出内容，可检测时有标记，SVG title/style 中的情形无标记。第二，foreign `</p>`、`</br>` 之后的文本与上游不同。第三，深度上限改按解析器的开放元素栈计算，与上游的词法计数在边界处不同。x/net 修复 template 偏差、参考指针更新 domino，或上游改变移除规则时，需要重新评估这些差异和对应测试。第四，建树成本上限比上游更严：格式元素长期不闭合、又跟着大量块的页面会被省略；已测真实页面得分不超过约 7,400，上限留有约 9 倍余量。上游加入累计建树预算或解析器提供节点预算时，重新评估这项上限。隐藏检测仍是尽力而为，样式层的视觉隐藏（白色文字、零字号、屏幕外定位）不在范围内。
 
 ## Verification
 
@@ -65,4 +66,37 @@ astra 复审合入的 `4c8d690` 时报告 B1：512 层开放元素上限不约�
 - 新增 5 个 mutation，单独运行均被杀死：`web-html-conversion-cost`（跳过检查）、`web-html-cost-formatting-pressure`（不计格式元素）、`web-html-cost-self-closing`（不计自闭合标签）、`web-html-cost-noscript-markup`（noscript 按 raw text 扫描）、`web-html-cost-release`（结束标签不释放格式元素）。自闭合用例最初用不带引号的属性值，斜杠被并入属性值，mutation 存活；改为带引号的属性后被杀死。
 - `make check`（私有 `GOLANGCI_LINT_CACHE`）：通过；逐产品文件 coverage 100.0%，lint `0 issues`，清单中 221 个 mutation 全部 killed，build smoke 输出 `nano-harness dev`。第一次运行因测试辅助函数的循环写法被 modernize 报告，改为 range over int 后重跑通过。
 
-未获得的证据：没有对真实网页做批量差分；差分覆盖测试表和合成语料。成本上限只用 8 个真实页面校准，没有大规模网页语料。
+### 预扫改为过估计（Codex 复审）
+
+Codex 复审 `633844b` 时指出预扫并不保守：它沿用 tokenizer 的默认 raw text 行为，而 SVG `title` 内的标记在解析器中按上下文继续建树。9,724 字节样本的估算为 2，实际建出 101,103 个元素；100,000 单元样本放行后累计分配 1.11 GiB（隐藏版）到 18.9 GiB（可见版）。隐式元素（`x</p>` 生成的段落）与表格补全也被低估，因此 ADR 中“畸形输入只会高估”“接受的树约为 13 万个节点以内”两句不成立。
+
+- 修复前：把 `633844b` 的 `html.go` 经 overlay 换入当前测试（加一层把旧扫描暴露成新签名的壳），`go test -count=1 -overlay <map> -run 'TestRenderHTML_OmitsAmplifiedTreeConstruction|TestConversionCost' ./internal/adapter/tool/web/` 失败：SVG `title` 样本未省略；`TestConversionCost_BoundsParsedNodes/svg_title` 报告实际 20,504 个节点、上界 32（cost=2、tokens=6）；各上下文的精确费用用例与预算边界用例同样失败。
+- 修复后：Codex 的两个 100,000 单元样本经 `formatFetch` 都返回省略标记，分配 0.21 MiB。
+- 过估计的取舍：旧扫描把 `<b><p>x</b>`×500 估成 500,500，实际只有 2,000 个节点；新扫描按 adoption agency 必然移除的规则放行，费用降到 1,500，该输入正常转换。
+- 已测页面费用为 556–9,244（上限 262,144，余量约 28 倍）：8 个仓库外保存的真实页面与 Codex 的 3 个合成页面，放行分配 0.8–3.3 MB。恰好等于上限的输入转换耗时约 51 ms、分配约 37 MB。
+- 最坏放行形态：512 层嵌套格式元素用满预算时分配约 159 MB，量级为 `深度上限 × 上限`，因为渲染器把每层嵌套的捕获缓冲复制给上层；已写入 ADR-0011，降低上限会按比例降低它。
+- `TestConversionCost_BoundsParsedNodes` 用 15 个反例样本和 4,000 个生成样本断言 `tokens×(1+impliedElements)+cost` 不低于生产解析器实际建出的节点数。开发期间用同一断言跑过 52 万个随机样本：第一版（marker 栈）在 `<select>`、`<svg><title>`、`<svg><foreignObject>` 三处违反，改为词法良构规则后 0 违反，最紧样本的实际/上界比为 0.40。
+- mutation：替换 `633844b` 的 5 项，现为 8 项，单独运行均被杀死：`web-html-conversion-cost`（跳过检查）、`web-html-cost-boundary`（`>` 改 `>=`）、`web-html-cost-reversed`（`>` 改 `<`）、`web-html-cost-raw-text`（去掉 `NextIsNotRawText`，即本次缺陷）、`web-html-cost-pressure`（不计格式元素）、`web-html-cost-well-nested`（结束标签不检查栈顶）、`web-html-cost-context`（忽略上下文元素）、`web-html-cost-self-closing`（自闭合标签不入栈）。
+- `make check`（私有 `GOLANGCI_LINT_CACHE`）：通过；逐产品文件 coverage 100.0%，lint `0 issues`，清单中 224 个 mutation 全部 killed，build smoke 输出 `nano-harness dev`。期间修掉两处 lint（生成样本的 `math/rand` 需要带理由的 `//nolint:gosec`，反向遍历改用 `slices.Backward`），并把随之失配的 `web-html-cost-context` 重新对准新代码。
+
+### 预扫改为按权重的字节扫描（Codex、opus、Fable 三方复审）
+
+Codex 指出按 tokenizer 默认 raw text 扫描会低估（SVG `title` 内的标记被当作文本，9,724 字节样本估算 2、实际 101,103 个元素）。我据此改成"关闭 raw text"的 tokenizer 扫描后，opus 与 Fable 又各自证明了三类低估：
+
+- 关闭 raw text 后，`<script><!--</script>` 之后的 `<!--` 被当作注释开头吞掉全部标记（估算 1、实际 101,102 个元素）。注释与 raw text 的切分取决于解析器上下文，两个方向都会低估。
+- adoption agency 外层 8 轮上限会让克隆残留在活动格式元素列表中，`<a>` 开始标签的 `remove` 删除的是旧指针（实际 51,892 个元素）。因此"同名结束标签就减一"不成立。
+- clone 复制整份属性切片：8,000 个属性的格式元素只占 1 个元素名额，1,000 段文本后实际权重 8,010,002、分配约 376 MB。按元素或节点计数都约束不住。
+
+维护者决定不 fork x/net，采用字节扫描的保守估算。实现与验证：
+
+- 开发期间差分断言连续发现并修掉了四处我自己的低估：元素自身的属性未计入插入点费用；属性名可以由 `<`、`!` 等字符开头，也可以在 `/` 之后重新开始；标签内的 `<` 即使位于引号中也必须成为切点（否则 `<xmp>` 内的伪标签会吞掉真实标记）；以及 `impliedElements` 按每个插入点收 4 会误省略密集的普通页面，改为只对表格标签收 2。
+- 差分性质测试：`TestConversionCost_BoundsParsedWeight` 断言放行输入满足"估算 ≥ 实际权重"，种子含 P1–P3、opus 的漏洞 A/B、Codex 的反例与 Fable 6.4 节的回归向量（9 种 foreign raw-text 包装、MathML title、3 例注释吞并、breakout 后的注释吞并、单元格与 select 内被忽略的结束标签、属性复制、`x</p>`、隐式表格）。定稿代码另跑了 192 万个生成样本：0 违反，最紧样本的实际/估算比为 0.929。
+- 放大向量全部输出省略标记；常见页面全部在预算内：真实页面费用 2,066–127,177（最高者 MDN 占上限 48%），复审者的文章/文档/表格页面 20,807–45,030，3,000 个链接 27,003，20 万单元密集段落 100,000，宽字符文本 16,000，`go_spec.html` 截到 100 KB 为 7,582（opus 方案下为 103,076）。
+- 分配：放行输入实测 0.5–9.4 MB；恰好用满预算的最坏形态 7.4 MB，此前同一形态 159 MB。astra 的两个 100,000 单元可见/隐藏样本经 `formatFetch` 返回省略标记。
+- 渲染器上限：1 MB 文本与 40 万个宽字符的输入都在 600,051 字节处停止并带省略标记，输出仍是有效 UTF-8；宽字符页面仍能交付完整的 200,000 单元输出预算。
+- mutation：替换此前 8 项，现为 13 项，单独运行均被杀死——预算比较的三种变异（禁用、`>=`、`<`）、属性权重、元素自身权重、文本插入点、两处 adoption 计费、栈顶判定、标签切点、唯一签名、渲染上限与渲染停止点。
+- `make check`（私有 `GOLANGCI_LINT_CACHE`）：通过；逐产品文件 coverage 100.0%，lint `0 issues`，清单中 229 个 mutation 全部 killed，build smoke 输出 `nano-harness dev`。
+
+局限：上界论证依据 HTML 规范与 x/net/html v0.59.0 的源码（8 轮上限、重建路径、clone 的属性复制），没有形式化证明；升级 x/net 时必须重新核对，ADR-0011 已把它列入复审触发条件。签名各不相同的格式元素特别多的页面会被省略，这是已记录的取舍。
+
+未获得的证据：没有对真实网页做批量差分；差分覆盖测试表、复审向量与生成语料。费用校准用 8 个保存的真实页面、3 个 Go 文档页面和复审者的合成页面，没有大规模网页语料。生成样本只覆盖所列标记组合，不构成对全部 HTML 输入的上界证明。
