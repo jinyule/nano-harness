@@ -37,6 +37,8 @@ type sourceStub struct {
 	snapshot error
 	watch    error
 	hook     func()
+	// disposed counts calls to the dispose function Watch returned.
+	disposed *int
 }
 
 func (source sourceStub) Snapshot() (appsettings.Document, uint64, error) {
@@ -47,7 +49,11 @@ func (source sourceStub) Watch(func(appsettings.Document)) (func(), error) {
 	if source.hook != nil {
 		source.hook()
 	}
-	return func() {}, source.watch
+	return func() {
+		if source.disposed != nil {
+			*source.disposed++
+		}
+	}, source.watch
 }
 
 type promptFailure struct{ err error }
@@ -147,10 +153,16 @@ func TestProviderStartLoginRefreshAndStreamFailures(t *testing.T) {
 	}
 	_ = firstScope.Close(context.Background())
 
+	// A scope closed after the watch began cannot own its cleanup, so the
+	// failed start disposes the watch and withdraws the catalog itself.
 	closedDuringWatch := &plugin.Scope{}
-	provider = &Provider{id: "openai", runtime: runtime, settings: sourceStub{document: document, hook: func() { _ = closedDuringWatch.Close(context.Background()) }}}
+	disposed := 0
+	provider = &Provider{id: "openai", runtime: runtime, settings: sourceStub{document: document, disposed: &disposed, hook: func() { _ = closedDuringWatch.Close(context.Background()) }}}
 	if err := provider.Start(context.Background(), closedDuringWatch); !errors.Is(err, plugin.ErrScopeClosed) {
 		t.Fatalf("closed scope=%v", err)
+	}
+	if disposed != 1 || provider.Models() != nil {
+		t.Fatalf("failed start left the settings watch (disposed %d) or catalog %v", disposed, provider.Models())
 	}
 
 	provider = &Provider{id: "openai"}

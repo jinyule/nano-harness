@@ -84,11 +84,16 @@ func (provider *Provider) Start(_ context.Context, scope *plugin.Scope) error {
 	if err != nil {
 		return err
 	}
-	return scope.Defer(func(context.Context) error {
+	stop := func(context.Context) error {
 		dispose()
 		provider.current.Store(nil)
 		return nil
-	})
+	}
+	if err := scope.Defer(stop); err != nil {
+		_ = stop(context.Background()) // undo the watch and catalog published above
+		return err
+	}
+	return nil
 }
 
 func (provider *Provider) install(document appsettings.Document) {

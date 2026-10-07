@@ -769,3 +769,112 @@ func TestStore_LimitsConcurrentConversions(t *testing.T) {
 		t.Fatalf("peak conversions = %d, want %d", peak, maxConversions)
 	}
 }
+
+// TestStore_FailedObserverRegistrationLeavesNoCallback proves that a
+// registration whose cleanup cannot be scheduled is rolled back: the
+// observer never runs.
+func TestStore_FailedObserverRegistrationLeavesNoCallback(t *testing.T) {
+	store, _ := startStore(t)
+	closed := &plugin.Scope{}
+	_ = closed.Close(context.Background())
+	calls := 0
+	if err := store.ObserveUnavailable(func(session.Image, error) { calls++ }, closed); !errors.Is(err, plugin.ErrScopeClosed) {
+		t.Fatalf("closed scope = %v", err)
+	}
+	if _, err := store.ReadImage(context.Background(), session.Image{ID: session.ImageID(strings.Repeat("d", 64)), Bytes: 1}); !errors.Is(err, session.ErrAttachmentMissing) {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("failed registration still received %d callbacks", calls)
+	}
+}
+
+// TestStore_ObserverCleanupWaitsForRunningCallbacks proves quiescence: once
+// an observer's scope cleanup returns, no callback is running or can start,
+// even when a read captured the observer just before cleanup began.
+func TestStore_ObserverCleanupWaitsForRunningCallbacks(t *testing.T) {
+	store, _ := startStore(t)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	// A failing assertion still releases blocked callbacks, so the store's
+	// cleanup, which runs after these, can drain the reads.
+	releaseAll := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseAll)
+	var mu sync.Mutex
+	running, after := false, 0
+	stopped := false
+	scope := &plugin.Scope{}
+	if err := store.ObserveUnavailable(func(session.Image, error) {
+		mu.Lock()
+		if stopped {
+			after++
+		}
+		running = true
+		mu.Unlock()
+		select {
+		case entered <- struct{}{}:
+			<-release
+		default:
+		}
+		mu.Lock()
+		running = false
+		mu.Unlock()
+	}, scope); err != nil {
+		t.Fatal(err)
+	}
+	missing := session.Image{ID: session.ImageID(strings.Repeat("c", 64)), Bytes: 1}
+	read := make(chan error, 1)
+	go func() {
+		_, err := store.ReadImage(context.Background(), missing)
+		read <- err
+	}()
+	<-entered
+	closed := make(chan error, 1)
+	go func() { closed <- scope.Close(context.Background()) }()
+	select {
+	case err := <-closed:
+		t.Fatalf("observer cleanup returned while its callback ran: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	releaseAll()
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	stopped = true
+	stillRunning := running
+	mu.Unlock()
+	if stillRunning {
+		t.Fatal("a callback was running after cleanup returned")
+	}
+	if err := <-read; !errors.Is(err, session.ErrAttachmentMissing) {
+		t.Fatal(err)
+	}
+	_, _ = store.ReadImage(context.Background(), missing)
+	mu.Lock()
+	defer mu.Unlock()
+	if after != 0 {
+		t.Fatalf("%d callbacks ran after cleanup returned", after)
+	}
+
+	// A cleanup that cannot wait reports its deadline.
+	late := &plugin.Scope{}
+	block := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(block) })
+	t.Cleanup(unblock)
+	hold := make(chan struct{})
+	if err := store.ObserveUnavailable(func(session.Image, error) {
+		close(hold)
+		<-block
+	}, late); err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, _ = store.ReadImage(context.Background(), missing) }()
+	<-hold
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := late.Close(expired); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expired cleanup = %v", err)
+	}
+	unblock()
+}

@@ -1328,5 +1328,26 @@
     "before": "fmt.Errorf(\"invalid workdir \\\"%s\\\": not found\", *requested)",
     "after": "fmt.Errorf(\"invalid workdir %q: not found\", *requested)",
     "test": "^TestBash_QuotesWorkdirLikeFileTools$"
+  },
+  {
+    "id": "attachment-observer-rollback",
+    "file": "internal/adapter/attachment/store.go",
+    "before": "return errors.Join(err, store.withdraw(context.Background(), entry))",
+    "after": "return err",
+    "test": "^TestStore_FailedObserverRegistrationLeavesNoCallback$"
+  },
+  {
+    "id": "attachment-observer-quiescence",
+    "file": "internal/adapter/attachment/store.go",
+    "before": "\tdelete(store.observers, entry)\n\tif entry.calls == 0 {",
+    "after": "\tdelete(store.observers, entry)\n\tif entry.calls >= 0 {",
+    "test": "^TestStore_ObserverCleanupWaitsForRunningCallbacks$"
+  },
+  {
+    "id": "provider-watch-rollback",
+    "file": "internal/adapter/model/provider/provider.go",
+    "before": "_ = stop(context.Background()) // undo the watch and catalog published above",
+    "after": "// the watch and catalog stay published",
+    "test": "^TestProviderStartLoginRefreshAndStreamFailures$"
   }
 ]

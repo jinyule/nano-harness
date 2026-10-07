@@ -43,7 +43,7 @@
 - 解析只发生在 provider 请求构造时。`app/llm` 的 `Call.Stream` 先做请求图片预算投影（从 provider 移入，规则不变，base64 长度按 `bytes` 计算），再读取保留下来的引用，结果以 ID 为键放进 `llm.Request.Images`。读取按“ID、类型、字节数、尺寸”这一声明去重：同一对象的多个相同声明共用一次读取，任何声明不同的引用都单独读取校验，不能借用为另一声明验证过的字节，也就不能以较小的 `bytes` 绕过请求图片预算；provider 只负责 base64 编码和 wire 形态。compaction 摘要请求走同一路径。
 - 读取校验：对象必须是普通文件（不跟随链接），长度等于 `bytes`，SHA-256 等于 `id`，解码头部得到的类型与宽高等于引用。
 - 长度、SHA-256、类型或宽高任一不符都按损坏处理，不一致的字节绝不发给 provider。对象缺失或损坏时，该 occurrence 在本次请求中替换为占位文本 `[image unavailable: "<name>" (<id>) is missing or failed verification in the local attachment store]`，请求照常发送；只有取消、存储已停止和其他 I/O 错误使请求失败。
-- 用户同样能看到：存储在读取发现缺失或损坏时通知已注册的 observer，TUI 为每个图片 ID 显示一次 `attachment> image <name> (sha256:<前 12 位>) is missing from|failed verification in the attachment store; the model sees a placeholder instead`。提示不持久化，只含名称与 ID 前缀，不含路径；通知在构造请求的 goroutine 上非阻塞发送，事件队列满时丢弃，下一次请求会再次报告。
+- 用户同样能看到：存储在读取发现缺失或损坏时通知已注册的 observer（注册随调用方 Scope 存在：cleanup 撤销注册并等待已在运行的回调结束，之后不会再有回调；注册时 Scope 已关闭则立即撤销），TUI 为每个图片 ID 显示一次 `attachment> image <name> (sha256:<前 12 位>) is missing from|failed verification in the attachment store; the model sees a placeholder instead`。提示不持久化，只含名称与 ID 前缀，不含路径；通知在构造请求的 goroutine 上非阻塞发送，事件队列满时丢弃，下一次请求会再次报告。
 - 这是与上游的差异，经维护者确认（2026-10-06）：上游此时让读取以明确错误失败，请求随之失败；本仓的会话没有其他恢复手段，之后每个请求都包含该图片，按上游做法会让会话的所有后续请求都失败。
 - replay、resume、`Surface`、fork 种子、TUI 投影和会话检查都不读取附件字节，附件缺失不会让它们失败。
 

@@ -92,8 +92,17 @@ type Store struct {
 	// decode and scale buffers of concurrent reads like upstream's limiter.
 	conversions chan struct{}
 
-	observers    map[uint64]func(session.Image, error)
-	nextObserver uint64
+	observers map[*observer]struct{}
+}
+
+// observer is one ObserveUnavailable registration. calls counts the
+// callbacks running on reader goroutines; idle closes when the last one
+// returns after the registration was withdrawn. Both are guarded by the
+// store mutex.
+type observer struct {
+	notify func(session.Image, error)
+	calls  int
+	idle   chan struct{}
 }
 
 // New constructs an inert store. It does not touch the filesystem.
@@ -269,27 +278,51 @@ func (store *Store) Commit(ctx context.Context, ref session.Image, data []byte) 
 	return store.publish(normalized{data: data, ref: ref})
 }
 
-// ObserveUnavailable calls observer whenever a read finds a referenced
-// object missing or failing verification, until scope cleanup. The call
-// happens on the reading goroutine, so observer must not block.
-func (store *Store) ObserveUnavailable(observer func(session.Image, error), scope *plugin.Scope) error {
-	if observer == nil || scope == nil {
+// ObserveUnavailable calls notify whenever a read finds a referenced object
+// missing or failing verification, until scope cleanup. The call happens on
+// the reading goroutine, so notify must not block. Cleanup withdraws the
+// registration and waits for callbacks already running, so none runs after
+// it returns; a registration whose cleanup cannot be scheduled is withdrawn
+// before the error returns.
+func (store *Store) ObserveUnavailable(notify func(session.Image, error), scope *plugin.Scope) error {
+	if notify == nil || scope == nil {
 		return ErrInvalidConfig
 	}
+	entry := &observer{notify: notify}
 	store.mu.Lock()
-	store.nextObserver++
-	id := store.nextObserver
 	if store.observers == nil {
-		store.observers = map[uint64]func(session.Image, error){}
+		store.observers = map[*observer]struct{}{}
 	}
-	store.observers[id] = observer
+	store.observers[entry] = struct{}{}
 	store.mu.Unlock()
-	return scope.Defer(func(context.Context) error {
-		store.mu.Lock()
-		delete(store.observers, id)
+	if err := scope.Defer(func(ctx context.Context) error { return store.withdraw(ctx, entry) }); err != nil {
+		// A concurrent read may already have captured the entry, so the
+		// rollback also waits for its callback.
+		return errors.Join(err, store.withdraw(context.Background(), entry))
+	}
+	return nil
+}
+
+// withdraw removes entry so no new callback starts, then waits until the
+// callbacks already running return or ctx ends.
+func (store *Store) withdraw(ctx context.Context, entry *observer) error {
+	store.mu.Lock()
+	delete(store.observers, entry)
+	if entry.calls == 0 {
 		store.mu.Unlock()
 		return nil
-	})
+	}
+	if entry.idle == nil {
+		entry.idle = make(chan struct{})
+	}
+	idle := entry.idle
+	store.mu.Unlock()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for attachment observer callbacks: %w", ctx.Err())
+	}
 }
 
 // SaveImage normalizes and stores source bytes that the caller read under
@@ -419,14 +452,24 @@ func (store *Store) unavailable(ref session.Image, err error) error {
 	if !errors.Is(err, session.ErrAttachmentMissing) && !errors.Is(err, session.ErrAttachmentCorrupt) {
 		return err
 	}
+	// Each captured observer counts as running until its callback returns,
+	// so withdrawing it waits instead of racing this goroutine.
 	store.mu.Lock()
-	observers := make([]func(session.Image, error), 0, len(store.observers))
-	for _, observer := range store.observers {
-		observers = append(observers, observer)
+	observers := make([]*observer, 0, len(store.observers))
+	for entry := range store.observers {
+		entry.calls++
+		observers = append(observers, entry)
 	}
 	store.mu.Unlock()
-	for _, observer := range observers {
-		observer(ref, err)
+	for _, entry := range observers {
+		entry.notify(ref, err)
+		store.mu.Lock()
+		entry.calls--
+		if entry.calls == 0 && entry.idle != nil {
+			close(entry.idle)
+			entry.idle = nil
+		}
+		store.mu.Unlock()
 	}
 	return err
 }
