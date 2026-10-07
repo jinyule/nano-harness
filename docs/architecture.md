@@ -191,7 +191,7 @@ goal 领域拒绝 `app/goal.Error` 声明 `GoalError` 加原有 `GOAL_*` 码，g
 
 `internal/adapter/tool/workspace` 是共享的纯值包：启动时解析一次 workspace root，统一实现路径约束、symlink 规则和 sandbox 词汇，由 `cmd` 构造后传给三个 workspace 工具 provider。`cmd` 用 `WithReadOnly` 把当前 spill 分区只读地交给 `read`、`read_image` 与 `grep`。这些工具在执行点用 `ReadableFrom` 从调用方已提交的原始日志授权精确的历史 spill 文件，恢复时更换写入 root 不会撤销日志中的定位符；fork 继承与 compaction 遮蔽的结果也可读回。`shell-tools` 收到不含该分区的 root。
 
-文件四工具的成功结果分别填写 `read` 窗口、`read_image` 显示路径、`write` 操作和 diff、`edit` diff 的类型化 metadata。上游明确声明的失败经保留正文和原因的 `FsError` 包装带出分类；普通 I/O、审批、参数语义、策略日志和图片规范化失败不分类。guarded create 的 link 发布失败按实际目标类型区分碰撞，其他发布失败按 ADR 的边界处理。write 在目标锁内与观察摘要校验共用一次读取，只保留小于 10 MiB 的旧字节；write/edit 在 link/rename 前生成按 LF 比较、三行上下文的 hunk，edit 使用实际前后内容的行变化，超预算片段在复制前跳过。字段、上限与错误映射由 [ADR-0019](decisions/0019-structured-tool-results.md) 拥有。
+文件四工具的成功结果分别填写 `read` 窗口、`read_image` 显示路径、`write` 操作和 diff、`edit` diff 的类型化 metadata。上游明确声明的失败经保留正文和原因的 `FsError` 包装带出分类；普通 I/O、审批、参数语义、策略日志和图片规范化失败不分类。guarded create 的 link 发布失败按实际目标类型区分碰撞，其他发布失败按 ADR 的边界处理。write 在目标锁内与观察摘要校验共用一次读取，只保留小于 10 MiB 的旧字节，在 link/rename 前生成单 hunk。edit 在 rename 和观察更新后，从同一锁内保留的实际前后快照生成按 LF 比较、三行上下文的 hunk；精确路径计算有固定工作预算且可取消，耗尽时返回空 diff 和 truncated，取消由 runtime 产生发布后的 `ABORTED`。超字节预算的片段在复制前跳过。字段、上限与错误映射由 [ADR-0019](decisions/0019-structured-tool-results.md) 拥有。
 
 路径 resolver 逐段确定物理身份，父目录遍历不先做词法清理；含 `..` 的成功路径返回物理显示路径，避免搜索 consumer 再次清理后改变目标。文件发布接受调用 context，在 staging 关闭后、link/rename 前检查取消，发布成功后才更新读取观察。路径边界与提交点由[安全规则](security.md#workspace-文件边界)定义，采纳与差异由 ADR-0007 记录。
 

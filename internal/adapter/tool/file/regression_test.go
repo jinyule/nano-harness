@@ -342,7 +342,11 @@ func TestChangedLines_ProducesShortestValidPaths(t *testing.T) {
 	}
 	for _, a := range sequences {
 		for _, b := range sequences {
-			changes := changedLines(a, b, 0, 0)
+			work := diffWork{}
+			changes, complete := work.changedLines(t.Context(), a, b, 0, 0)
+			if !complete {
+				t.Fatalf("small sequence exceeded the diff budget: %v -> %v", a, b)
+			}
 			posA, posB, cost := 0, 0, 0
 			for _, change := range changes {
 				if change.startA < posA || change.startB < posB || change.endA < change.startA || change.endB < change.startB || change.endA > len(a) || change.endB > len(b) || change.startA == change.endA && change.startB == change.endB || !slices.Equal(a[posA:change.startA], b[posB:change.startB]) {

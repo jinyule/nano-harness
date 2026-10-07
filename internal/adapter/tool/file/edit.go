@@ -104,11 +104,13 @@ func (provider *Provider) edit(ctx context.Context, invocation appTool.Invocatio
 	if err != nil {
 		return appTool.Result{}, err
 	}
-	meta := editMeta(target, raw, edited)
 	if err := writeAtomic(ctx, target, edited, info.Mode().Perm(), false); err != nil {
 		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot edit %q: %w", target, err))
 	}
 	provider.observed.record(invocation.SessionID, target, observed(edited))
+	// Display-only work uses the committed snapshot. Cancellation here leaves
+	// publication and observation intact; runtime replaces success with ABORTED.
+	meta := editMeta(ctx, target, raw, edited)
 	if arguments.ReplaceAll != nil && *arguments.ReplaceAll {
 		return appTool.Result{Text: fmt.Sprintf("The file %s has been updated. All occurrences were successfully replaced.", target), Meta: &session.ToolMeta{Edit: &meta}}, nil
 	}

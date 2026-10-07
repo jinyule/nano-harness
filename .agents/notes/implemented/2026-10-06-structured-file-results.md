@@ -14,7 +14,7 @@
 ## Decision
 
 - 文件 adapter 的私有 `fsError` 实现 `tool.Failure`，`Error` 保留原正文，`Unwrap` 保留原因。workspace、观察、字面匹配、发布前取消和上游明确声明的文件失败使用 ADR 的既有码；read-only 的写拒绝同样为 `FS_SANDBOX_DENIED`。普通 I/O、策略日志、审批、升级语义、offset、图片规范化等未映射失败不分类。缺失文件在保持简短正文的同时保留 resolver 原因。guarded create 的 link 发布失败以目标类型区分普通文件与非普通文件；其 I/O 分类不扩大到暂存阶段。
-- read 从同一实际窗口生成非 nil 行列表、精确总行数和行预览；read_image 只增加 path，图片仍以已提交的附件引用为唯一事实。write/edit 在 link/rename 之前构造 metadata，失败没有 metadata。发布后取消由 runtime 产生 `ABORTED`，已发布文件保持不动。
+- read 从同一实际窗口生成非 nil 行列表、精确总行数和行预览；read_image 只增加 path，图片仍以已提交的附件引用为唯一事实。write 在 link/rename 前构造 metadata；edit 按[工作预算修复](2026-10-06-file-diff-work-budget.md)在发布和观察更新后生成可降级、可取消的 diff。失败没有 metadata。发布后取消由 runtime 产生 `ABORTED`，已发布文件保持不动。
 - write 的 Check 只摘要；Execute 在目标锁内的同一次摘要读取保留小于 10 MiB 的旧内容，两侧任一不可作为文本基础时返回空 diff 并标 truncated。旧内容长度与容量严格小于 10 MiB，读取增长到上限立即丢弃基础，完整摘要仍继续校验且每次读取前检查取消。
 - diff 使用去 BOM、CRLF→LF 的实际前后文本。write 用公共行前后缀生成至多一个 hunk；edit 使用实际前后内容的最短行路径，重叠的三行上下文合并，单个匹配块不决定 hunk 范围。去 BOM 不影响行范围计算；末尾换行参与比较，patch 的缺换行标记不进入片段。先数最终 JSON 转义字节再复制 hunk，超出上限跳过并标 truncated；总预算仍由 F 批归一出口裁剪。
 - `fs-tools-v4` 提升为 v5，其他 token 不动。沿用 `composeApplication` 的 `fs-tools` 插件与 Scope 注册/撤回、观察 cleanup 和关闭顺序；纯错误值与 diff 算法没有 side effect，不新增插件、配置或依赖。ADR-0019 只校正 WP14 拒绝条件、并发创建的分类归属和双方文本基础要求，没有新 ADR。

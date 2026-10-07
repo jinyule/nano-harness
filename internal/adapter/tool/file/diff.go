@@ -2,12 +2,27 @@ package file
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
+
+// maxDiffWork bounds display-only edit path work, including bytes compared or
+// hashed and frontier steps. Exhaustion loses metadata, never the file edit.
+const maxDiffWork = 1 << 20
+
+type diffWork struct{ used int }
+
+func (work *diffWork) take(ctx context.Context, units int) bool {
+	if ctx.Err() != nil || units > maxDiffWork-work.used {
+		return false
+	}
+	work.used += units
+	return true
+}
 
 func diffBasis(raw []byte) string {
 	return strings.ReplaceAll(string(bytes.TrimPrefix(raw, utf8BOM)), "\r\n", "\n")
@@ -44,48 +59,89 @@ func writeMeta(path string, exists bool, before, after []byte) session.WriteMeta
 // lineChange names half-open ranges of changed lines on the two LF bases.
 type lineChange struct{ startA, endA, startB, endB int }
 
-func editMeta(path string, before, after []byte) session.EditMeta {
+func editMeta(ctx context.Context, path string, before, after []byte) session.EditMeta {
+	meta := session.EditMeta{Diffs: []session.FileDiff{}, Truncated: true}
+	if ctx.Err() != nil {
+		return meta
+	}
 	a, b := diffLines(diffBasis(before)), diffLines(diffBasis(after))
-	diffs, truncated := contextualDiffs(path, a, b, changedLines(a, b, 0, 0), false)
-	return session.EditMeta{Diffs: diffs, Truncated: truncated}
+	work := diffWork{}
+	changes, complete := work.changedLines(ctx, a, b, 0, 0)
+	if complete {
+		meta.Diffs, meta.Truncated = contextualDiffs(path, a, b, changes, false)
+	}
+	return meta
 }
 
 // changedLines finds actual line changes on the two file bases, independently
 // of the edit's matching block. Common edges and disjoint replacements avoid
 // diff work; remaining ranges use a shortest edit path with linear memory.
-func changedLines(a, b []string, startA, startB int) []lineChange {
-	for len(a) > 0 && len(b) > 0 && a[0] == b[0] {
+func (work *diffWork) changedLines(ctx context.Context, a, b []string, startA, startB int) ([]lineChange, bool) {
+	for len(a) > 0 && len(b) > 0 {
+		if !work.take(ctx, 1+max(len(a[0]), len(b[0]))) {
+			return nil, false
+		}
+		if a[0] != b[0] {
+			break
+		}
 		a, b, startA, startB = a[1:], b[1:], startA+1, startB+1
 	}
-	for len(a) > 0 && len(b) > 0 && a[len(a)-1] == b[len(b)-1] {
+	for len(a) > 0 && len(b) > 0 {
+		if !work.take(ctx, 1+max(len(a[len(a)-1]), len(b[len(b)-1]))) {
+			return nil, false
+		}
+		if a[len(a)-1] != b[len(b)-1] {
+			break
+		}
 		a, b = a[:len(a)-1], b[:len(b)-1]
 	}
 	if len(a) == 0 && len(b) == 0 {
-		return nil
+		return nil, true
 	}
-	shared := make(map[string]bool, len(a))
+	shared := make(map[string]bool)
 	for _, line := range a {
+		if !work.take(ctx, 1+len(line)) {
+			return nil, false
+		}
 		shared[line] = true
 	}
 	for _, line := range b {
+		if !work.take(ctx, 1+len(line)) {
+			return nil, false
+		}
 		if shared[line] {
-			x, y := bisectLines(a, b)
-			left := changedLines(a[:x], b[:y], startA, startB)
-			return append(left, changedLines(a[x:], b[y:], startA+x, startB+y)...)
+			x, y, complete := work.bisectLines(ctx, a, b)
+			if !complete {
+				return nil, false
+			}
+			left, complete := work.changedLines(ctx, a[:x], b[:y], startA, startB)
+			if !complete {
+				return nil, false
+			}
+			right, complete := work.changedLines(ctx, a[x:], b[y:], startA+x, startB+y)
+			return append(left, right...), complete
 		}
 	}
-	return []lineChange{{startA, startA + len(a), startB, startB + len(b)}}
+	return []lineChange{{startA, startA + len(a), startB, startB + len(b)}}, true
 }
 
 // bisectLines meets forward and reverse Myers frontiers at a shortest-path
 // split. Callers strip equal edges and require a shared interior line, so the
 // split makes progress. Odd path lengths meet after a forward step; even ones
 // meet after a reverse step. Only the current two frontiers are retained.
-func bisectLines(a, b []string) (int, int) {
+func (work *diffWork) bisectLines(ctx context.Context, a, b []string) (int, int, bool) {
 	n, m := len(a), len(b)
 	offset := (n+m+1)/2 + 1
+	// Both frontier lengths are proportional to this range. Refuse allocations
+	// whose initialization alone cannot fit the remaining work budget.
+	if 2*offset+1 > maxDiffWork-work.used {
+		return 0, 0, false
+	}
 	forward, reverse := make([]int, 2*offset+1), make([]int, 2*offset+1)
 	for i := range forward {
+		if !work.take(ctx, 1) {
+			return 0, 0, false
+		}
 		forward[i], reverse[i] = -1, -1
 	}
 	forward[offset+1], reverse[offset+1] = 0, 0
@@ -93,6 +149,9 @@ func bisectLines(a, b []string) (int, int) {
 	for distance := 0; ; distance++ {
 		for side, frontier := range [][]int{forward, reverse} {
 			for diagonal := -distance; diagonal <= distance; diagonal += 2 {
+				if !work.take(ctx, 1) {
+					return 0, 0, false
+				}
 				index := offset + diagonal
 				x := frontier[index-1] + 1
 				if diagonal == -distance || diagonal != distance && frontier[index-1] < frontier[index+1] {
@@ -104,6 +163,9 @@ func bisectLines(a, b []string) (int, int) {
 					if side == 1 {
 						i, j = n-x-1, m-y-1
 					}
+					if !work.take(ctx, 1+max(len(a[i]), len(b[j]))) {
+						return 0, 0, false
+					}
 					if a[i] != b[j] {
 						break
 					}
@@ -112,10 +174,10 @@ func bisectLines(a, b []string) (int, int) {
 				frontier[index] = x
 				other := delta - diagonal
 				if side == 0 && delta%2 != 0 && other >= 1-distance && other <= distance-1 && x+reverse[offset+other] >= n {
-					return x, y
+					return x, y, true
 				}
 				if side == 1 && delta%2 == 0 && other >= -distance && other <= distance && forward[offset+other]+x >= n {
-					return forward[offset+other], forward[offset+other] - other
+					return forward[offset+other], forward[offset+other] - other, true
 				}
 			}
 		}

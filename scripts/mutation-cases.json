@@ -1227,8 +1227,8 @@
   {
     "id": "file-edit-actual-line-changes",
     "file": "internal/adapter/tool/file/diff.go",
-    "before": "changedLines(a, b, 0, 0)",
-    "after": "[]lineChange{{0, len(a), 0, len(b)}}",
+    "before": "changes, complete := work.changedLines(ctx, a, b, 0, 0)",
+    "after": "changes, complete := []lineChange{{0, len(a), 0, len(b)}}, work.used == 0",
     "test": "^TestEditResult_UsesActualChangesInsideLargeReplacement$"
   },
   {
@@ -1258,5 +1258,26 @@
     "before": "staged, err := createTemp(filepath.Dir(target), \".\"+filepath.Base(target)+\".*.tmp\")\n\tif err != nil {\n\t\treturn err",
     "after": "staged, err := createTemp(filepath.Dir(target), \".\"+filepath.Base(target)+\".*.tmp\")\n\tif err != nil {\n\t\treturn fsFailure(\"FS_IO_ERROR\", err)",
     "test": "^TestFileResults_OrdinaryIOStaysUnclassified$|^TestWriteResult_ClassifiesOnlyFailedCreatePublication$"
+  },
+  {
+    "id": "file-edit-diff-work-budget",
+    "file": "internal/adapter/tool/file/diff.go",
+    "before": "ctx.Err() != nil || units > maxDiffWork-work.used",
+    "after": "ctx.Err() != nil",
+    "test": "^TestDiffWork_BoundsSearchAndChecksCancellation$"
+  },
+  {
+    "id": "file-edit-diff-cancellation",
+    "file": "internal/adapter/tool/file/diff.go",
+    "before": "ctx.Err() != nil || units > maxDiffWork-work.used",
+    "after": "units > maxDiffWork-work.used",
+    "test": "^TestDiffWork_BoundsSearchAndChecksCancellation$"
+  },
+  {
+    "id": "file-edit-diff-keeps-caller-context",
+    "file": "internal/adapter/tool/file/edit.go",
+    "before": "meta := editMeta(ctx, target, raw, edited)",
+    "after": "meta := editMeta(context.WithoutCancel(ctx), target, raw, edited)",
+    "test": "^TestEditResult_DiffCancellationKeepsPublishedFile$"
   }
 ]

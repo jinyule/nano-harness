@@ -105,6 +105,8 @@
 
 `write`/`edit` 在创建 staging 前和关闭 staging 后、调用 link/rename 前检查调用 context。检查发现已取消时返回可识别的取消错误，关闭并删除 staging，不更新目标或观察摘要。成功 link/rename 是提交点，之后的取消不回滚文件；当前同步文件 I/O 本身不可中断，取消在它返回后生效。写入创建的新父目录可能保留，取消清理只拥有私有 staging 文件。
 
+edit 的展示 diff 在发布和观察更新后计算，按 [ADR-0019](decisions/0019-structured-tool-results.md#4-每个工具的-meta) 的固定工作预算限制搜索并检查取消。预算耗尽只使 metadata 截断；计算期间取消停止搜索，由 runtime 返回 `ABORTED`，已发布文件与观察保留。它不新增 goroutine、重读目标或回滚提交。
+
 先读后写保护按会话记录 `read` 与 `read_image` 观察到的内容摘要，`write`/`edit` 在审批前无副作用地比较一次当前内容，并在执行点、按目标路径划分的进程内锁下再比较一次（大小变化直接判定为已变化，大文件的摘要可取消）；未读、已删除或已变化的目标按上游文案拒绝。它防止模型覆盖自己没看过的内容，不是授权机制：观察状态不持久化，delegated child 是独立会话，规则见 [ADR-0008](decisions/0008-tool-output-spill-and-observation-policy.md)。
 
 这些检查约束 harness 自身，不宣称抵御同一用户下主动制造 TOCTOU 的恶意进程。需要更强对手模型时应使用独立容器/VM 或基于 descriptor 的安全打开，并新增 ADR。

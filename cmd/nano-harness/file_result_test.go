@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -96,6 +97,46 @@ func TestComposition_FileEditDiffUsesActualChangedLines(t *testing.T) {
 	}
 	input, _ := json.Marshal(requests[2].Input)
 	for _, private := range []string{"old_text", "diffs", "\"meta\""} {
+		if strings.Contains(string(input), private) {
+			t.Fatalf("model input contains metadata field %s", private)
+		}
+	}
+}
+
+func TestComposition_FileEditDiffBudgetDoesNotEnterModelInput(t *testing.T) {
+	before := strings.Repeat("a\n", 1024) + "keep\n" + strings.Repeat("a\n", 1024)
+	after := strings.ReplaceAll(before, "a", "b")
+	assembled, seen := startAssembled(t, []modelStep{
+		{tool: "read", arguments: `{"file_path":"f","limit":1}`},
+		{tool: "edit", arguments: `{"file_path":"f","old_string":"a","new_string":"b","replace_all":true}`},
+		{text: "done"},
+	})
+	allowAssembledWrites(t, assembled)
+	path := filepath.Join(assembledWorkspace(t, assembled), "f")
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if result := assembled.turn(t, "replace the repeated lines"); result.Err != nil || result.Text != "done" {
+		t.Fatalf("turn = %+v", result)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != after { //nolint:gosec // fixed filename in the private workspace from this test's session header
+		t.Fatalf("published file = %q, %v", data, err)
+	}
+	results := orderedToolResults(assembled.records(t))
+	want := &session.ToolMeta{Edit: &session.EditMeta{Diffs: []session.FileDiff{}, Truncated: true}}
+	wantText := fmt.Sprintf("The file %s has been updated. All occurrences were successfully replaced.", path)
+	if len(results) != 2 || results[1].IsError || results[1].Output != wantText || !reflect.DeepEqual(results[1].Meta, want) {
+		t.Fatalf("persisted bounded diff = %+v, want successful result with truncated metadata", results)
+	}
+	requests := seen()
+	if len(requests) != 3 {
+		t.Fatalf("requests = %d", len(requests))
+	}
+	input, _ := json.Marshal(requests[2].Input)
+	if !strings.Contains(string(input), wantText) {
+		t.Fatal("next model input lost the unchanged edit text")
+	}
+	for _, private := range []string{"old_text", "diffs", "\"meta\"", "truncated"} {
 		if strings.Contains(string(input), private) {
 			t.Fatalf("model input contains metadata field %s", private)
 		}

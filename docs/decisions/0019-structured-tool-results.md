@@ -73,7 +73,7 @@ runtime 用 `errors.As` 取得分类，不导入具体工具或领域包。已�
 
 取消按上游分类：调度前和 Execute 前的检查点写 `AbortError/ABORTED_BEFORE_DISPATCH`。Execute 成功返回后发现取消，结果替换为 `AbortError/ABORTED`，同时丢弃 meta 和图片。Execute 返回错误时，无论调用是否已取消，都保留该错误的文本和分类。prepare 已失败的调用（未知工具、参数错误、参数超限）不经过取消检查点，保留自己的分类。
 
-producer 要在外部提交前完成可能失败的 meta 构造。write/edit 的旧内容和新内容在发布前都已知，diff 在 link/rename 之前算好；第 5 节的裁剪总能收敛，所以已发布的文件不会因为 metadata 变成失败结果。
+producer 要在外部提交前完成可能失败的 meta 构造。write 的单 hunk 在 link/rename 前生成；edit 的 diff 是有固定工作预算、总能降级的展示计算，在 rename 成功、观察摘要更新后才生成，使用锁内保留的实际前后快照，不重新读取目标。预算耗尽只丢失 meta 的精确内容，不改变发布或成功正文；计算期间取消立即停止，Execute 仍返回成功，由 runtime 按本节产生 `ABORTED`，文件与观察保持已提交。第 5 节的裁剪总能收敛，所以已发布文件不会因为 metadata 预算变成失败结果。
 
 ### 3. 错误映射
 
@@ -118,13 +118,14 @@ producer 要在外部提交前完成可能失败的 meta 构造。write/edit 的
 | `web_search` | `sources[{url, title?, snippet?, published_at?}], answer?, truncated` | 从 `app/web.SearchResult` 复制去重后的来源和合并后的 Content。`truncated` 是现有结果截断与 meta 预算的并集。 |
 | `web_fetch` | `url, status_code, truncated` | 最终 URL 和 HTTP 状态；`truncated` 是正文渲染的实际截断（provider、来源或输出预算）。格式化与 meta 共用同一次计算，正文不重复存入 meta。 |
 
-与上游的两处差异经协调者确认接受，等 UI 卡片工作开始时再复审：read 不持久化 `lang`；write 的 diff 至多一个 hunk。当前 meta 没有消费方，这两处只影响未来卡片的展示粒度，不影响数据正确性。
+与上游的展示差异经协调者确认接受，等 UI 卡片工作开始时再复审：read 不持久化 `lang`；write 的 diff 至多一个 hunk；edit 的精确 diff 使用本仓固定工作预算，超限返回空 diff 并标 `truncated`。这些差异只影响卡片的展示信息，不影响文件发布或模型正文。
 
 diff 规则：
 
 - 基础文本与 edit 匹配所用的文本相同：去掉 BOM，CRLF 归一为 LF。这与上游的 LF diff 基础一致，CRLF 文件不会显示为整文件改动。
 - write 只在新旧两侧都小于 10 MiB 时读取旧内容，在目标锁内与现有摘要校验同一次读取完成，不额外打开文件，内存上限与 edit 现有的 10 MiB 相同。
 - 每个 hunk 带三行上下文。edit 从实际前后内容的最短行编辑路径生成变化区间，先移除相同的首尾行；同一替换块中的分散变化仍生成独立 hunk，重叠的上下文合并。实现使用标准库和线性空间的 Myers 双向搜索，不依赖匹配参数来划定变化。write 用公共行前缀和后缀确定一个变化区间，至多一个 hunk；这个已接受的粗粒度差异只属于 write。
+- edit 精确路径计算共享固定 1,048,576 个工作单位，所有递归区间共用一次调用的计数器。一次行比较消耗 `1 + max(两行字节数)`，公共行集合的插入或查询消耗 `1 + 行字节数`，一次前沿初始化位置（含正反两侧）或对角搜索步消耗 1；每次消耗前检查调用 context。前沿初始化超过剩余预算时不分配数组。超限立即停止，丢弃全部精确变化，返回 `diffs: [], truncated: true`；不尝试另一轮搜索。LF 基础归一与切行、最终 hunk 组装仍是线性处理，工作单位不是墙钟期限。固定预算的资源理由见 [ADR-0009](0009-background-jobs.md#固定预算与托管环境)：meta 仅用于展示，不能成为拒绝服务或妨碍关闭的入口。
 - 单个 hunk 超过 meta 预算时直接跳过并标记 `truncated`，不先复制完整文本再丢弃。
 
 失败结果一律没有 meta。
