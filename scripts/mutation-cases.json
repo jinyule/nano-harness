@@ -1442,27 +1442,6 @@
     "test": "^TestEngine_CloseoutReportsAnUnreadableLog$"
   },
   {
-    "id": "web-html-self-closing",
-    "file": "internal/adapter/tool/web/html.go",
-    "before": "case namespace != \"\":",
-    "after": "case namespace != \"\" || token.Type == html.SelfClosingTagToken:",
-    "test": "^TestRenderHTML_MatchesUpstreamSemantics$"
-  },
-  {
-    "id": "web-html-foreign-self-closing",
-    "file": "internal/adapter/tool/web/html.go",
-    "before": "if token.Type == html.SelfClosingTagToken {",
-    "after": "if false && token.Type == html.SelfClosingTagToken {",
-    "test": "^TestRenderHTML_MatchesUpstreamSemantics$"
-  },
-  {
-    "id": "web-html-foreign-breakout",
-    "file": "internal/adapter/tool/web/html.go",
-    "before": "foreignBreakout[token.Data] ||",
-    "after": "false && foreignBreakout[token.Data] ||",
-    "test": "^TestRenderHTML_MatchesUpstreamSemantics$"
-  },
-  {
     "id": "settings-watch-quiescence",
     "file": "internal/app/settings/settings.go",
     "before": "if entry.calls == 0 {",
@@ -1503,5 +1482,33 @@
     "before": "overlaps, err := within(workspaceRoot, private.path)",
     "after": "overlaps, err := false, error(nil)",
     "test": "^TestNormalizeConfig_RejectsPrivatePathsThroughWorkspaceLinks$"
+  },
+  {
+    "id": "web-html-scripting-disabled",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "html.ParseOptionEnableScripting(false)",
+    "after": "html.ParseOptionEnableScripting(true)",
+    "test": "^TestRenderHTML_(MatchesUpstreamSemantics|OmitsPathologicalNesting|MarksTemplateDroppedInForeignContent)$"
+  },
+  {
+    "id": "web-html-body-context",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "Data: \"body\", DataAtom: atom.Body",
+    "after": "Data: \"head\", DataAtom: atom.Head",
+    "test": "^TestRenderHTML_(MatchesUpstreamSemantics|OmitsPathologicalNesting|MarksTemplateDroppedInForeignContent)$"
+  },
+  {
+    "id": "web-html-depth-omission",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "return omittedHTML\n\t}\n\tstate :=",
+    "after": "return \"\"\n\t}\n\tstate :=",
+    "test": "^TestRenderHTML_(MatchesUpstreamSemantics|OmitsPathologicalNesting|MarksTemplateDroppedInForeignContent)$"
+  },
+  {
+    "id": "web-html-template-marker",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "if templateStartTags(source) > parsed {",
+    "after": "if false && templateStartTags(source) > parsed {",
+    "test": "^TestRenderHTML_(MatchesUpstreamSemantics|OmitsPathologicalNesting|MarksTemplateDroppedInForeignContent)$"
   }
 ]

@@ -13,7 +13,7 @@
 
 长期展示契约更新在 [ADR-0011](../../../docs/decisions/0011-provider-web-search-and-public-fetch.md)，组件事实归[架构](../../../docs/architecture.md#web-检索与抓取)，测试责任归[测试策略](../../../docs/testing.md)。
 
-- 转换器保留 del/s/strike、checkbox 的布尔 checked 状态、`language-*`、代码围栏和字面量；代码空白与硬换行不参与普通文本清理。词法解析仍由 x/net tokenizer 提供，转换栈与隐式闭合由本仓实现。隐式闭合发生在继承 hidden 前，列表、表格、template 等作用域限制对祖先元素的关闭。
+- 转换器保留 del/s/strike、checkbox 的布尔 checked 状态、`language-*`、代码围栏和字面量；代码空白与硬换行不参与普通文本清理。隐式闭合、作用域与 hidden 继承最初由本仓在 x/net tokenizer 之上实现，现由 x/net/html 解析器的树构建负责，事实归 [HTML 树构建 Note](2026-10-07-web-html-self-closing.md)。
 - 格式化输入和完整输出按 200,000 UTF-16 单元限额，含 header、说明和 footer；汉字计一单元，补充平面字符计两单元，截断不拆 UTF-8。格式化结果进入既有 runtime spill，存储完整的有界结果后生成预览。
 - `web-tools` 仍由 `cmd` 的有序 composition 发布两个注册贡献，Scope 撤销它们；没有新增运行时 effect、goroutine 或配置。算法为工具层的纯转换，错误和取消继续由 service/runtime 处理。已有会话文本仍以已提交 `tool/result` 为准，session 格式与工具定义不变。
 - WP5 删除过期的“未提供 spill”表述；ADR 澄清 tokenizer 与自有转换栈的职责，并记录复用 provider endpoint、无法独立配置检索 endpoint 的代价。

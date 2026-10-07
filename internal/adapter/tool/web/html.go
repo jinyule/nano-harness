@@ -3,26 +3,23 @@ package web
 import (
 	"bytes"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 
 	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
-const (
-	// maxHTMLDepth bounds the open-element stack. Real pages nest a few dozen
-	// levels; deeper input is omitted instead of converted.
-	maxHTMLDepth = 512
-	omittedHTML  = "[HTML content omitted: unable to convert safely.]"
-)
+// omittedHTML replaces HTML the parser refuses: x/net/html rejects input whose
+// open-element stack exceeds 512 elements, which bounds tree construction.
+const omittedHTML = "[HTML content omitted: unable to convert safely.]"
 
 // Elements removed with their content, matching the reference converter.
 var removedElements = map[string]bool{
 	"script": true, "style": true, "noscript": true, "template": true, "iframe": true, "object": true, "embed": true,
 }
 
-// Elements that never take a closing tag and so never enter the stack.
+// HTML elements that never have children.
 var voidElements = map[string]bool{
 	"area": true, "base": true, "br": true, "col": true, "embed": true, "hr": true, "img": true, "input": true,
 	"link": true, "meta": true, "param": true, "source": true, "track": true, "wbr": true,
@@ -63,19 +60,6 @@ type frame struct {
 	language string
 	// namespace is "svg" or "math" for foreign elements and empty for HTML.
 	namespace string
-	// integration marks an SVG or MathML element whose children follow HTML rules.
-	integration bool
-}
-
-// HTML start tags that end SVG or MathML content (the HTML standard's rules
-// for "any other start tag" in foreign content); font breaks out only with a
-// color, face, or size attribute.
-var foreignBreakout = map[string]bool{
-	"b": true, "big": true, "blockquote": true, "body": true, "br": true, "center": true, "code": true, "dd": true,
-	"div": true, "dl": true, "dt": true, "em": true, "embed": true, "h1": true, "h2": true, "h3": true, "h4": true,
-	"h5": true, "h6": true, "head": true, "hr": true, "i": true, "img": true, "li": true, "listing": true, "menu": true,
-	"meta": true, "nobr": true, "ol": true, "p": true, "pre": true, "ruby": true, "s": true, "small": true, "span": true,
-	"strong": true, "strike": true, "sub": true, "sup": true, "table": true, "tt": true, "u": true, "ul": true, "var": true,
 }
 
 type list struct {
@@ -129,95 +113,84 @@ type renderer struct {
 	marker   bool
 }
 
-// renderHTML converts decoded HTML to model-facing Markdown. It removes
-// non-visible content and returns a fixed omission marker for pathological nesting.
+// renderHTML converts decoded HTML to model-facing Markdown. The x/net/html
+// parser builds the tree with full HTML tree construction (implied end tags,
+// formatting-element reconstruction and adoption, foreign content), in the
+// reference converter's body context and with scripting disabled as in its
+// parser; the renderer then removes non-visible content while walking it.
 func renderHTML(source string) string {
-	tokenizer := html.NewTokenizer(strings.NewReader(source))
+	// The reader is in memory, so the only parse error is the depth limit.
+	nodes, err := html.ParseFragmentWithOptions(strings.NewReader(source), &html.Node{Type: html.ElementNode, Data: "body", DataAtom: atom.Body}, html.ParseOptionEnableScripting(false))
+	if err != nil {
+		return omittedHTML
+	}
 	state := &renderer{captures: []*buffer{{}}}
+	parsed := 0
+	for _, node := range nodes {
+		state.walk(node)
+		parsed += countTemplates(node)
+	}
+	text := strings.TrimSpace(state.captures[0].text.String())
+	if templateStartTags(source) > parsed {
+		// x/net/html ignores the rest of the input at a template start tag
+		// processed while SVG or MathML is open; mark what was dropped.
+		return strings.TrimSpace(text + "\n\n" + omittedHTML)
+	}
+	return text
+}
+
+// walk renders one parsed node and its subtree.
+func (state *renderer) walk(node *html.Node) {
+	switch node.Type {
+	case html.TextNode:
+		state.text(node.Data)
+	case html.ElementNode:
+		token := html.Token{Type: html.StartTagToken, Data: node.Data, Attr: node.Attr}
+		if node.Namespace == "" && voidElements[node.Data] {
+			state.void(token)
+			return
+		}
+		state.open(token, node.Namespace)
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			state.walk(child)
+		}
+		state.pop()
+	case html.ErrorNode, html.DocumentNode, html.CommentNode, html.DoctypeNode, html.RawNode:
+	}
+}
+
+// countTemplates counts template elements, in any namespace, in a subtree.
+func countTemplates(node *html.Node) int {
+	count := 0
+	if node.Type == html.ElementNode && node.Data == "template" {
+		count++
+	}
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		count += countTemplates(child)
+	}
+	return count
+}
+
+// templateStartTags counts template start tags outside comments and raw text.
+// The plain tokenizer reads SVG title and style as raw text, so a template
+// there is not counted and its dropped remainder is not marked.
+func templateStartTags(source string) int {
+	tokenizer := html.NewTokenizer(strings.NewReader(source))
+	count := 0
 	for {
 		switch tokenizer.Next() {
 		case html.ErrorToken:
-			// The source is in memory and unbounded by the tokenizer, so the
-			// only error is the end of input; close what remains open.
-			for len(state.stack) > 0 {
-				state.pop()
-			}
-			return strings.TrimSpace(state.captures[0].text.String())
-		case html.TextToken:
-			state.text(string(tokenizer.Text()))
+			return count
 		case html.StartTagToken, html.SelfClosingTagToken:
-			token := tokenizer.Token()
-			namespace := state.namespaceFor(token)
-			switch {
-			case namespace != "":
-				// Foreign elements have no raw text, and their self-closing
-				// slash closes them.
-				tokenizer.NextIsNotRawText()
-				if !state.open(token, namespace) {
-					return omittedHTML
-				}
-				if token.Type == html.SelfClosingTagToken {
-					state.pop()
-				}
-			case voidElements[token.Data]:
-				state.void(token)
-			case !state.open(token, ""):
-				// An HTML element's self-closing slash is ignored: the element
-				// stays open, and raw-text elements read raw text to their end tag.
-				return omittedHTML
+			if name, _ := tokenizer.TagName(); string(name) == "template" {
+				count++
 			}
-		case html.EndTagToken:
-			name, _ := tokenizer.TagName()
-			state.close(string(name))
-		case html.CommentToken, html.DoctypeToken:
+		case html.TextToken, html.EndTagToken, html.CommentToken, html.DoctypeToken:
 		}
 	}
 }
 
 func (state *renderer) current() *buffer { return state.captures[len(state.captures)-1] }
-
-// inForeign reports whether the current element is SVG or MathML content
-// that is not an HTML integration point.
-func (state *renderer) inForeign() bool {
-	if len(state.stack) == 0 {
-		return false
-	}
-	top := state.stack[len(state.stack)-1]
-	return top.namespace != "" && !top.integration
-}
-
-// namespaceFor returns the namespace of the element a start tag creates. A
-// breakout tag first closes the foreign elements above the nearest HTML element
-// or integration point, and is then an HTML element.
-func (state *renderer) namespaceFor(token html.Token) string {
-	if state.inForeign() && (foreignBreakout[token.Data] || token.Data == "font" && (attribute(token, "color") != "" || attribute(token, "face") != "" || attribute(token, "size") != "")) {
-		for state.inForeign() {
-			state.pop()
-		}
-	}
-	if state.inForeign() {
-		return state.stack[len(state.stack)-1].namespace
-	}
-	switch token.Data {
-	case "svg", "math":
-		return token.Data
-	default:
-		return ""
-	}
-}
-
-// integrationPoint reports whether children of a foreign element follow HTML rules.
-func integrationPoint(namespace string, token html.Token) bool {
-	switch {
-	case namespace == "svg":
-		return token.Data == "foreignobject" || token.Data == "desc" || token.Data == "title"
-	case token.Data == "annotation-xml":
-		encoding := strings.ToLower(attribute(token, "encoding"))
-		return encoding == "text/html" || encoding == "application/xhtml+xml"
-	default:
-		return token.Data == "mi" || token.Data == "mo" || token.Data == "mn" || token.Data == "ms" || token.Data == "mtext"
-	}
-}
 
 // flush writes pending separators before visible output. A buffer never starts
 // with a separator, and list markers absorb the separator that follows them.
@@ -311,9 +284,6 @@ func attribute(token html.Token, key string) string {
 }
 
 func (state *renderer) void(token html.Token) {
-	if token.Data == "hr" {
-		state.closeInScope([]string{"p"}, paragraphScope)
-	}
 	if state.hidden > 0 || hiddenElement(token) {
 		return
 	}
@@ -350,29 +320,19 @@ func (state *renderer) void(token html.Token) {
 	}
 }
 
-// open pushes one element in namespace and applies its opening effect. It
-// reports false when the nesting limit is exceeded. Foreign elements only
-// carry visibility; their text renders as plain inline content.
-func (state *renderer) open(token html.Token, namespace string) bool {
-	if namespace == "" {
-		state.closeImplied(token.Data)
-	}
-	if len(state.stack) >= maxHTMLDepth {
-		return false
-	}
+// open pushes one element in namespace and applies its opening effect. Foreign
+// elements only carry visibility; their text renders as plain inline content.
+func (state *renderer) open(token html.Token, namespace string) {
 	current := frame{tag: token.Data, namespace: namespace}
-	if namespace != "" {
-		current.integration = integrationPoint(namespace, token)
-	}
 	if state.hidden > 0 || removedElements[token.Data] || hiddenElement(token) {
 		current.hidden = true
 		state.hidden++
 		state.stack = append(state.stack, current)
-		return true
+		return
 	}
 	if namespace != "" {
 		state.stack = append(state.stack, current)
-		return true
+		return
 	}
 	switch token.Data {
 	case "h1", "h2", "h3", "h4", "h5", "h6":
@@ -426,10 +386,8 @@ func (state *renderer) open(token html.Token, namespace string) bool {
 		current.kind = frameRow
 		state.rows = append(state.rows, &row{header: true})
 	case "th", "td":
+		// The parser places every visible cell in a row of a table.
 		current.kind = frameCell
-		if len(state.rows) == 0 {
-			state.rows = append(state.rows, &row{header: true})
-		}
 		state.rows[len(state.rows)-1].header = state.rows[len(state.rows)-1].header && token.Data == "th"
 		state.capture()
 	default:
@@ -439,55 +397,6 @@ func (state *renderer) open(token html.Token, namespace string) bool {
 		}
 	}
 	state.stack = append(state.stack, current)
-	return true
-}
-
-// HTML start tags close optional end tags before visibility is inherited.
-// Scope boundaries keep a nested list, table or template from closing an
-// ancestor's item or paragraph.
-func (state *renderer) closeImplied(tag string) {
-	switch tag {
-	case "address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl",
-		"fieldset", "figcaption", "figure", "footer", "form", "header", "hgroup", "main", "menu", "nav",
-		"ol", "p", "search", "section", "summary", "ul", "h1", "h2", "h3", "h4", "h5", "h6",
-		"li", "dt", "dd", "pre", "listing", "table":
-		state.closeInScope([]string{"p"}, paragraphScope)
-	}
-	switch tag {
-	case "li":
-		state.closeInScope([]string{"li"}, []string{"ul", "ol", "template"})
-	case "dt", "dd":
-		state.closeInScope([]string{"dt", "dd"}, []string{"dl", "template"})
-	case "h1", "h2", "h3", "h4", "h5", "h6":
-		state.closeInScope([]string{"h1", "h2", "h3", "h4", "h5", "h6"}, paragraphScope)
-	case "tr":
-		state.closeInScope([]string{"tr"}, []string{"table", "template"})
-	case "td", "th":
-		state.closeInScope([]string{"td", "th"}, []string{"tr", "table", "template"})
-	case "thead", "tbody", "tfoot":
-		state.closeInScope([]string{"thead", "tbody", "tfoot"}, []string{"table", "template"})
-	case "option", "optgroup":
-		state.closeInScope([]string{"option"}, []string{"select", "datalist", "template"})
-		if tag == "optgroup" {
-			state.closeInScope([]string{"optgroup"}, []string{"select", "template"})
-		}
-	}
-}
-
-var paragraphScope = []string{"applet", "button", "caption", "html", "table", "td", "th", "marquee", "object", "template"}
-
-func (state *renderer) closeInScope(tags, boundaries []string) {
-	for index, current := range slices.Backward(state.stack) {
-		if slices.Contains(tags, current.tag) {
-			for len(state.stack) > index {
-				state.pop()
-			}
-			return
-		}
-		if slices.Contains(boundaries, current.tag) {
-			return
-		}
-	}
 }
 
 func (state *renderer) capture() {
@@ -517,19 +426,6 @@ func (state *renderer) listMarker() {
 		state.emit(strings.Repeat("  ", len(state.lists)-1) + marker)
 	}
 	state.marker = true
-}
-
-// close pops through the nearest matching open element; an end tag with no
-// matching element is ignored, as browsers do.
-func (state *renderer) close(name string) {
-	for index, open := range slices.Backward(state.stack) {
-		if open.tag == name {
-			for len(state.stack) > index {
-				state.pop()
-			}
-			return
-		}
-	}
 }
 
 func (state *renderer) pop() {
@@ -621,9 +517,6 @@ func (state *renderer) endRow() {
 	}
 	state.breakLines(1)
 	state.emit("| " + strings.Join(current.cells, " | ") + " |")
-	if len(state.tables) == 0 {
-		return
-	}
 	index := len(state.tables) - 1
 	if state.tables[index] == 0 && current.header {
 		state.breakLines(1)

@@ -154,7 +154,7 @@ TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event f
 
 `TestComposition_WebSearchAndFetchEndToEnd` 经真实 CLI config、settings 文件和 composition，让 loopback 模型在一步内调用 `web_search` 与 `web_fetch`：检索请求打到同一 Responses endpoint，抓取经注入 resolver 映射到 loopback 页面且只拨号已校验 IP；测试从磁盘 transcript 断言冻结的 schema、system prompt 指引、检索来源与 HTML 转换结果。`TestComposition_WebSearchUnconfiguredFailsClosed` 证明默认未配置时 `web_search` 返回 `WEB_PROVIDER_UNAVAILABLE` 且不联系 provider。
 
-`TestRenderHTML_MatchesUpstreamSemantics` 用表驱动 fixture 保存参考 `5badb15009ae` 的 Turndown/GFM 预期输出，覆盖删除线、任务状态、代码语言/围栏/空白、Markdown 字面量和隐式闭合的隐藏元素；只归一化 ADR-0011 中的等价排版。`TestFormatFetch_MatchesUpstreamUTF16Budget` 固定 ASCII、汉字、emoji 和 provider footer 的完整预算边界。`TestProvider_FetchSpillsCompleteFormattedOutput` 组装真实 tool runtime、spill store 与 web tools，替换网络结果边界；从磁盘读取预览定位的文件，独立比较 100,000 个汉字的 300,119 字节结果和 Markdown 展开后达到/超过 200,000 单元的结果，证明保存发生在内联截断之前。
+`TestRenderHTML_MatchesUpstreamSemantics` 用表驱动 fixture 保存参考 `5badb15009ae` 的 Turndown/GFM 预期输出，覆盖删除线、任务状态、代码语言/围栏/空白、Markdown 字面量、隐式闭合与自闭合的隐藏元素、foreign content 与 integration point，以及误嵌套格式元素的重建；只归一化 ADR-0011 中的等价排版。与参考有意不同的样本分表记录参考的实际输出。`TestFormatFetch_MatchesUpstreamUTF16Budget` 固定 ASCII、汉字、emoji 和 provider footer 的完整预算边界。`TestProvider_FetchSpillsCompleteFormattedOutput` 组装真实 tool runtime、spill store 与 web tools，替换网络结果边界；从磁盘读取预览定位的文件，独立比较 100,000 个汉字的 300,119 字节结果和 Markdown 展开后达到/超过 200,000 单元的结果，证明保存发生在内联截断之前。
 
 `TestComposition_WebFetchRejectsEncodedNetworkBomb` 走真实配置/composition，从磁盘 tool/result 与下一次模型请求验证上游 too-large 文案，基线源码 overlay 必须失败。
 

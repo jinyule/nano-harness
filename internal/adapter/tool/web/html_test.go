@@ -101,6 +101,72 @@ func TestRenderHTML_MatchesUpstreamSemantics(t *testing.T) {
 		{"annotation-xml xhtml", `<math><annotation-xml encoding="Application/XHTML+XML"><p hidden/>secret</p></annotation-xml></math><p>visible</p>`, "visible", "visible"},
 		{"annotation-xml html unknown element", `<math><annotation-xml encoding="text/html"><g hidden/>x</g></annotation-xml></math><p>after</p>`, "after", "after"},
 		{"annotation-xml without encoding", `<math><annotation-xml><g hidden/>x</annotation-xml></math><p>after</p>`, "x\n\nafter", "x\n\nafter"},
+		// Foreign-content rules from the tree construction dispatcher: font breaks
+		// out when color, face, or size is present at all; mglyph and malignmark
+		// stay MathML below a text integration point; svg below annotation-xml
+		// starts SVG; the annotation-xml encoding must match exactly; CDATA is
+		// text only in foreign content.
+		{"font empty color breakout", `<svg><font color="" hidden/>secret</font></svg><p>visible</p>`, "visible", "visible"},
+		{"font valueless size breakout", `<svg><font size hidden/>secret</font></svg><p>visible</p>`, "visible", "visible"},
+		{"font blank face breakout", `<svg><font face=" " hidden/>secret</font></svg><p>visible</p>`, "visible", "visible"},
+		{"font other attribute stays foreign", `<svg><font class="x" hidden/>x</svg><p>after</p>`, "x\n\nafter", "x\n\nafter"},
+		{"annotation-xml svg foreignObject", `<math><annotation-xml><svg><foreignObject><x hidden/>secret</x></foreignObject></svg></annotation-xml></math><p>visible</p>`, "visible", "visible"},
+		{"annotation-xml svg desc", `<math><annotation-xml><svg><desc><b hidden/>secret</b></desc></svg></annotation-xml></math><p>visible</p>`, "visible", "visible"},
+		{"annotation-xml svg self-closing", `<math><annotation-xml><svg><g hidden/>x</svg></annotation-xml></math><p>after</p>`, "x\n\nafter", "x\n\nafter"},
+		{"annotation-xml padded encoding", `<math><annotation-xml encoding=" text/html"><g hidden/>x</annotation-xml></math><p>after</p>`, "x\n\nafter", "x\n\nafter"},
+		{"annotation-xml uppercase encoding", `<math><annotation-xml encoding="TEXT/HTML"><g hidden/>secret</g></annotation-xml></math><p>visible</p>`, "visible", "visible"},
+		{"mtext mglyph stays mathml", `<math><mtext><mglyph><g hidden/>visible</g></mglyph></mtext></math>`, "visible", "visible"},
+		{"mtext malignmark stays mathml", `<math><mtext><malignmark><g hidden/>visible</g></malignmark></mtext></math>`, "visible", "visible"},
+		{"mi self-closing mglyph", `<math><mi><mglyph/>x</mi></math>`, "x", "x"},
+		{"mglyph breakout stops at mo", `<math><mo><mglyph><b hidden/>secret</b></mglyph></mo></math><p>visible</p>`, "visible", "visible"},
+		{"svg cdata", `<svg><![CDATA[visible]]></svg>`, "visible", "visible"},
+		{"foreignObject cdata", `<svg><foreignObject><![CDATA[inside]]></foreignObject></svg>`, "inside", "inside"},
+		{"html cdata is a comment", `<p><![CDATA[hidden]]>after</p>`, "after", "after"},
+		{"self-closing svg", `<svg/>after`, "after", "after"},
+		{"self-closing hidden math", `<math hidden/>after`, "after", "after"},
+		{"svg inside svg title", `<svg><title><svg><g hidden/>x</g></svg></title></svg>`, "x", "x"},
+		{"math inside svg is svg", `<svg><math><mi><b hidden/>x</b></mi></math></svg><p>after</p>`, "after", "after"},
+		{"svg inside math is mathml", `<math><svg><foreignObject><b hidden/>x</b></foreignObject></svg></math><p>after</p>`, "after", "after"},
+		// End tags: </br> acts as <br> and an unmatched </p> as an empty paragraph.
+		{"end br", `a</br>b`, "a  \nb", "a  \nb"},
+		{"unmatched end p", `a</p>b`, "a\n\nb", "a\n\nb"},
+		{"orphan cells", "<td>loose</td><tr><td>row</td></tr>", "looserow", "looserow"},
+		// Integration points with an element that is not a breakout tag, so the
+		// result depends on the integration point alone.
+		{"foreignObject non-breakout", `<svg><foreignObject><section hidden/>secret</section></foreignObject></svg><p>visible</p>`, "visible", "visible"},
+		{"desc non-breakout", `<svg><desc><section hidden/>secret</section></desc></svg><p>visible</p>`, "visible", "visible"},
+		{"title non-breakout", `<svg><title><section hidden/>secret</section></title></svg><p>visible</p>`, "visible", "visible"},
+		{"mtext non-breakout", `<math><mtext><section hidden/>secret</section></mtext></math><p>visible</p>`, "visible", "visible"},
+		{"mi non-breakout", `<math><mi><section hidden/>secret</section></mi></math><p>visible</p>`, "visible", "visible"},
+		{"mo non-breakout", `<math><mo><section hidden/>secret</section></mo></math><p>visible</p>`, "visible", "visible"},
+		{"mn non-breakout", `<math><mn><section hidden/>secret</section></mn></math><p>visible</p>`, "visible", "visible"},
+		{"ms non-breakout", `<math><ms><section hidden/>secret</section></ms></math><p>visible</p>`, "visible", "visible"},
+		{"annotation-xml html non-breakout", `<math><annotation-xml encoding="text/html"><section hidden/>secret</section></annotation-xml></math><p>visible</p>`, "visible", "visible"},
+		{"annotation-xml svg non-breakout", `<math><annotation-xml><svg><foreignObject><section hidden/>SECRET</section></foreignObject></svg></annotation-xml></math><p>visible</p>`, "visible", "visible"},
+		{"foreign non-breakout self-closes", `<svg><g><section hidden/>x</g></svg><p>after</p>`, "x\n\nafter", "x\n\nafter"},
+		// Misnested formatting: elements closed by an outer end tag or an implied
+		// end are reconstructed with their attributes, and the adoption agency
+		// keeps a hidden block open. Upstream renders the emptied wrappers as
+		// ~~~~ and [](url); the converter omits empty wrappers.
+		{"reconstructed hidden bold", `<i><b hidden>x</i>SECRET</b><p>visible</p>`, "visible", "visible"},
+		{"reconstructed hidden bold to end", `<i><b hidden>x</i>SECRET<p>visible</p>`, "", ""},
+		{"reconstructed display none emphasis", `<s><em style="display:none">x</s>SECRET<p>visible</p>`, "~~~~", ""},
+		{"reconstructed aria-hidden strong", `<a href="/a"><strong aria-hidden="true">x</a>SECRET<p>visible</p>`, "[](/a)", ""},
+		{"reconstructed across paragraphs", `<p><b hidden>x<p>SECRET</p><p>also</p>`, "", ""},
+		{"adoption keeps hidden block", `<b>1<p hidden>2</b>3</p><p>visible</p>`, "**1**\n\nvisible", "**1**\n\nvisible"},
+		{"adoption keeps hidden div", `<a href="x"><div hidden>y</a>SECRET</div><p>visible</p>`, "[](x)\n\nvisible", "visible"},
+		{"adoption pops plain inline", `<b><p><span hidden>x</b>y</span></p>`, "y", "y"},
+		{"reconstructed bold", `<p><b>bold<p>more</p>`, "**bold**\n\n**more**", "**bold**\n\n**more**"},
+		{"reconstructed link", `<p><a href="x">link<p>next</p>`, "[link](x)\n\n[next](x)", "[link](x)\n\n[next](x)"},
+		{"adoption splits bold", `<b>1<p>2</b>3</p>`, "**1**\n\n**2**3", "**1**\n\n**2**3"},
+		{"noah's ark", `<b hidden><b><b><b>x</b></b></b></b>visible`, "visible", "visible"},
+		// The reference parser runs with scripting disabled, so noscript holds
+		// markup that implied end tags can close.
+		{"noscript markup", `<noscript><p>hidden</p></noscript><p>visible</p>`, "visible", "visible"},
+		{"noscript closed by paragraph", `<p>PRE</p><svg><p><noscript/><p>HID</p></noscript></p></svg><p>POST</p>`, "PRE\n\nHID\n\nPOST", "PRE\n\nHID\n\nPOST"},
+		{"noscript text then paragraph", `<p>PRE</p><svg><p><noscript/>HID<p>VIS</p></noscript></p></svg><p>POST</p>`, "PRE\n\nVIS\n\nPOST", "PRE\n\nVIS\n\nPOST"},
+		{"html end tag closes foreign", `<div><svg><g hidden></div>secret</g></svg></div><p>visible</p>`, "secret\n\nvisible", "secret\n\nvisible"},
+		{"unmatched end tag in foreign", `<svg><g hidden></div>secret</g></svg><p>visible</p>`, "visible", "visible"},
 		{"implicit table cells and rows", "<table><thead><tr><th>A<th>B<tbody><tr><td>1<td>2<tr><td>3<td>4</table>", "| A   | B   |\n| --- | --- |\n| 1   | 2   |\n| 3   | 4   |", "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -129,7 +195,6 @@ func TestRenderHTML_ConvertsVisibleContent(t *testing.T) {
 		{"quote", "<blockquote><p>quoted</p><p>more</p></blockquote>after", "> quoted\n>\n> more\n\nafter"},
 		{"table", "<table><thead><tr><th>A|B</th><th>C</th></tr></thead><tbody><tr><td>1</td><td><b>2</b></td></tr><tr></tr></tbody></table>", "| A\\|B | C |\n| --- | --- |\n| 1 | **2** |"},
 		{"table without header", "<table><tr><td>x</td><th>y</th></tr></table>", "| x | y |"},
-		{"orphan cells", "<td>loose</td><tr><td>row</td></tr>", "| row |"},
 		{"hidden", `<p>shown</p><div hidden>no</div><span aria-hidden="TRUE">no</span><span aria-hidden="false">yes</span><p style="color:red; display : none !important">no</p><p style="visibility:collapse">no</p><p style="visibility:hidden">no</p><p style="display">kept</p><input type="hidden" value="x"><div hidden><img src="/x.png"><br></div>`, "shown\n\nyes\n\nkept"},
 		{"removed", "<script>alert('x')</script><style>p{}</style><noscript>n</noscript><template><p>t</p></template><iframe src=x>f</iframe><object>o</object><embed src=x><p>visible</p>", "visible"},
 		{"malformed", "<div><p>open<span>nested</div></b>after<p>last", "opennested\n\nafter\n\nlast"},
@@ -143,13 +208,15 @@ func TestRenderHTML_ConvertsVisibleContent(t *testing.T) {
 	}
 }
 
-// Turndown's domino 2.2.0 parser does not record a self-closing raw-text tag
-// as the last start tag, so its raw text ends at the wrong end tag: it swallows
-// the rest of the page, emits literal end tags, or ends at an ancestor's end
-// tag and leaks script text. The converter follows the HTML standard instead:
-// raw text ends at the element's own end tag. The upstream column records the
+// Where Turndown's domino 2.2.0 parser departs from the current HTML standard,
+// the converter follows the standard. domino does not record a self-closing
+// raw-text tag as the last start tag, so its raw text ends at the wrong end
+// tag: it swallows the rest of the page, emits literal end tags, or ends at an
+// ancestor's end tag and leaks script text. It also predates the rule that
+// </p> and </br> in SVG or MathML end the foreign content; browsers render the
+// following text outside the hidden element. The upstream column records the
 // observed reference output.
-func TestRenderHTML_SelfClosingRawTextFollowsHTMLStandard(t *testing.T) {
+func TestRenderHTML_FollowsHTMLStandardWhereReferenceDiverges(t *testing.T) {
 	for _, test := range []struct {
 		name, source, upstream, want string
 	}{
@@ -159,6 +226,31 @@ func TestRenderHTML_SelfClosingRawTextFollowsHTMLStandard(t *testing.T) {
 		{"script inside ancestor", `<div><script/>"</div>"; leaked</script></div><p>visible</p>`, "\"; leaked\n\nvisible", "visible"},
 		{"textarea", `<textarea/>typed &amp; kept</textarea>`, "typed & kept</textarea></x-turndown>", "typed & kept"},
 		{"title", `<title/>Guide</title><p>body</p>`, "Guide</title><p>body</p></x-turndown>", "Guide\n\nbody"},
+		{"foreign end p", `<svg><g hidden></p>visible</g></svg>`, "", "visible"},
+		{"foreign end br", `<svg><g hidden></br>visible</svg>`, "", "visible"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := renderHTML(test.source); got != test.want {
+				t.Fatalf("got=%q\nwant=%q\nupstream=%q", got, test.want, test.upstream)
+			}
+		})
+	}
+}
+
+// x/net/html ignores the rest of the input at a template start tag processed
+// while SVG or MathML is open, a divergence its source documents. The
+// converter keeps what was parsed and appends the omission marker when the
+// lexical template count exceeds the parsed one. A template inside an SVG
+// title or style is read as raw text by the plain tokenizer and goes unmarked.
+func TestRenderHTML_MarksTemplateDroppedInForeignContent(t *testing.T) {
+	for _, test := range []struct {
+		name, source, upstream, want string
+	}{
+		{"foreignObject", `<p>before</p><svg><foreignObject><template>HID</template></foreignObject></svg><p>POST</p>`, "before\n\nPOST", "before\n\n" + omittedHTML},
+		{"mathml text integration point", `<p>before</p><math><mi><template>x</template></mi></math><p>POST</p>`, "before\n\nPOST", "before\n\n" + omittedHTML},
+		{"nothing parsed", `<svg><foreignObject><template>a</template></foreignObject></svg><p>POST</p>`, "POST", omittedHTML},
+		{"html template", `<template>x</template><p>after</p>`, "after", "after"},
+		{"svg title is not detected", `<p>before</p><svg><title><template>x</template></title></svg><p>POST</p>`, "before\n\nPOST", "before"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := renderHTML(test.source); got != test.want {
@@ -187,24 +279,23 @@ func TestRenderHTML_RemovesForeignScriptAndStyle(t *testing.T) {
 	}
 }
 
+// x/net/html rejects input whose open-element stack exceeds 512 elements; the
+// fragment root counts as one, so 511 nested content elements still convert.
 func TestRenderHTML_OmitsPathologicalNesting(t *testing.T) {
-	deep := strings.Repeat("<div>", maxHTMLDepth+1) + "x"
-	if got := renderHTML(deep); got != omittedHTML {
-		t.Fatalf("deep nesting=%q", got)
-	}
-	limit := strings.Repeat("<span>", maxHTMLDepth) + "x"
-	if got := renderHTML(limit); got != "x" {
-		t.Fatalf("nesting at limit=%q", got)
-	}
-	selfClosing := strings.Repeat("<span>", maxHTMLDepth) + "<div/>x"
-	if got := renderHTML(selfClosing); got != omittedHTML {
-		t.Fatalf("self-closing beyond limit=%q", got)
-	}
-	foreign := strings.Repeat("<span>", maxHTMLDepth-2) + "<svg><g/>x"
-	if got := renderHTML(foreign); got != "x" {
-		t.Fatalf("foreign self-closing at limit=%q", got)
-	}
-	if got := renderHTML("<span>" + foreign); got != omittedHTML {
-		t.Fatalf("foreign self-closing beyond limit=%q", got)
+	for _, test := range []struct {
+		name, source, want string
+	}{
+		{"at limit", strings.Repeat("<span>", 511) + "x", "x"},
+		{"beyond limit", strings.Repeat("<span>", 512) + "x", omittedHTML},
+		{"self-closing html elements stay open", strings.Repeat("<div/>", 512) + "x", omittedHTML},
+		{"implied paragraph", strings.Repeat("<span>", 511) + "</p>x", omittedHTML},
+		{"foreign self-closing at limit", strings.Repeat("<span>", 509) + "<svg><g/>x", "x"},
+		{"foreign self-closing beyond limit", strings.Repeat("<span>", 510) + "<svg><g/>x", omittedHTML},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := renderHTML(test.source); got != test.want {
+				t.Fatalf("got=%q want=%q", got, test.want)
+			}
+		})
 	}
 }

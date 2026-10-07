@@ -256,8 +256,10 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 | IPv6 目的地址只接受 `2000::/3` 全球单播块内、不属于特殊用途范围的地址；上游 `ipaddr.js` 的 `unicast` 分类还接受该块以外的未分配地址，例如 `4000::1`。IPv4 拒绝范围与上游一致 | 全球单播只从 `2000::/3` 分配，块外地址没有可达的公网目的地；按块允许使未来的特殊用途分配默认被拒绝 | ADR-0011 | — |
 | URL 保留 `net/url` 的严格语法，拒绝内部控制字符、反斜杠、非规范 IPv4 拼写等 WHATWG 宽松输入 | 避免 DNS 与 HTTP 对同一输入作不同解释 | ADR-0011 | — |
 | 正文截断落在代理对中间时省略整个字符，可能比上游少用一个 UTF-16 单元 | 不把孤立代理项交给模型 | ADR-0011 | — |
-| HTML 转 Markdown 由本仓转换器实现，与 Turndown 的差异限于等价排版 | 不引入完整 DOM 或 Turndown | ADR-0011 | — |
+| HTML 由 x/net/html 解析器建树后由本仓转换器转为 Markdown；除本表其他行外，与 Turndown 的差异限于等价排版 | 不引入 Turndown；树构建交给实现完整 HTML 解析的依赖 | ADR-0011 | — |
 | `<script/>`、`<style/>`、`<iframe/>`、`<textarea/>`、`<title/>` 等自闭合 raw-text 标签按 HTML 标准处理，原始文本在自身结束标记处结束，之后的内容照常输出；上游 domino 2.2.0 不把自闭合 raw-text 标签记为最后的开始标签，原始文本在错误的结束标记处结束：吞掉页面剩余内容（例如 `<script/>`、`<style/>` 样例输出空串）、输出字面结束标记，或在祖先的结束标记处结束并泄漏脚本文本。SVG 与 MathML 中的 script、style 文本同样移除，上游会保留 | 上游行为来自 domino 的解析缺陷，不复制 | [ADR-0011](decisions/0011-provider-web-search-and-public-fetch.md) | — |
+| SVG/MathML 中的 `</p>`、`</br>` 按当前 HTML 标准结束 foreign 内容，其后文本输出；上游 domino 实现此前的规则，外层隐藏元素保持打开 | 遵循当前标准，浏览器中这些文本同样可见 | ADR-0011 | — |
+| x/net/html 在 SVG/MathML 元素打开时遇到 template 开始标签会忽略其后的全部输入；本仓保留已解析内容并在可检测时追加省略标记，SVG title/style 中的 template 不带标记；上游照常输出后续内容 | 依赖源码注明的偏差，只会少输出内容；组合罕见 | ADR-0011 | x/net/html 修复该偏差 |
 | 检索请求审计记录固定的协议类别而不是完整 endpoint；没有 journal 时失败关闭，上游接线可以省略记录 | 减少部署地址留存；未审计的检索不发送 | ADR-0022 | 需要完整目的地审计 |
 
 #### 运行时、结构化结果与 compaction
