@@ -1374,8 +1374,8 @@
   {
     "id": "private-files-stay-outside-workspace",
     "file": "cmd/nano-harness/main.go",
-    "before": "if contains(workspaceRoot, resolved) || private.directory && contains(resolved, workspaceRoot) {",
-    "after": "if private.directory && (contains(workspaceRoot, resolved) || contains(resolved, workspaceRoot)) {",
+    "before": "overlaps, err := within(workspaceRoot, resolved)",
+    "after": "overlaps, err := private.directory && contains(workspaceRoot, resolved), error(nil)",
     "test": "^TestNormalizeConfig_KeepsSecretsAndSessionsOutsideTheWorkspace$"
   },
   {
@@ -1454,5 +1454,26 @@
     "before": "if !provider.stopped {",
     "after": "if true {",
     "test": "^TestProviderStop_IgnoresCallbacksThatOutliveCleanup$"
+  },
+  {
+    "id": "private-identity-compares-ancestors",
+    "file": "cmd/nano-harness/main.go",
+    "before": "case err == nil && os.SameFile(info, directoryInfo):",
+    "after": "case err == nil && false && os.SameFile(info, directoryInfo):",
+    "test": "^TestNormalizeConfig_JudgesContainmentByFileIdentity$"
+  },
+  {
+    "id": "private-identity-walks-every-ancestor",
+    "file": "cmd/nano-harness/main.go",
+    "before": "case current == filepath.Dir(current):\n\t\t\treturn false, nil",
+    "after": "case true:\n\t\t\treturn false, nil",
+    "test": "^TestNormalizeConfig_JudgesContainmentByFileIdentity$"
+  },
+  {
+    "id": "private-store-reverse-identity",
+    "file": "cmd/nano-harness/main.go",
+    "before": "overlaps, err = within(resolved, workspaceRoot)",
+    "after": "overlaps, err = contains(resolved, workspaceRoot), nil",
+    "test": "^TestNormalizeConfig_JudgesContainmentByFileIdentity$"
   }
 ]

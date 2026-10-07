@@ -38,6 +38,7 @@ var (
 	inspectPath             = os.Lstat
 	absolutePath            = filepath.Abs
 	evaluateLinks           = filepath.EvalSymlinks
+	identifyPath            = os.Stat
 	newTerminal             = tui.New
 )
 
@@ -291,10 +292,48 @@ func separatePrivatePath(workspaceRoot string, private privatePath) error {
 	if err != nil {
 		return fmt.Errorf("resolve %s links: %w", private.name, err)
 	}
-	if contains(workspaceRoot, resolved) || private.directory && contains(resolved, workspaceRoot) {
+	overlaps, err := within(workspaceRoot, resolved)
+	if err == nil && !overlaps && private.directory {
+		overlaps, err = within(resolved, workspaceRoot)
+	}
+	if err != nil {
+		return fmt.Errorf("identify %s location: %w", private.name, err)
+	}
+	if overlaps {
 		return fmt.Errorf("%s %s must lie outside the workspace %s; choose another %s", private.name, private.path, workspaceRoot, private.flag)
 	}
 	return nil
+}
+
+// within reports whether target is directory or lies below it. Spellings
+// are compared first; then every existing ancestor of target, target
+// included, is compared with directory by file identity, because a case- or
+// normalization-insensitive file system such as macOS's default resolves
+// differently spelled names to the same directory. A missing ancestor
+// cannot be an existing directory, and a missing directory contains no
+// existing path, so neither needs a spelling rule of its own.
+func within(directory, target string) (bool, error) {
+	if contains(directory, target) {
+		return true, nil
+	}
+	directoryInfo, err := identifyPath(directory)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for current := target; ; current = filepath.Dir(current) {
+		info, err := identifyPath(current)
+		switch {
+		case err == nil && os.SameFile(info, directoryInfo):
+			return true, nil
+		case err != nil && !errors.Is(err, fs.ErrNotExist):
+			return false, err
+		case current == filepath.Dir(current):
+			return false, nil
+		}
+	}
 }
 
 // resolveExisting resolves links on the longest existing prefix of an

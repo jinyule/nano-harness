@@ -357,7 +357,7 @@ func (writer *nthFailWriter) Write(data []byte) (int, error) {
 
 func restoreMainHooks(t *testing.T) {
 	t.Helper()
-	cwd, config, home, random, inspect, absolute, links := currentWorkingDirectory, userConfigDirectory, userHomeDirectory, readRandom, inspectPath, absolutePath, evaluateLinks
+	cwd, config, home, random, inspect, absolute, links, identify := currentWorkingDirectory, userConfigDirectory, userHomeDirectory, readRandom, inspectPath, absolutePath, evaluateLinks, identifyPath
 	settingsProvider, credentials, modelRuntime := newSettingsProvider, newCredentialStore, newModelRuntime
 	modelProvider, toolRuntime, spillStore, retryService := newModelProvider, newToolRuntime, newSpillStore, newRetryService
 	compactor, sessions, engine := newCompactionService, newSessionManager, newAgentEngine
@@ -372,7 +372,7 @@ func restoreMainHooks(t *testing.T) {
 	t.Cleanup(func() {
 		newAttachmentStore = attachments
 		newWebService, newWebTools = webService, webTools
-		currentWorkingDirectory, userConfigDirectory, userHomeDirectory, readRandom, inspectPath, absolutePath, evaluateLinks = cwd, config, home, random, inspect, absolute, links
+		currentWorkingDirectory, userConfigDirectory, userHomeDirectory, readRandom, inspectPath, absolutePath, evaluateLinks, identifyPath = cwd, config, home, random, inspect, absolute, links, identify
 		newSettingsProvider, newCredentialStore, newModelRuntime = settingsProvider, credentials, modelRuntime
 		newModelProvider, newToolRuntime, newSpillStore, newRetryService = modelProvider, toolRuntime, spillStore, retryService
 		newCompactionService, newSessionManager, newAgentEngine = compactor, sessions, engine
