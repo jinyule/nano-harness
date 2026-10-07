@@ -95,9 +95,11 @@ func TestWriteResult_CreateDirectoryCollisionIsNotRegular(t *testing.T) {
 		return os.Link(from, target)
 	}
 	result := persistedFileResult(t, "write", h.call(t, "write", map[string]any{"file_path": "new", "content": "data"}))
-	wantText := fmt.Sprintf("Error: cannot modify %q: file has not been read — read the file, then retry", h.path("new"))
+	// Like upstream's guarded create, a directory in the way is reported as
+	// such; reading it would not help.
+	wantText := fmt.Sprintf("Error: cannot write %q: not a regular file", h.path("new"))
 	if !result.IsError || result.Error == nil || *result.Error != (session.ToolError{Name: "FsError", Code: "FS_NOT_REGULAR_FILE"}) || result.Meta != nil || result.Output != wantText {
-		t.Fatalf("directory collision = %+v, want FS_NOT_REGULAR_FILE with unchanged text", result)
+		t.Fatalf("directory collision = %+v, want FS_NOT_REGULAR_FILE with the not-a-regular-file text", result)
 	}
 	info, err := os.Stat(h.path("new"))
 	if err != nil || !info.IsDir() {
@@ -282,7 +284,15 @@ func TestWriteResult_ClassifiesOnlyFailedCreatePublication(t *testing.T) {
 				return publicationCause
 			}
 			result := persistedFileResult(t, "write", h.call(t, "write", map[string]any{"file_path": "new", "content": "data"}))
+			// Upstream shows the metadata failure when inspection fails and the
+			// read remedy for every FS_NOT_OBSERVED outcome.
 			wantText := fmt.Sprintf("Error: cannot write %q: %v", h.path("new"), publicationCause)
+			if test.metadata != nil && !errors.Is(test.metadata, fs.ErrNotExist) && !errors.Is(test.metadata, syscall.ENOTDIR) {
+				wantText = fmt.Sprintf("Error: cannot write %q: %v", h.path("new"), test.metadata)
+			}
+			if test.code == "FS_NOT_OBSERVED" {
+				wantText = fmt.Sprintf("Error: cannot modify %q: file has not been read — read the file, then retry", h.path("new"))
+			}
 			if test.collide {
 				wantText = fmt.Sprintf("Error: cannot modify %q: file has not been read — read the file, then retry", h.path("new"))
 				if readFixture(t, h.path("new")) != "external" {
@@ -292,7 +302,7 @@ func TestWriteResult_ClassifiesOnlyFailedCreatePublication(t *testing.T) {
 				t.Fatalf("failed create published a target: %v", err)
 			}
 			if !result.IsError || result.Error == nil || *result.Error != (session.ToolError{Name: "FsError", Code: test.code}) || result.Meta != nil || result.Output != wantText {
-				t.Fatalf("create publication = %+v, want FsError/%s with unchanged text", result, test.code)
+				t.Fatalf("create publication = %+v, want FsError/%s with upstream text %q", result, test.code, wantText)
 			}
 			failure := guardedCreateFailure(h.path("new"), publicationCause)
 			if !errors.Is(failure, publicationCause) || test.metadata != nil && !errors.Is(test.metadata, fs.ErrNotExist) && !errors.Is(test.metadata, syscall.ENOTDIR) && !errors.Is(failure, test.metadata) {

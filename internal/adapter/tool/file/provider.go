@@ -130,22 +130,26 @@ func writeAtomic(ctx context.Context, target string, data []byte, mode fs.FileMo
 	return nil
 }
 
-// guardedCreateFailure classifies only a failed no-replace publication. Target
-// inspection distinguishes a regular-file collision from a directory or link;
-// staging failures and ordinary replacement I/O do not enter this boundary.
+// guardedCreateFailure classifies only a failed no-replace publication and
+// renders upstream's model-facing text for it. Target inspection decides:
+// a regular file in the way, or a collision that vanished again, gets the
+// read remedy (FS_NOT_OBSERVED); a directory or link is not a regular file;
+// a failed inspection reports its own cause. Staging failures and ordinary
+// replacement I/O do not enter this boundary. The error chain keeps the
+// publication cause and any inspection failure.
 func guardedCreateFailure(target string, cause error) error {
 	info, err := lstatFile(target)
 	code, message := "FS_IO_ERROR", fmt.Errorf("cannot write %q: %w", target, cause).Error()
 	switch {
-	case err == nil:
+	case err == nil && info.Mode().IsRegular():
 		code, message = "FS_NOT_OBSERVED", errNotRead(target).Error()
-		if !info.Mode().IsRegular() {
-			code = "FS_NOT_REGULAR_FILE"
-		}
+	case err == nil:
+		code, message = "FS_NOT_REGULAR_FILE", fmt.Sprintf("cannot write %q: not a regular file", target)
 	case !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR):
+		message = fmt.Errorf("cannot write %q: %w", target, err).Error()
 		cause = errors.Join(cause, err)
 	case errors.Is(cause, fs.ErrExist):
-		code = "FS_NOT_OBSERVED"
+		code, message = "FS_NOT_OBSERVED", errNotRead(target).Error()
 	}
 	return &fsError{code: code, message: message, err: cause}
 }

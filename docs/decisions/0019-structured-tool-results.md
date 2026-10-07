@@ -2,7 +2,7 @@
 
 - 状态：Accepted
 - 日期：2026-10-07
-- 决策者：nano-harness maintainers（先补数据，TUI 卡片暂缓，模型可见文本不变；错误分类与差异取舍由协调者在 2026-10-07 确认，原则是对齐上游）
+- 决策者：nano-harness maintainers（先补数据，TUI 卡片暂缓，模型可见文本不变；错误分类与差异取舍由协调者在 2026-10-07 确认，原则是对齐上游；第七轮评审后协调者确认 guarded create 三处失败正文按上游改写）
 - 实施状态：已按批次全部实施，结果与证据见[实施 Note](../../.agents/notes/implemented/2026-10-06-structured-tool-results.md)
 
 ## 背景
@@ -32,7 +32,7 @@ K1（`1a3568a`）给 runtime 加了三个取消检查点：轮到调度时和即
 | jobs、todo、skill、bash 的 tool 包 | 有 output definition，但没有 presentationMeta；这些工具自身的错误是普通 Error，不存在 `JOB_*`、`TODO_*`、`SKILL_*` 一类上游码。 |
 | [`spill/spill-policy`](../../third_party/deepseek-harness/packages/spill/spill-policy/src/index.ts)、[`core/session/src/surface.ts`](../../third_party/deepseek-harness/packages/core/session/src/surface.ts) | spill 和 surface 替换只改 content，保留 error 与 meta。 |
 
-非目标：调整工具名称、参数 schema、guidance、模型可见文本、审批或取消语义；TUI 卡片；持久化完整 canonical value；新增插件、存储或部署配置；自动重试；WP13 的裁剪实现；旧会话迁移。实施分批、验证和证据缺口由[实施 Note](../../.agents/notes/implemented/2026-10-06-structured-tool-results.md)拥有。
+非目标：调整工具名称、参数 schema、guidance、模型可见文本（guarded create 三处失败正文按上游改写，见第 3 节）、审批或取消语义；TUI 卡片；持久化完整 canonical value；新增插件、存储或部署配置；自动重试；WP13 的裁剪实现；旧会话迁移。实施分批、验证和证据缺口由[实施 Note](../../.agents/notes/implemented/2026-10-06-structured-tool-results.md)拥有。
 
 ## 决策
 
@@ -86,13 +86,13 @@ producer 要在外部提交前完成可能失败的 meta 构造。write 的单 h
 | `ToolOutputError` / `INVALID_TOOL_OUTPUT` | 第 2 节的 meta 契约违规。 |
 | `AbortError` / `ABORTED_BEFORE_DISPATCH`、`ABORTED` | 第 2 节的取消检查点。bash 自己返回的 `tool call aborted`（后台启动前、前台等待或交接、job 上限回退执行时调用被取消，或关闭已撤销交接记录）同样是 `AbortError/ABORTED`，与上游 tool-bash 设置的 name 和 code 一致。 |
 | `ToolOutcomeUnknownError` / `TOOL_OUTCOME_UNKNOWN` | JSONL resume 修复写入的 `Error: interrupted before a result was committed`。nano 在执行批次前提交全部 tool/call，未决调用都可能已经开始，因此不写 `TOOL_NOT_STARTED`。 |
-| `FsError` / `FS_NOT_FOUND`、`FS_NOT_REGULAR_FILE` | 路径解析或 read/read_image 的前置 stat 发现目标不存在、路径中间段不是目录（ENOTDIR）；edit 观察到目标缺失；目标是目录或特殊文件，包括 guarded create 的 link 发布失败后检查到非普通文件。前置 stat 成功后的普通 open/read 错误不分类。上游的 `FS_NOT_DIRECTORY` 只用于目录列举，本仓文件工具没有对应路径。 |
+| `FsError` / `FS_NOT_FOUND`、`FS_NOT_REGULAR_FILE` | 路径解析或 read/read_image 的前置 stat 发现目标不存在、路径中间段不是目录（ENOTDIR）；edit 观察到目标缺失；目标是目录或特殊文件，包括 guarded create 的 link 发布失败后检查到非普通文件，此时正文与上游一样是 `cannot write "<p>": not a regular file`。前置 stat 成功后的普通 open/read 错误不分类。上游的 `FS_NOT_DIRECTORY` 只用于目录列举，本仓文件工具没有对应路径。 |
 | `FsError` / `FS_NOT_TEXT`、`FS_TOO_LARGE` | read/edit 遇到二进制或非法 UTF-8；edit 超过 10 MiB；read_image 超过源字节上限。read 的窗口截断是成功，不是 `FS_TOO_LARGE`。 |
-| `FsError` / `FS_NOT_OBSERVED`、`FS_STALE_VERSION` | write/edit 的 `errNotRead`、`errStale`，`FS_NOT_OBSERVED` 包括未读目标、并发创建普通文件导致的盲覆盖拒绝，以及 link 报 EEXIST 后目标已消失；非普通目标使用 `FS_NOT_REGULAR_FILE`。`FS_STALE_VERSION` 包括已读后变化或删除。 |
+| `FsError` / `FS_NOT_OBSERVED`、`FS_STALE_VERSION` | write/edit 的 `errNotRead`、`errStale`，`FS_NOT_OBSERVED` 包括未读目标、并发创建普通文件导致的盲覆盖拒绝，以及 link 报 EEXIST 后目标已消失；与上游 `remediateFsError` 一样，这三种情况的正文都是统一的读取指引 `cannot modify "<p>": file has not been read — read the file, then retry`；非普通目标使用 `FS_NOT_REGULAR_FILE`。`FS_STALE_VERSION` 包括已读后变化或删除。 |
 | `FsError` / `FS_EDIT_NOT_FOUND`、`FS_AMBIGUOUS_EDIT` | 字面替换零次匹配；多次匹配且未设 `replace_all`。 |
 | `FsError` / `FS_ABORTED` | `read aborted`、`write aborted`、`edit aborted`：读取、摘要或发布前发现取消。link/rename 成功后写入即已提交，工具返回成功；若此时调用已取消，按第 2 节替换为 `ABORTED`，文件保持已发布。 |
 | `FsError` / `FS_SANDBOX_DENIED` | workspace 越界或符号链接拒绝；WP14 的 read-only write/edit 拒绝。danger-full-access 放宽路径范围，但仍拒绝写入跨越符号链接。 |
-| `FsError` / `FS_IO_ERROR` | guarded create 的 link 发布失败，检查目标时出现非 ENOENT/ENOTDIR 的 metadata 错误，或目标不存在且 link 错误不是 EEXIST。四个文件工具的普通 stat/open/read/摘要、mkdir、暂存、同步、chmod、close 和 rename 错误保持普通错误；`FS_PERMISSION_DENIED` 只属于上游目录列举，本仓四个文件工具不生成它。策略日志读取失败、升级参数语义错误和图片规范化失败也没有文件分类。 |
+| `FsError` / `FS_IO_ERROR` | guarded create 的 link 发布失败，检查目标时出现非 ENOENT/ENOTDIR 的 metadata 错误（正文与上游一样展示 metadata 错误，错误链同时保留 link 错误），或目标不存在且 link 错误不是 EEXIST（正文展示 link 错误）。四个文件工具的普通 stat/open/read/摘要、mkdir、暂存、同步、chmod、close 和 rename 错误保持普通错误；`FS_PERMISSION_DENIED` 只属于上游目录列举，本仓四个文件工具不生成它。策略日志读取失败、升级参数语义错误和图片规范化失败也没有文件分类。 |
 | `SearchError` / `SEARCH_INVALID_PATTERN`、`SEARCH_FAILED`、`SEARCH_RAW_OUTPUT_OVERFLOW`、`SEARCH_ABORTED` | rg 拒绝正则或 glob；搜索根失败、显式特殊文件、启动失败、信号、非 0/1 退出、`--json` 输出畸形；stdout 超过 20,000,000 字节；搜索超时或调用方取消。rg 缺失或版本过低是启动错误，不产生工具结果。 |
 | `WebError` / `app/web` 的全部 Code | 包括上游同名码和本仓已有的 `WEB_SEARCH_TIMEOUT`、`WEB_REQUEST_RECORD_FAILED`；文本保持 `<CODE>: <message>`。非 2xx HTTP 是成功结果。 |
 | `SandboxUnavailableError` / `SANDBOX_UNAVAILABLE` | 前台 bash 的 runner 缺失或失败，即 `errors.Is(err, process.ErrSandboxUnavailable)`；文本保留上游 `SandboxUnavailableError` 原文，按实际 launch mode 使用 `read-only` 或 `workspace-write`，runner 故障保留 `Runner failure: <行>`。`danger-full-access` 使用 host runner，不要求 sandbox 后端。platform 不依赖领域层，分类在 shell adapter 补上。后台 job 的 runner 失败只记录为 failed 状态，不是工具错误。 |
@@ -118,14 +118,14 @@ producer 要在外部提交前完成可能失败的 meta 构造。write 的单 h
 | `web_search` | `sources[{url, title?, snippet?, published_at?}], answer?, truncated` | 从 `app/web.SearchResult` 复制去重后的来源和合并后的 Content。`truncated` 是现有结果截断与 meta 预算的并集。 |
 | `web_fetch` | `url, status_code, truncated` | 最终 URL 和 HTTP 状态；`truncated` 是正文渲染的实际截断（provider、来源或输出预算）。格式化与 meta 共用同一次计算，正文不重复存入 meta。 |
 
-与上游的展示差异经协调者确认接受，等 UI 卡片工作开始时再复审：read 不持久化 `lang`；write 的 diff 至多一个 hunk；edit 的精确 diff 使用本仓固定工作预算，超限返回空 diff 并标 `truncated`。这些差异只影响卡片的展示信息，不影响文件发布或模型正文。
+与上游的展示差异经协调者确认接受，等 UI 卡片工作开始时再复审：read 不持久化 `lang`；write 的 diff 至多一个 hunk；edit 的精确 diff 使用本仓固定工作预算，超限返回空 diff 并标 `truncated`；edit 保证最短行变化，但存在多条等长最短路径时（文件含重复行，如空行、`}`），选中的路径以及由此产生的 hunk 起止和数量不保证与上游 jsdiff 9 的 `structuredPatch` 相同。第七轮评审的随机差分中，含重复行的 19,681 例有 2,557 例路径不同（462 例 hunk 数不同），两边的编辑距离都等于最短距离；行全部唯一的 18,865 例完全一致。差异从剥离公共首尾时就已产生，不只在双向搜索的相遇点，所以对齐需要整体改用 jsdiff 的正向取舍，本次不重写。这些差异只影响卡片的展示信息，不影响文件发布或模型正文。
 
 diff 规则：
 
 - 基础文本与 edit 匹配所用的文本相同：去掉 BOM，CRLF 归一为 LF。这与上游的 LF diff 基础一致，CRLF 文件不会显示为整文件改动。
 - write 只在新旧两侧都小于 10 MiB 时读取旧内容，在目标锁内与现有摘要校验同一次读取完成，不额外打开文件，内存上限与 edit 现有的 10 MiB 相同。
 - 每个 hunk 带三行上下文。edit 从实际前后内容的最短行编辑路径生成变化区间，先移除相同的首尾行；同一替换块中的分散变化仍生成独立 hunk，重叠的上下文合并。实现使用标准库和线性空间的 Myers 双向搜索，不依赖匹配参数来划定变化。write 用公共行前缀和后缀确定一个变化区间，至多一个 hunk；这个已接受的粗粒度差异只属于 write。
-- edit 精确路径计算共享固定 1,048,576 个工作单位，所有递归区间共用一次调用的计数器。一次行比较消耗 `1 + max(两行字节数)`，公共行集合的插入或查询消耗 `1 + 行字节数`，一次前沿初始化位置（含正反两侧）或对角搜索步消耗 1；每次消耗前检查调用 context。前沿初始化超过剩余预算时不分配数组。超限立即停止，丢弃全部精确变化，返回 `diffs: [], truncated: true`；不尝试另一轮搜索。LF 基础归一与切行、最终 hunk 组装仍是线性处理，工作单位不是墙钟期限。固定预算的资源理由见 [ADR-0009](0009-background-jobs.md#固定预算与托管环境)：meta 仅用于展示，不能成为拒绝服务或妨碍关闭的入口。
+- edit 精确路径计算共享固定 1,048,576 个工作单位，所有递归区间共用一次调用的计数器。一次行比较消耗 `1 + max(两行字节数)`，公共行集合的插入或查询消耗 `1 + 行字节数`，一次前沿初始化位置（含正反两侧）或对角搜索步消耗 1；每次消耗前检查调用 context。前沿初始化超过剩余预算时不分配数组。超限立即停止，丢弃全部精确变化，返回 `diffs: [], truncated: true`；不尝试另一轮搜索。LF 基础归一与切行、最终 hunk 组装仍是线性处理，工作单位不是墙钟期限。公共首尾的逐行比较也计入预算，所以无论编辑距离多小，约 1 MiB 以上的文件都可能在扫描首尾时就耗尽预算，edit 的 meta 为空并标 `truncated`；例如 80 字节短行、1,100,010 字节的文件只改末行时即如此。这是预算契约的已知后果，不是违约；改善它需要另行调整预算契约，而不是取消扫描计费，因为这些扫描在递归子区间中会重复执行。固定预算的资源理由见 [ADR-0009](0009-background-jobs.md#固定预算与托管环境)：meta 仅用于展示，不能成为拒绝服务或妨碍关闭的入口。
 - 单个 hunk 超过 meta 预算时直接跳过并标记 `truncated`，不先复制完整文本再丢弃。
 
 失败结果一律没有 meta。
@@ -208,4 +208,4 @@ composition 不匹配的旧会话在 Open 和 Inspect 中都会被拒绝，与�
 
 ## 复审触发条件
 
-并行分支合入后改变了错误路径、DTO、token 或持久化策略（尤其是 WP14 的 sandbox 拒绝）；首次发布用户会话数据；WP13 需要实际裁剪、移动 metadata 或改变 summary 输入；TUI 卡片需要 jobs、subagent 等新数据，或需要上游的 `reason`；实测 metadata 导致会话容量、写入延迟或常驻内存问题；UI 卡片工作开始（复审 `lang` 与单 hunk diff 两处差异）；上游改变 error/meta 形态、取消替换规则或引入更严格的通用上限。
+并行分支合入后改变了错误路径、DTO、token 或持久化策略（尤其是 WP14 的 sandbox 拒绝）；首次发布用户会话数据；WP13 需要实际裁剪、移动 metadata 或改变 summary 输入；TUI 卡片需要 jobs、subagent 等新数据，或需要上游的 `reason`；实测 metadata 导致会话容量、写入延迟或常驻内存问题；UI 卡片工作开始（复审 `lang`、单 hunk write diff、edit 等长最短路径的取舍与 jsdiff 不同、约 1 MiB 以上文件因扫描计费丢失 edit diff 这几处差异）；上游改变 error/meta 形态、取消替换规则或引入更严格的通用上限。

@@ -1255,8 +1255,8 @@
   {
     "id": "file-create-collision-checks-type",
     "file": "internal/adapter/tool/file/provider.go",
-    "before": "if !info.Mode().IsRegular() {",
-    "after": "if info.Mode().IsRegular() {",
+    "before": "case err == nil && info.Mode().IsRegular():",
+    "after": "case err == nil && !info.Mode().IsRegular():",
     "test": "^TestWriteResult_CreateDirectoryCollisionIsNotRegular$"
   },
   {
@@ -1286,5 +1286,19 @@
     "before": "meta := editMeta(ctx, target, raw, edited)",
     "after": "meta := editMeta(context.WithoutCancel(ctx), target, raw, edited)",
     "test": "^TestEditResult_DiffCancellationKeepsPublishedFile$"
+  },
+  {
+    "id": "file-edit-diff-frontier-guard",
+    "file": "internal/adapter/tool/file/diff.go",
+    "before": "if 2*offset+1 > maxDiffWork-work.used {",
+    "after": "if false && 2*offset+1 > maxDiffWork-work.used {",
+    "test": "^TestBisectLines_RefusesFrontiersTheBudgetCannotInitialize$"
+  },
+  {
+    "id": "file-edit-diff-hunk-merge-boundary",
+    "file": "internal/adapter/tool/file/diff.go",
+    "before": "change.startA <= hunks[len(hunks)-1].endA && change.startB <= hunks[len(hunks)-1].endB",
+    "after": "change.startA < hunks[len(hunks)-1].endA && change.startB < hunks[len(hunks)-1].endB",
+    "test": "^TestEditMeta_MergesHunksAtJsdiffBoundary$"
   }
 ]
