@@ -95,7 +95,7 @@
 - `edit`：未观察时报告上述 `cannot modify` 文案；观察到不存在时报告 `cannot edit "<p>": not found`；观察到存在但文件已删除或内容变化时报告 `cannot edit "<p>": file changed since it was read — re-read the file, then retry`。
 - 校验与发布在按目标路径划分的锁下完成：同一进程内对同一文件的 write/edit 串行，不同文件互不阻塞。当前大小与观察时不同即判定已变化，不读文件；大小相同时才比较摘要。批次内顺序沿用 runtime 规则：前面的并发 `read` 完成后，后面的 exclusive `edit` 才会运行，因而能看到观察结果。
 - 与上游一样，观察状态不持久化。resume 后、以及 delegated child（独立会话）都从空状态开始，必须重新读取。Scope 关闭时清空全部状态。
-- 观察校验进行两次。`Check(Invocation, A)` 在 approval 之前无副作用地完成同样的判断，未读、已删除或已变化的目标不会触发提问；执行点在目标路径的锁下再判断一次，拒绝 approval 等待期间发生的变化。`Check` 没有 context，因此只对不超过 10 MiB（`edit` 的上限）的文件求摘要，更大的文件留给执行点；执行点的摘要每读 64 KiB 检查一次取消。`edit` 读取的文件本身不超过 10 MiB。
+- 观察校验进行两次。`Check(ctx, Invocation, A)` 在 approval 之前无副作用地完成同样的判断，未读、已删除或已变化的目标不会触发提问；执行点在目标路径的锁下再判断一次，拒绝 approval 等待期间发生的变化。两处摘要都每读 64 KiB 前检查一次调用 context。`Check` 只对不超过 10 MiB（`edit` 的上限）的已观察文件求摘要，更大的已观察文件是否变化留给执行点判定：执行点总会在目标锁下重新求摘要，审批前对超大文件完整读一遍只是重复的 I/O；取 `edit` 上限使 edit 的全部合法目标都能在提问前判定，只有大小未变的超大 write 目标会在 approval 之后才被拒绝。`edit` 读取的文件本身不超过 10 MiB。
 
 `write` 与 `edit` 逐字贡献上游 guidance，按上游 section order 新增 `OrderWrite = 1200`、`OrderEdit = 1300`。`write` 的段落在 `edit` 可见时附加 “and prefer edit for targeted changes”。工具 schema 不变。
 

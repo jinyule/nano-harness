@@ -38,7 +38,7 @@ subagent 工具名称不变；它们的 schema 改用共享子集表达，去掉
 
 `internal/app/tool` 提供 `Spec[A]` 和 `Define`。参数 schema 只声明一次，同时用于序列化、校验和解码到类型化参数 `A`；`Define` 检查 `A` 的字段与声明成员一一对应。支持的子集是上游 `defineTool` 子集中当前工具用到的部分：可带 enum 的 string、number、boolean、array 和显式开放性的嵌套 object。序列化键序与上游编译器一致。
 
-参数在调度前校验，违规按上游遍历顺序全部列出。缺少必填、类型不符、null、非有限数和 `-0` 的处理与上游相同。本仓额外拒绝重复键和未声明的根成员：上游根对象开放，会静默忽略拼错的参数名，与本仓“边界严格校验、禁止静默接受错误输入”的规则冲突。模型可见 schema 不因此改变。语义检查（例如非空路径、正整数行号、升级参数成对）和路径约束由 `Check(Invocation, A)` 在该调用轮到时、审批之前完成，因此能观察同一批次前序调用的效果；会话范围的检查（例如 [ADR-0008](0008-tool-output-spill-and-observation-policy.md) 的先读后写）通过 `Invocation` 取得会话。`Check` 时 `Invocation.Approved` 恒为 false，`Check` 不得产生副作用，执行点仍须重新检查。
+参数在调度前校验，违规按上游遍历顺序全部列出。缺少必填、类型不符、null、非有限数和 `-0` 的处理与上游相同。本仓额外拒绝重复键和未声明的根成员：上游根对象开放，会静默忽略拼错的参数名，与本仓“边界严格校验、禁止静默接受错误输入”的规则冲突。模型可见 schema 不因此改变。语义检查（例如非空路径、正整数行号、升级参数成对）和路径约束由 `Check(ctx, Invocation, A)` 在该调用轮到时、审批之前完成，因此能观察同一批次前序调用的效果；会话范围的检查（例如 [ADR-0008](0008-tool-output-spill-and-observation-policy.md) 的先读后写）通过 `Invocation` 取得会话。`Check` 时 `Invocation.Approved` 恒为 false，`Check` 不得产生副作用，执行点仍须重新检查。
 
 失败结果的文本采用上游 `Error: <message>` 格式（未知工具为 `Error: unknown tool "<name>"`），session resume 补写的中断结果也使用同一格式，模型在本仓和上游看到相同的失败形态。调用轮到调度时和即将进入 Execute 时发现取消，返回 `Error: tool call aborted before dispatch`；Execute 成功返回后才发现取消，结果替换为 `Error: tool call aborted`；Execute 返回的错误无论调用是否已取消都保留原文本。这与上游 `ToolRegistry` 两处取消替换都以 `!isError` 为前提一致，例如被取消的规划审查返回提问服务自己的 `ask_user_question was aborted before the user answered`。审批失败沿用本仓的 `Error: approval <outcome>`，因为上游 Base 只在 sandbox 升级时询问，没有对应文案。执行上下文 `Invocation` 提供当前 call ID、turn、step 和调用方 durable journal，供需要写会话事实的工具使用；没有 journal 时这类工具失败关闭。
 

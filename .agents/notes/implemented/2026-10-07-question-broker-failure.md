@@ -22,7 +22,7 @@ ADR-0019 的映射行、架构与测试文档同步更新。
 
 ## Consequences
 
-transcript 中的 `NO_PROVIDER` 现在可以可靠地表示“没有回答面”，回答面故障与答案批不符没有上游分类，与上游一致。代价是本仓不再保留 broker 故障的原因；之前同样没有保留。仍有一处有意保留的差异：broker 返回已分类错误且调用随后被取消时，本仓先报告 `ASK_ABORTED`，上游会先重抛 broker 的分类；改变它会改变模型可见文本，不在本次范围。
+transcript 中的 `NO_PROVIDER` 现在可以可靠地表示“没有回答面”；回答面故障与答案批不符不带分类，这一点与上游一致。但上游会原样重抛 broker 返回的 `UserQuestionError`，并保留普通错误的原 message；本仓在 context 有效时把 `ErrCancelled` 以外的 broker 错误一律改为固定文案、不分类。生产环境唯一的 broker（TUI）只返回 `ErrCancelled`、`ErrNotRunning` 或 context 错误，目前对运行时没有影响；该差异记录在 [ADR-0014](../../../docs/decisions/0014-user-questions-and-plan-mode.md) 与参考分析的偏差表中。代价是本仓不再保留 broker 故障的原因；之前同样没有保留。仍有一处有意保留的差异：broker 返回已分类错误且调用随后被取消时，本仓先报告 `ASK_ABORTED`，上游会先重抛 broker 的分类；改变它会改变模型可见文本，不在本次范围。
 
 ## Verification
 

@@ -180,13 +180,14 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 | 请求图片预算在发送前确定性投影（每请求 20 张、base64 合计 10 MiB），不记录 `image/offload`、不在失败后重试 | 没有 provider 返回可计数的图片预算错误；同一日志重建的请求省略同一组图片 | ADR-0015、ADR-0017 | 某个 provider 开始返回可计数的图片预算错误，或请求体上限变化 |
 | 附件缺失或损坏时，本次请求以占位文本代替该图片并提示用户；上游让请求失败。引用不持久化上游可选的 `originalDimensions` | 会话没有其他恢复手段，照搬上游会让之后每个请求都失败，维护者已确认；源尺寸已写在信封文本中 | ADR-0017 | — |
 | `read` 的 meta 不存语言提示 `lang`；`write` 的 diff 至多一个 hunk，上游用 jsdiff 生成最小 hunk | meta 当前没有消费方；只用标准库、线性时间 | ADR-0019 | UI 卡片工作开始 |
+| `edit` 的精确 diff 共享固定工作预算（1,048,576 个工作单位，行比较与散列按字节计入），耗尽时返回空 `diffs` 并标 `truncated`；上游 jsdiff 没有预算。实际效果是约 1 MiB 以上的文件即使只改一行，edit 也可能没有 diff。edit 保证最短的行变化，但等长最短路径的选择与对应 hunk 不保证与 jsdiff 相同 | diff 只用于展示，固定预算限制 CPU 与内存且总能降级，不影响文件发布或模型正文；不为展示路径逐项一致而移植 jsdiff | [ADR-0019](decisions/0019-structured-tool-results.md#4-每个工具的-meta) | UI 卡片工作开始 |
 
 #### 搜索与 spill
 
 | 偏差 | 理由 | 权威 | 复审条件 |
 |---|---|---|---|
 | 取消与关闭立即 SIGKILL 整个进程组，管道排空最多 1 s；上游 TERM→3 s→KILL | 只读搜索没有需提交的子进程状态，优先尽快静止 | ADR-0007、ADR-0009 | — |
-| 搜索根必须在 workspace 内（`grep` 另可读 spill），以规范化的相对路径交给 ripgrep；不传 `HOME`，用户全局 git excludes 不生效；`grep` 拒绝 FIFO 等显式特殊文件 | workspace 边界与固定环境 allowlist | ADR-0007 | — |
+| read-only 与 workspace-write 下，搜索根必须在 workspace 内（`grep` 另可读 spill）；standing full access 下 `grep` 的显式路径可以在 workspace 之外，`glob` 仍限 workspace。workspace 内的搜索根以规范化的相对路径交给 ripgrep；不传 `HOME`，用户全局 git excludes 不生效；`grep` 拒绝 FIFO 等显式特殊文件 | workspace 边界与固定环境 allowlist | ADR-0007、ADR-0021 | — |
 | ripgrep 是运行前提：从 PATH 发现，低于 15.0.0 时启动失败，发布制品不包含它；上游随 `@vscode/ripgrep` 打包 | 不为六个目标分发和审计第三方二进制 | ADR-0007 | ripgrep 新版本改变所用参数或输出，或需要提高最低版本 |
 
 #### shell 与 job
@@ -218,6 +219,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 | `todo/write` 增加 `call_id`；列表最多 256 项、每项 2048 字节 | 日志能证明快照来自哪个已提交的 `todo_write` call；持久化有界 | ADR-0010 | — |
 | 提问请求另有上限（16 题、每题 32 个选项、id 1–128 字节且唯一、同题标签唯一），并校验 broker 返回的答案批 | 答案以标签回指选项；不符时失败关闭 | ADR-0014 | — |
 | 等待中取消优先于 broker 的任何返回：合法答案或 broker 返回的已分类错误都报告为 `ASK_ABORTED`。上游成功答案不再检查中止，`UserQuestionError` 先于中止检查重抛 | 已取消的调用不能产生成功审查或待生效的退出选择 | ADR-0014、ADR-0019 | — |
+| context 仍有效时，broker 返回 `ErrCancelled` 以外的任何错误都改为固定文案 `no user-questions answerer accepted the request` 且不分类：broker 的已分类错误不再保留分类，普通错误不保留原 message。上游对 `UserQuestionError` 原样重抛，普通错误保留原 message 重抛。生产环境唯一的 broker（TUI）只返回 `ErrCancelled`、`ErrNotRunning` 或 context 错误，目前对运行时没有影响 | 不把 broker 内部的分类或原因带进模型结果与日志 | ADR-0014、ADR-0019 | 出现会返回已分类错误或有意义原因的第二个 broker |
 | 本仓额外拒绝未知 intent kind，归入 `BAD_INTENT`；上游以类型约束同一条件 | 不为同一条件新造码 | ADR-0019 | — |
 | `ask_user_question` 结果中的 U+2028/U+2029 被 Go 转义，`JSON.stringify` 不转义 | JSON 语义相同的已知字节差异 | ADR-0014 | — |
 | fork child 不继承规划模式；上游继承 | child 不能选择模式也不能通过审查，继承后无法离开 | ADR-0014 | — |
@@ -292,7 +294,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 - Windows：CI 只做本机 build/version。逐段路径解析、spill 私有性不按权限位判断、非 Unix runner 只终止直接子进程，都没有原生运行证据；Windows sandbox 后端未实现。平台证据范围见[测试策略](testing.md#平台与发布证据范围)。
 - live provider：三个 provider 的检索请求与工具结果图片只有 loopback 协议证据；Codex Responses 对 `web_search` 工具和数组形态 `function_call_output` 的接受度未经 live 验证。
 - 首次发布迁移：新增记录与 composition token 提升都依靠 composition mismatch 拒绝旧会话。本仓尚无发布 tag；首次向用户发布会话数据前，必须按[根规则](../AGENTS.md#当前阶段)由 ADR 决定版本识别、拒绝或迁移策略，以及数据保留和恢复路径。
-- 容量与取消：会话文本超过约 16 MiB 时 provider 请求体可能超限，正常运行由主动 compaction 约束，尚无真实触发证据；`Check` 不接收 `context.Context`，由 10 MiB 前置上限和执行点可取消读取覆盖。
+- 容量与取消：会话文本超过约 16 MiB 时 provider 请求体可能超限，正常运行由主动 compaction 约束，尚无真实触发证据。
 
 ## 工程执行证据补充
 

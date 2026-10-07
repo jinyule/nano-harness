@@ -72,7 +72,7 @@ ADR 编号预先分配，避免并行分支冲突；审查修复期间追加 001
 | 2026-10-04 | 根对象未声明参数一律拒绝（比上游严格，schema 不变）；错误前缀统一为上游 `Error: ` | WP1 | ADR-0007 |
 | 2026-10-04 | `tool.Invocation` 携带调用方 durable journal 与 turn/step/call ID，供工具记录引用调用的会话事实 | 协调者 | [架构](../../../docs/architecture.md) |
 | 2026-10-05 | `glob`/`grep` 调用 ripgrep，删除纯 Go 实现；缺失或低于 15.0.0 时启动失败 | 维护者 | ADR-0007 |
-| 2026-10-05 | `Spec.Check` 为 `func(Invocation, A) error`，先读后写在审批前与执行点各校验一次 | WP2 提出，协调者确认 | ADR-0007、ADR-0008 |
+| 2026-10-05 | `Spec.Check` 接收 `Invocation`（WP14 起另接收调用 context），先读后写在审批前与执行点各校验一次 | WP2 提出，协调者确认 | ADR-0007、ADR-0008 |
 | 2026-10-05 | 超过 12,500 token 的结果 spill，分区按 workspace，spill root 不得与 workspace 互相包含 | WP2、整体审查 | ADR-0008 |
 | 2026-10-05 | 完成通知以带 source kind 的 `user/message` 送达；`user` 来源只允许前端人类输入，由守卫测试强制 | WP3、WP10 | ADR-0009、ADR-0016 |
 | 2026-10-05 | 委派深度保持本仓的 4（上游 1）；`interrupt_agent` 也作用于运行中的 one-shot 后代 | WP7 | ADR-0013 |
@@ -102,7 +102,7 @@ ADR 编号预先分配，避免并行分支冲突；审查修复期间追加 001
 - 工具名称、参数和运行时语义变化改变了 request header 的工具 schema 与 composition ID，旧会话按严格规则拒绝恢复。本仓尚无发布 tag，没有已发布的用户会话需要迁移；新增记录（todo、goal、规划模式、sandbox 模式、裁剪、检索审计、完成通知、附件引用、结构化结果）各由所属 ADR 说明版本识别、拒绝策略与保留路径。首次向用户发布会话数据前，必须由 ADR 决定迁移或拒绝策略。
 - 子代理沿用 delegated `never` 策略，不能写文件或运行 shell；是否放开不在本次范围。
 - ripgrep 成为运行前提；附件存储成为新的持久化位置，备份会话必须同时备份附件根。
-- 已知的后续项：会话文本超过约 16 MiB 时 provider 请求体可能超限，正常运行由主动 compaction 约束；`Check` 不接收 `context.Context`，由 10 MiB 前置上限和执行点可取消读取覆盖。
+- 已知的后续项：会话文本超过约 16 MiB 时 provider 请求体可能超限，正常运行由主动 compaction 约束。
 
 ## Verification
 
