@@ -86,7 +86,7 @@ web 工具在 `app/web` 用真实 LLM runtime 与 settings 只替换远端模型
 
 `TestFetch_BoundsEncodedNetworkInput` 以有效空 gzip member 固定 5,000,000、5,000,001 和 10,000,000 字节的输入，证明 exact budget 可读、超限失败且只额外消费一字节探测；`TestFetch_RejectsSingleLayerCompressedNetworkBomb` 使用真实 chunked HTTP（无 Content-Length），验证单层小正文也不能绕过编码输入预算。identity 声明超限失败，缺省编码仍截断正文；默认 mutation 移除网络输入预算时永久断言必须失败。
 
-提问接缝用真实 service 与脚本 broker 覆盖请求上限、intent 校验、delegated 拒绝、取消（等待前与等待中）、broker 失败、全部非法答案形态、答案排序与切片解耦，以及 broker 注册与 scope 撤回。`ask_user_question` 与 `exit_plan_mode` 通过真实 tool runtime、提问服务和规划模式服务调用，覆盖逐字节 schema、结果 JSON、错误文本、规划模式外拒绝、标题规则、批准、继续规划、反馈、取消和服务停止。
+提问接缝用真实 service 与脚本 broker 覆盖请求上限、intent 校验、delegated 拒绝、取消（等待前与等待中）、broker 失败、全部非法答案形态、答案排序与切片解耦，以及 broker 注册与 scope 撤回。`ask_user_question` 与 `exit_plan_mode` 通过真实 tool runtime、提问服务和规划模式服务调用，覆盖逐字节 schema、结果 JSON、错误文本、规划模式外拒绝、标题规则、批准、继续规划、反馈、取消和服务停止；`TestExitPlanMode_DelegatedCallerNeverReachesTheUser` 证明 delegated 调用以 `DELEGATED_CALLER` 失败、不向用户提问且规划模式保持。
 
 spill 与先读后写另有专门证据：预览算法用上游 retention 的 Python 逐行移植得到的摘要比较（含 UTF-16 代理对截断），runtime 测试覆盖无 store、无会话、保存失败、说明超预算、错误结果和 `KeepInline`；`spill-local` 用真实临时目录验证权限、随机命名、`O_EXCL`、大小上限、重试、提交/丢弃、关闭等待已打开文件，以及启动清理的过期/新鲜/链接/无关条目/他人 workspace 矩阵和取消后的 join。`bash` 的完整输出经真实 tool runtime 与 job service 覆盖前台截断、后台与超时转后台读取（运行中即声明文件）、job 上限回退，以及无 store、创建失败、超过大小上限和提交失败时退回 `(unavailable)`。`Readable` 有分区允许/拒绝矩阵（链接拼写、预置链接、`..`、相对拼写、未授权）。观察策略测试覆盖审批前拒绝与 approval 期间变化的执行点拒绝、盲覆盖、读后覆盖、自身写入、跨会话、内容变化、删除、确认不存在后的创建、并发创建者、批次内顺序、经由链接的读取和无会话调用。
 
@@ -139,7 +139,7 @@ web 工具层的 `TestProvider_PersistsWebErrorClassifications` 经真实 tool r
 
 `TestRecord_SandboxModeContract` 与 `session-v2-sandbox.jsonl` 的 frozen writer/reader 测试固定三档枚举、严格字段、零 turn/step、即刻切换、resume 修复保留模式与旧 composition 拒绝。反例覆盖未知/重复/null 字段、非法 source、root/child 归属与 descriptor 后 delegation 的因果顺序。`TestService_SandboxCapturedAtDelegationAndRestored` 比较 spawn/fork 的当前父 override、较旧种子与冷恢复，子会话保持 `never`，父后续切换不传播。
 
-file/shell 的 `SandboxApprovalMatrix` 覆盖 standing mode × 单次升级 × approval 允许/拒绝，观察真实文件与 runner profile，拒绝后无执行。直接 executor 测试覆盖 `Approved` 无法绕过 read-only/delegated、日志缺失/读取错误，以及审批中切换。runner 的跨平台 profile 测试证明 Linux 使用 PID namespace、网络共享、read-only 无 writable bind，macOS read-only 不放行 workspace 写入；host 的实际进程可在 workspace 外目录创建文件。
+file/shell 的 `SandboxApprovalMatrix` 覆盖 standing mode × 单次升级 × approval 允许/拒绝，观察真实文件与 runner profile，拒绝后无执行。直接 executor 测试覆盖 `Approved` 无法绕过 read-only/delegated、日志缺失/读取错误，以及审批中切换。`TestFileMutations_RefuseDelegatedCallsAtExecution` 让其余条件全部满足（有会话、workspace-write 日志、已获批准、目标已读），只置 delegated，断言 write/edit 的确切拒绝文本、磁盘内容与新文件均不变、观察记录不变；只断言“有错误”的测试会被其他守卫先拒绝，不能证明 delegated 判断有效。runner 的跨平台 profile 测试证明 Linux 使用 PID namespace、网络共享、read-only 无 writable bind，macOS read-only 不放行 workspace 写入；host 的实际进程可在 workspace 外目录创建文件。
 
 `TestComposition_SandboxModesAndSwitch` 经真实 composition、SSE 模型、approval 与 JSONL 覆盖三档的 bash/write/edit 效果（full access 文件在 workspace 外）、context 位置、切换与 reopen。`TestComposition_SandboxSwitchWhileApprovalIsPending` 用 channel 屏障固定 asked→mode→decided→result，从文件、日志与下一请求证明 read-only 生效。`TestSandboxContext_RegistrationAndAuthoritativeSection` 证明策略贡献、注册回滚与 scope cleanup；`TestEngine_CompleteRuntimeSnapshotLifecycle` 从真实模型请求证明完整快照、独立消息顺序、冷恢复去重、切回旧模式与 compaction 隐藏后重建，错误矩阵拒绝局部快照发布。`TestComposition_SubagentsEndToEnd` 从磁盘证明 spawn/fork 快照同时包含 sandbox 与委派范围且替代声明只有一次，fork 前缀不变，冷恢复不重复。`TestSandboxPolicyText_JavaScriptWorkspaceVectors` 逐字节比较 `&`、`<`、`>`、U+2028、U+2029 与控制字符混合路径。定向 mutation 拒绝只读 guard、委派捕获、Linux namespace、局部快照、重复快照、忽略 compaction 与 Go JSON 转义回归；不以 100% 语句执行替代上述行为断言。长期契约见 [ADR-0021](decisions/0021-session-sandbox-modes.md)。
 

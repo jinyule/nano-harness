@@ -1349,5 +1349,26 @@
     "before": "_ = stop(context.Background()) // undo the watch and catalog published above",
     "after": "// the watch and catalog stay published",
     "test": "^TestProviderStartLoginRefreshAndStreamFailures$"
+  },
+  {
+    "id": "file-write-delegated-refusal",
+    "file": "internal/adapter/tool/file/write.go",
+    "before": "if invocation.Delegated {",
+    "after": "if false && invocation.Delegated {",
+    "test": "^TestFileMutations_RefuseDelegatedCallsAtExecution$"
+  },
+  {
+    "id": "file-edit-delegated-refusal",
+    "file": "internal/adapter/tool/file/edit.go",
+    "before": "if invocation.Delegated {",
+    "after": "if false && invocation.Delegated {",
+    "test": "^TestFileMutations_RefuseDelegatedCallsAtExecution$"
+  },
+  {
+    "id": "plan-review-forwards-delegation",
+    "file": "internal/adapter/tool/plan/provider.go",
+    "before": "Delegated: invocation.Delegated,",
+    "after": "Delegated: false,",
+    "test": "^TestExitPlanMode_DelegatedCallerNeverReachesTheUser$"
   }
 ]

@@ -89,17 +89,18 @@ func TestProvider_ModeChangeDuringApprovalAndDirectDenial(t *testing.T) {
 			if !result.IsError || !strings.Contains(result.Output, "read-only") || readFixture(t, h.path("target")) != "old" {
 				t.Fatalf("changed during approval: %+v", result)
 			}
-			inv := appTool.Invocation{Approved: true, Delegated: true, Journal: journal}
+			// Calling the executor directly with a grant does not bypass the
+			// read-only mode the journal now holds; delegated refusal has its
+			// own test, TestFileMutations_RefuseDelegatedCallsAtExecution.
+			inv := appTool.Invocation{SessionID: "session", Approved: true, Journal: journal}
+			var err error
 			if tool == "write" {
-				_, err := h.provider.write(t.Context(), inv, writeArgs{FilePath: "target"})
-				if err == nil {
-					t.Fatal("delegated write authorized directly")
-				}
+				_, err = h.provider.write(t.Context(), inv, writeArgs{FilePath: "target", Content: "new"})
 			} else {
-				_, err := h.provider.edit(t.Context(), inv, editArgs{FilePath: "target"})
-				if err == nil {
-					t.Fatal("delegated edit authorized directly")
-				}
+				_, err = h.provider.edit(t.Context(), inv, editArgs{FilePath: "target", OldString: "old", NewString: "new"})
+			}
+			if err == nil || !strings.Contains(err.Error(), "file access denied under read-only") || readFixture(t, h.path("target")) != "old" {
+				t.Fatalf("direct %s under read-only = %v", tool, err)
 			}
 		})
 	}
@@ -126,5 +127,53 @@ func TestProvider_ReadOnlyEnforcedAtMutation(t *testing.T) {
 	}
 	if _, err := os.Stat(h.path("blocked")); !os.IsNotExist(err) {
 		t.Fatalf("read-only created a file: %v", err)
+	}
+}
+
+// TestFileMutations_RefuseDelegatedCallsAtExecution proves the execution
+// point refuses delegated write and edit even with every other condition
+// met: a session, a workspace-write journal, an approval grant, and a target
+// the session has read. Nothing changes on disk and no observation moves.
+func TestFileMutations_RefuseDelegatedCallsAtExecution(t *testing.T) {
+	for _, tool := range []string{"write", "edit"} {
+		t.Run(tool, func(t *testing.T) {
+			h := newHarness(t)
+			writeFixture(t, h.path("target"), "old")
+			h.read(t, "target")
+			prior, seen := h.provider.observed.lookup("session", h.path("target"))
+			if !seen {
+				t.Fatal("the read recorded no observation")
+			}
+			journal := &sandboxJournal{}
+			journal.set(t, "workspace-write")
+			invocation := appTool.Invocation{SessionID: "session", Approved: true, Delegated: true, Journal: journal}
+			var errs []error
+			if tool == "write" {
+				for _, path := range []string{"target", "fresh"} {
+					_, err := h.provider.write(t.Context(), invocation, writeArgs{FilePath: path, Content: "new"})
+					errs = append(errs, err)
+				}
+			} else {
+				_, err := h.provider.edit(t.Context(), invocation, editArgs{FilePath: "target", OldString: "old", NewString: "new"})
+				errs = append(errs, err)
+			}
+			for _, err := range errs {
+				if err == nil || err.Error() != "subagents cannot obtain file approval" {
+					t.Fatalf("delegated %s = %v", tool, err)
+				}
+			}
+			if readFixture(t, h.path("target")) != "old" {
+				t.Fatal("a delegated mutation changed the file")
+			}
+			if _, err := os.Stat(h.path("fresh")); !os.IsNotExist(err) {
+				t.Fatalf("a delegated write created a file: %v", err)
+			}
+			if after, _ := h.provider.observed.lookup("session", h.path("target")); after != prior {
+				t.Fatal("a delegated mutation moved the observation")
+			}
+			if _, recorded := h.provider.observed.lookup("session", h.path("fresh")); recorded {
+				t.Fatal("a delegated write recorded an observation")
+			}
+		})
 	}
 }

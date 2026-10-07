@@ -23,6 +23,8 @@
 
 复审补充（`46b16a5` 之后）：Codex 复审指出路径仍用 `%q` 格式化，文件名含 `"` 或 `\` 时与上游 `"${displayPath}"` 逐字节不同，且测试也用 `%q` 构造期望，发现不了差异。处理：逐条对照上游后，把 read、read_image、write、edit、guarded create、观察指引、路径遍历错误和搜索根错误中所有模型可见的路径引用改为原文加双引号（read_image 的模型名同样按上游原样引用）；本仓特有的搜索与遍历文案沿用同一形式。审批原因不是模型可见文本，保留 `%q`，理由记入 ADR-0007。新增逐字节测试，期望按上游格式手写；默认 mutation 新增 `file-path-quote-raw` 与 `file-guarded-create-path-quote-raw`。随后 `bash` 的 `invalid workdir` 系列文案也改为原文加双引号（`TestBash_QuotesWorkdirLikeFileTools`，旧代码 3 处不一致；mutation `shell-workdir-quote-raw`），并修正 `TestService_BrokerFailuresStayUnclassified` 中把非法答案批说成 unavailable 文案的注释，断言不变。
 
+最终整体审查补充（Fable 发现、astra 核实）：`TestProvider_ModeChangeDuringApprovalAndDirectDenial` 的直接拒绝段用 read-only 日志、缺少 SessionID 的调用，只断言 `err != nil`，所以分别删掉 write、edit 的 delegated 判断后，file 与 cmd 测试仍全部通过。新增 `TestFileMutations_RefuseDelegatedCallsAtExecution`：有会话、workspace-write、已批准、目标已读，只置 delegated，断言确切错误文本、磁盘与新文件不变、观察不变。同类排查用手工变异逐项删除执行点守卫：bash 的 delegated 与 approval 守卫、file 的 approval 守卫、question 适配器转交 delegated、approval service 的 delegated 分支、goal 的 delegated 权限都会被现有测试杀掉；只有 `exit_plan_mode` 转交 `invocation.Delegated` 的一处存活，补 `TestExitPlanMode_DelegatedCallerNeverReachesTheUser`。默认 mutation 新增 `file-write-delegated-refusal`、`file-edit-delegated-refusal`、`plan-review-forwards-delegation`。原测试中无效的直接拒绝段改写为：有会话、已批准、非 delegated 的直接调用在 read-only 日志下以 `file access denied under read-only` 被拒且文件不变。产品代码未改。
+
 ## Consequences
 
 模型在 guarded create 失败时看到与上游相同、可执行的指引；两条资源与对齐规则从此由变异门禁保护。代价是两份文档偏差需要在 UI 卡片工作开始时复审；如果未来要求 hunk 与 jsdiff 完全一致，需要整体改用 jsdiff 的正向取舍，因为差异从剥离公共首尾时就开始。
@@ -36,4 +38,5 @@
 - `GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check`：通过，lint 0 issues，逐文件 coverage 100.0%，默认 mutation 清单全部 killed。
 - `make tui-e2e`：PASS（19 次根工具调用、附件与 read_image、todo、后台 job、提问、sandbox 模式切换、规划审批、/goal、子代理、审批、文件、resume、清理）。
 - 复审补充的两个逐字节测试在旧代码上共报告 14 处不一致，修复后通过；新增的两项 mutation 单独运行均 killed。
+- delegated 补充：新增的三项 mutation 单独运行均 killed；删除三处守卫前新测试通过，删除后失败。
 - 未运行：上游仓库内的 jsdiff TypeScript 测试；Linux/Windows 原生执行。

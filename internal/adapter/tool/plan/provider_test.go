@@ -242,3 +242,24 @@ func TestExitPlanMode_KeepPlanningDismissalAndFailures(t *testing.T) {
 		t.Fatalf("stopped mode = %+v", result)
 	}
 }
+
+// TestExitPlanMode_DelegatedCallerNeverReachesTheUser proves the tool hands
+// the caller's delegation to the question service: a delegated plan review
+// fails as DELEGATED_CALLER without asking, and plan mode stays active.
+func TestExitPlanMode_DelegatedCallerNeverReachesTheUser(t *testing.T) {
+	current := start(t)
+	current.enter(t)
+	current.answer = review([]string{"Approve"}, "")
+	arguments, _ := json.Marshal(map[string]string{"plan": "# Plan"})
+	result := current.runtime.ExecuteBatch(t.Context(), appTool.BatchRequest{
+		SessionID: "root", Turn: 1, Step: 1, Delegated: true,
+		Calls: []session.ToolCall{{ID: "call-exit", Name: "exit_plan_mode", Arguments: arguments}},
+	})[0]
+	want := "Error: human interaction is unavailable while the calling agent is owned by another live agent; include the unresolved question or decision in the child agent's final result"
+	if !result.IsError || result.Output != want || result.Error == nil || *result.Error != (session.ToolError{Name: "UserQuestionError", Code: "DELEGATED_CALLER"}) {
+		t.Fatalf("delegated review = %+v error=%+v", result, result.Error)
+	}
+	if len(current.seen) != 0 || !current.mode.Active("root") {
+		t.Fatalf("delegated review asked %d times; plan mode active=%v", len(current.seen), current.mode.Active("root"))
+	}
+}
