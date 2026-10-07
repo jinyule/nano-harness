@@ -165,6 +165,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 | 工具参数的流式字节与持久化 JSON 各限 768 KiB，超限得到可恢复的错误结果；上游文件工具没有对应限值 | 约束持久化、模型请求与内存，并为 6 MiB 单记录留出转义余量 | [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败) | — |
 | 上游可配置的预算在本仓是固定常量，不提供部署配置：bash 与 job 的超时、终止宽限、排空、输出尾部、输出环、活动 job 数与 wait，web_fetch 上限，委派深度与池上限，skill 描述上限，pruner 预算，meta 上限 | 固定资源与交接契约，使模型可见边界、恢复结果和静止证据可复现；当前没有需要另一套预算的部署 consumer | [ADR-0009](decisions/0009-background-jobs.md#固定预算与托管环境)，以及 ADR-0011、ADR-0012、ADR-0013、ADR-0019、ADR-0020 | — |
 | `glob`、`grep`、`skill` 声明并发安全；上游未声明 | 只读遍历可以并行 | ADR-0007、ADR-0012 | — |
+| 私有位置与 workspace 互斥，启动时检查：session、spill、附件根与 workspace 不得互相包含，凭据文件与设置文件解析链接后不得位于 workspace 内；上游没有这项启动检查 | 默认档位下 `read`/`grep` 与 `web_fetch` 都无需 approval，私有文件进入 workspace 就可能被读入模型请求并外传。检查只保护本仓自己的私有文件：home 中 `~/.ssh` 等其他秘密仍可被免审批读取，`--root` 不应选含秘密的目录 | [ADR-0002](decisions/0002-provider-neutral-agent-harness.md)、ADR-0008、ADR-0017、[安全规则](security.md#凭据oauth-与日志) | — |
 
 #### 文件
 
@@ -256,6 +257,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 | URL 保留 `net/url` 的严格语法，拒绝内部控制字符、反斜杠、非规范 IPv4 拼写等 WHATWG 宽松输入 | 避免 DNS 与 HTTP 对同一输入作不同解释 | ADR-0011 | — |
 | 正文截断落在代理对中间时省略整个字符，可能比上游少用一个 UTF-16 单元 | 不把孤立代理项交给模型 | ADR-0011 | — |
 | HTML 转 Markdown 由本仓转换器实现，与 Turndown 的差异限于等价排版 | 不引入完整 DOM 或 Turndown | ADR-0011 | — |
+| `<script/>`、`<style/>`、`<iframe/>`、`<textarea/>`、`<title/>` 等自闭合 raw-text 标签按 HTML 标准处理，原始文本在自身结束标记处结束，之后的内容照常输出；上游 domino 2.2.0 不把自闭合 raw-text 标签记为最后的开始标签，原始文本在错误的结束标记处结束：吞掉页面剩余内容（例如 `<script/>`、`<style/>` 样例输出空串）、输出字面结束标记，或在祖先的结束标记处结束并泄漏脚本文本。SVG 与 MathML 中的 script、style 文本同样移除，上游会保留 | 上游行为来自 domino 的解析缺陷，不复制 | [ADR-0011](decisions/0011-provider-web-search-and-public-fetch.md) | — |
 | 检索请求审计记录固定的协议类别而不是完整 endpoint；没有 journal 时失败关闭，上游接线可以省略记录 | 减少部署地址留存；未审计的检索不发送 | ADR-0022 | 需要完整目的地审计 |
 
 #### 运行时、结构化结果与 compaction
