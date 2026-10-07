@@ -61,6 +61,21 @@ type frame struct {
 	hidden   bool
 	href     string
 	language string
+	// namespace is "svg" or "math" for foreign elements and empty for HTML.
+	namespace string
+	// integration marks an SVG or MathML element whose children follow HTML rules.
+	integration bool
+}
+
+// HTML start tags that end SVG or MathML content (the HTML standard's rules
+// for "any other start tag" in foreign content); font breaks out only with a
+// color, face, or size attribute.
+var foreignBreakout = map[string]bool{
+	"b": true, "big": true, "blockquote": true, "body": true, "br": true, "center": true, "code": true, "dd": true,
+	"div": true, "dl": true, "dt": true, "em": true, "embed": true, "h1": true, "h2": true, "h3": true, "h4": true,
+	"h5": true, "h6": true, "head": true, "hr": true, "i": true, "img": true, "li": true, "listing": true, "menu": true,
+	"meta": true, "nobr": true, "ol": true, "p": true, "pre": true, "ruby": true, "s": true, "small": true, "span": true,
+	"strong": true, "strike": true, "sub": true, "sup": true, "table": true, "tt": true, "u": true, "ul": true, "var": true,
 }
 
 type list struct {
@@ -130,22 +145,26 @@ func renderHTML(source string) string {
 			return strings.TrimSpace(state.captures[0].text.String())
 		case html.TextToken:
 			state.text(string(tokenizer.Text()))
-		case html.StartTagToken:
+		case html.StartTagToken, html.SelfClosingTagToken:
 			token := tokenizer.Token()
-			if voidElements[token.Data] {
-				state.void(token)
-			} else if !state.open(token) {
-				return omittedHTML
-			}
-		case html.SelfClosingTagToken:
-			token := tokenizer.Token()
+			namespace := state.namespaceFor(token)
 			switch {
+			case namespace != "":
+				// Foreign elements have no raw text, and their self-closing
+				// slash closes them.
+				tokenizer.NextIsNotRawText()
+				if !state.open(token, namespace) {
+					return omittedHTML
+				}
+				if token.Type == html.SelfClosingTagToken {
+					state.pop()
+				}
 			case voidElements[token.Data]:
 				state.void(token)
-			case !state.open(token):
+			case !state.open(token, ""):
+				// An HTML element's self-closing slash is ignored: the element
+				// stays open, and raw-text elements read raw text to their end tag.
 				return omittedHTML
-			default:
-				state.close(token.Data)
 			}
 		case html.EndTagToken:
 			name, _ := tokenizer.TagName()
@@ -156,6 +175,49 @@ func renderHTML(source string) string {
 }
 
 func (state *renderer) current() *buffer { return state.captures[len(state.captures)-1] }
+
+// inForeign reports whether the current element is SVG or MathML content
+// that is not an HTML integration point.
+func (state *renderer) inForeign() bool {
+	if len(state.stack) == 0 {
+		return false
+	}
+	top := state.stack[len(state.stack)-1]
+	return top.namespace != "" && !top.integration
+}
+
+// namespaceFor returns the namespace of the element a start tag creates. A
+// breakout tag first closes the foreign elements above the nearest HTML element
+// or integration point, and is then an HTML element.
+func (state *renderer) namespaceFor(token html.Token) string {
+	if state.inForeign() && (foreignBreakout[token.Data] || token.Data == "font" && (attribute(token, "color") != "" || attribute(token, "face") != "" || attribute(token, "size") != "")) {
+		for state.inForeign() {
+			state.pop()
+		}
+	}
+	if state.inForeign() {
+		return state.stack[len(state.stack)-1].namespace
+	}
+	switch token.Data {
+	case "svg", "math":
+		return token.Data
+	default:
+		return ""
+	}
+}
+
+// integrationPoint reports whether children of a foreign element follow HTML rules.
+func integrationPoint(namespace string, token html.Token) bool {
+	switch {
+	case namespace == "svg":
+		return token.Data == "foreignobject" || token.Data == "desc" || token.Data == "title"
+	case token.Data == "annotation-xml":
+		encoding := strings.ToLower(attribute(token, "encoding"))
+		return encoding == "text/html" || encoding == "application/xhtml+xml"
+	default:
+		return token.Data == "mi" || token.Data == "mo" || token.Data == "mn" || token.Data == "ms" || token.Data == "mtext"
+	}
+}
 
 // flush writes pending separators before visible output. A buffer never starts
 // with a separator, and list markers absorb the separator that follows them.
@@ -288,17 +350,27 @@ func (state *renderer) void(token html.Token) {
 	}
 }
 
-// open pushes one element and applies its opening effect. It reports false when
-// the nesting limit is exceeded.
-func (state *renderer) open(token html.Token) bool {
-	state.closeImplied(token.Data)
+// open pushes one element in namespace and applies its opening effect. It
+// reports false when the nesting limit is exceeded. Foreign elements only
+// carry visibility; their text renders as plain inline content.
+func (state *renderer) open(token html.Token, namespace string) bool {
+	if namespace == "" {
+		state.closeImplied(token.Data)
+	}
 	if len(state.stack) >= maxHTMLDepth {
 		return false
 	}
-	current := frame{tag: token.Data}
+	current := frame{tag: token.Data, namespace: namespace}
+	if namespace != "" {
+		current.integration = integrationPoint(namespace, token)
+	}
 	if state.hidden > 0 || removedElements[token.Data] || hiddenElement(token) {
 		current.hidden = true
 		state.hidden++
+		state.stack = append(state.stack, current)
+		return true
+	}
+	if namespace != "" {
 		state.stack = append(state.stack, current)
 		return true
 	}

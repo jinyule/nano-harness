@@ -1419,5 +1419,26 @@
     "before": "\t\t\tunresolved = unresolved[1:]\n",
     "after": "\n",
     "test": "^TestEngine_FailedToolRecordingResolvesCommittedCalls$"
+  },
+  {
+    "id": "web-html-self-closing",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "case namespace != \"\":",
+    "after": "case namespace != \"\" || token.Type == html.SelfClosingTagToken:",
+    "test": "^TestRenderHTML_MatchesUpstreamSemantics$"
+  },
+  {
+    "id": "web-html-foreign-self-closing",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "if token.Type == html.SelfClosingTagToken {",
+    "after": "if false && token.Type == html.SelfClosingTagToken {",
+    "test": "^TestRenderHTML_MatchesUpstreamSemantics$"
+  },
+  {
+    "id": "web-html-foreign-breakout",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "foreignBreakout[token.Data] ||",
+    "after": "false && foreignBreakout[token.Data] ||",
+    "test": "^TestRenderHTML_MatchesUpstreamSemantics$"
   }
 ]
