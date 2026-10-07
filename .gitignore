@@ -19,3 +19,6 @@ coverage.out
 
 # Tool caches
 .cache/
+
+# Root build output from `go build ./cmd/nano-harness`
+/nano-harness
