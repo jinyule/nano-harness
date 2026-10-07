@@ -21,7 +21,7 @@
 
 `internal/adapter/spill` 是 `spill-local` 插件，实现 `internal/app/tool.SpillStore`。
 
-- 根目录由 `--spill-root` 配置，默认是用户配置目录下的 `nano-harness/spill`。启动时创建为 `0700`；根目录可以是链接，但解析后必须是 owner-only 目录，否则启动失败。配置解析时对 spill 根目录已存在的最长前缀解析链接，它与解析后的 workspace 互相包含时启动失败：例如以 home 目录作为 `--root` 时，默认的 `~/.config` 或 `~/Library` 位置会落进 workspace，必须另选 `--spill-root`。
+- 根目录由 `--spill-root` 配置，默认是用户配置目录下的 `nano-harness/spill`。启动时创建为 `0700`；根目录可以是链接，但解析后必须是 owner-only 目录，否则启动失败。配置解析时对 spill 根目录已存在的最长前缀解析链接，它与解析后的 workspace 互相包含时启动失败：例如以 home 目录作为 `--root` 时，默认的 `~/.config` 或 `~/Library` 位置会落进 workspace，必须另选 `--spill-root`；同一位置下的 session root、凭据与设置文件也必须改用 `--session-root`、`--credentials`、`--settings`，规则见 [ADR-0002](0002-provider-neutral-agent-harness.md#2-provider-neutral-llm-与-provider-owned-wireauth)。
 - 每个 workspace 一个分区 `workspace-<sha256(workspace) 前 16 位十六进制>`，必须是真实的 owner-only 目录，不能是链接。分区内按会话分组 `session-<sha256(session ID) 前 12 位>`；会话目录每次创建文件前复用分区的私有目录校验，以 `Lstat` 拒绝链接、非目录和过宽权限。校验与文件的独占打开在 `layout` 锁内完成，避免本进程启动清理在两者之间删除目录。文件名是 12 位随机十六进制加名称提示，例如 `3f…a1-grep-results.txt`。名称提示只接受 `[A-Za-z0-9._-]{1,64}`。
 - 文件以 `O_EXCL` 和 `0600` 创建，已存在的条目（包括预先放置的链接）都会让创建失败；名称冲突或目录被并发清理时最多重试 3 次。提交时 `fsync` 后关闭，失败则删除部分文件。单个文件上限 64 MiB，超出后写入失败，调用方必须丢弃。
 - 定位符（locator）是文件的绝对路径，检索提示为上游原文 “Use read with offset/limit, or grep this path to search within it.”。

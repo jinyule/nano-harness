@@ -205,7 +205,12 @@ func parseTUIConfig(args []string, stderr io.Writer) (applicationConfig, error) 
 		_, _ = fmt.Fprintln(stderr, err)
 		return applicationConfig{}, err
 	}
-	return normalizeConfig(config)
+	normalized, err := normalizeConfig(config)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return applicationConfig{}, err
+	}
+	return normalized, nil
 }
 
 func normalizeConfig(config applicationConfig) (applicationConfig, error) {
@@ -233,10 +238,20 @@ func normalizeConfig(config applicationConfig) (applicationConfig, error) {
 		return applicationConfig{}, fmt.Errorf("resolve workspace links: %w", err)
 	}
 	config.workspaceRoot = resolved
-	if err := separateRoot(config.workspaceRoot, config.spillRoot, "spill root", "--spill-root"); err != nil {
-		return applicationConfig{}, err
+	var conflicts []error
+	for _, private := range []privatePath{
+		{name: "session root", flag: "--session-root", path: config.sessionRoot, directory: true},
+		{name: "spill root", flag: "--spill-root", path: config.spillRoot, directory: true},
+		{name: "attachment root", flag: "--attachment-root", path: config.attachmentRoot, directory: true},
+		{name: "credentials", flag: "--credentials", path: config.credentialPath},
+		{name: "settings", flag: "--settings", path: config.settingsPath},
+	} {
+		if err := separatePrivatePath(config.workspaceRoot, private); err != nil {
+			conflicts = append(conflicts, err)
+		}
 	}
-	if err := separateRoot(config.workspaceRoot, config.attachmentRoot, "attachment root", "--attachment-root"); err != nil {
+	// Every conflict is reported at once: a home workspace holds all defaults.
+	if err := errors.Join(conflicts...); err != nil {
 		return applicationConfig{}, err
 	}
 	path := filepath.Join(config.sessionRoot, config.sessionID+".jsonl")
@@ -254,18 +269,30 @@ func normalizeConfig(config applicationConfig) (applicationConfig, error) {
 	return config, nil
 }
 
-// separateRoot refuses a private store root that contains or lies inside
-// the resolved workspace: spilled output and stored images must stay out of
-// glob/grep results and beyond the reach of write, edit, and sandboxed bash.
-// The root may not exist yet, so links are resolved on its longest existing
-// prefix.
-func separateRoot(workspaceRoot, root, name, flagName string) error {
-	resolved, err := resolveExisting(root)
+// privatePath is a harness-owned location that file tools, search, and
+// sandboxed bash must never reach through the workspace.
+type privatePath struct {
+	name, flag, path string
+	// directory marks a store root; otherwise path is a single file.
+	directory bool
+}
+
+// separatePrivatePath refuses a private location the resolved workspace
+// would expose: credentials, settings, transcripts, spilled output, and
+// stored images must stay out of read/glob/grep results and beyond the
+// reach of write, edit, and sandboxed bash. A store directory and the
+// workspace may not contain each other, so tools neither see its entries
+// nor write beside them. A file only has to lie outside the workspace; a
+// workspace inside the file's directory exposes nothing. The path may not
+// exist yet, so links are resolved on its longest existing prefix,
+// including a final link when the path exists.
+func separatePrivatePath(workspaceRoot string, private privatePath) error {
+	resolved, err := resolveExisting(private.path)
 	if err != nil {
-		return fmt.Errorf("resolve %s links: %w", name, err)
+		return fmt.Errorf("resolve %s links: %w", private.name, err)
 	}
-	if contains(workspaceRoot, resolved) || contains(resolved, workspaceRoot) {
-		return fmt.Errorf("%s %s must lie outside the workspace %s; choose another %s", name, root, workspaceRoot, flagName)
+	if contains(workspaceRoot, resolved) || private.directory && contains(resolved, workspaceRoot) {
+		return fmt.Errorf("%s %s must lie outside the workspace %s; choose another %s", private.name, private.path, workspaceRoot, private.flag)
 	}
 	return nil
 }

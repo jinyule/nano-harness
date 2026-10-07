@@ -1370,5 +1370,26 @@
     "before": "Delegated: invocation.Delegated,",
     "after": "Delegated: false,",
     "test": "^TestExitPlanMode_DelegatedCallerNeverReachesTheUser$"
+  },
+  {
+    "id": "private-files-stay-outside-workspace",
+    "file": "cmd/nano-harness/main.go",
+    "before": "if contains(workspaceRoot, resolved) || private.directory && contains(resolved, workspaceRoot) {",
+    "after": "if private.directory && (contains(workspaceRoot, resolved) || contains(resolved, workspaceRoot)) {",
+    "test": "^TestNormalizeConfig_KeepsSecretsAndSessionsOutsideTheWorkspace$"
+  },
+  {
+    "id": "private-session-root-is-a-store",
+    "file": "cmd/nano-harness/main.go",
+    "before": "path: config.sessionRoot, directory: true}",
+    "after": "path: config.sessionRoot}",
+    "test": "^TestNormalizeConfig_KeepsSecretsAndSessionsOutsideTheWorkspace$"
+  },
+  {
+    "id": "private-config-errors-reach-stderr",
+    "file": "cmd/nano-harness/main.go",
+    "before": "normalized, err := normalizeConfig(config)\n\tif err != nil {\n\t\t_, _ = fmt.Fprintln(stderr, err)",
+    "after": "normalized, err := normalizeConfig(config)\n\tif err != nil {\n\t\t_ = stderr",
+    "test": "^TestRunTUI_RefusesAHomeWorkspaceHoldingTheDefaultPrivateFiles$"
   }
 ]

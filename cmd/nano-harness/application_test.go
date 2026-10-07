@@ -62,10 +62,10 @@ func TestApplication_SupportsIndependentFrontendPlugin(t *testing.T) {
 	previous := newTerminal
 	t.Cleanup(func() { newTerminal = previous })
 	newTerminal = func(tui.Config) (*tui.App, error) { t.Fatal("shared application constructed TUI"); return nil, nil }
-	root := t.TempDir()
+	root, private := t.TempDir(), t.TempDir()
 	config, err := normalizeConfig(applicationConfig{
-		workspaceRoot: root, sessionRoot: filepath.Join(root, "sessions"), spillRoot: filepath.Join(t.TempDir(), "spill"), attachmentRoot: filepath.Join(t.TempDir(), "attachments"),
-		settingsPath: filepath.Join(root, "settings.yaml"), credentialPath: filepath.Join(root, "credentials.yaml"),
+		workspaceRoot: root, sessionRoot: filepath.Join(private, "sessions"), spillRoot: filepath.Join(t.TempDir(), "spill"), attachmentRoot: filepath.Join(t.TempDir(), "attachments"),
+		settingsPath: filepath.Join(private, "settings.yaml"), credentialPath: filepath.Join(private, "credentials.yaml"),
 		skillsDir: filepath.Join(root, "skills"), agentsSkillsDir: filepath.Join(root, "agents-skills"),
 		sessionID: "frontend-probe", maxSteps: 2,
 	})

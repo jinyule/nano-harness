@@ -32,6 +32,8 @@ settings 文件 provider 每次尝试取得跨进程 writer lock 前、取得锁
 
 credential store 的 modify、refresh 与 delete 共用 `O_EXCL` 文件锁串行化 read-decide-write，同进程也沿同一可取消等待路径，不另排队在不可取消的 mutex 后。锁等待期限为 30 s，每 25 ms 重试；每次 open 前、取得锁后及读完文件后进入 mutation 前检查 context，期限与取消同时就绪时返回原 context 错误。取消的等待者只退出自身调用，不删除持有者的锁；mutation 尚未开始时取消不写入。mutation/refresh 开始后，回调返回错误就不写；返回合法成功结果则完成原子保存，迟到取消不丢弃可能已在远端轮换的新 OAuth grant。锁期限只约束取得锁，不中断已开始的事务。
 
+凭据文件、设置文件与 session root 是不可经 workspace 暴露的私有位置：文件解析链接后不得位于 workspace 内，session root 与 workspace 不得互相包含，违反时启动失败并指明应改用的 flag。默认 workspace-write 的 `read`/`grep` 与 `web_fetch` 都无需 approval，这一启动检查是凭据不进入 session 与 prompt 的前提；它不在工具执行点另设排除名单，也不保护 workspace 内的其他秘密。
+
 产品不实现 ChatGPT/Codex subscription 用量查询或 quota gate。用户账户的远端限制照常由 provider 返回；本地仍强制 step、context、字节、tool count、timeout 和并发上限。真实验证前的 3% 用量检查属于产品外的操作者步骤。
 
 ### 3. v2 append-only session 是权威来源

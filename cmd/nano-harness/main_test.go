@@ -466,8 +466,8 @@ func TestRunTUI_MapsParseComposeLifecycleRunAndShutdown(t *testing.T) {
 
 func TestNormalizeConfig_ContainsEveryPathBoundary(t *testing.T) {
 	restoreMainHooks(t)
-	root := t.TempDir()
-	base := applicationConfig{workspaceRoot: root, sessionRoot: filepath.Join(root, "sessions"), spillRoot: filepath.Join(t.TempDir(), "spill"), attachmentRoot: filepath.Join(t.TempDir(), "attachments"), settingsPath: filepath.Join(root, "settings"), credentialPath: filepath.Join(root, "credentials"), skillsDir: filepath.Join(root, "skills"), agentsSkillsDir: filepath.Join(root, "agents-skills"), sessionID: "session", maxSteps: 1}
+	root, private := t.TempDir(), t.TempDir()
+	base := applicationConfig{workspaceRoot: root, sessionRoot: filepath.Join(private, "sessions"), spillRoot: filepath.Join(t.TempDir(), "spill"), attachmentRoot: filepath.Join(t.TempDir(), "attachments"), settingsPath: filepath.Join(private, "settings"), credentialPath: filepath.Join(private, "credentials"), skillsDir: filepath.Join(root, "skills"), agentsSkillsDir: filepath.Join(root, "agents-skills"), sessionID: "session", maxSteps: 1}
 	failure := errors.New("failure")
 	for _, field := range []*string{&base.spillRoot, &base.attachmentRoot, &base.skillsDir} {
 		saved := *field
