@@ -282,7 +282,7 @@ edit diff 的工作量与取消由 `TestDiffWork_BoundsSearchAndChecksCancellati
 
 [`cmd/nano-harness/testdata/tool-catalog.json`](../cmd/nano-harness/testdata/tool-catalog.json) 冻结真实 composition 的全部工具定义。`TestComposition_ToolCatalogGolden` 经 `cmd` 跑完一轮，从磁盘 transcript 的第一个 `request/header` 取出 tools，逐项比较名称、描述和紧凑化后的参数 JSON（保留键序），并确认 loopback provider 收到的 wire 定义与 header 相同。fixture 是人工审查的期望值，CI 只比较；有意变化时手工修改 fixture 并在同一变更中提升 composition 版本。
 
-[`cmd/nano-harness/testdata/upstream-base-tools.json`](../cmd/nano-harness/testdata/upstream-base-tools.json) 记录已对齐的上游 Base 工具定义、Web preset 的 `ask_user_question` 定义，以及 Base 规划段落与目标段落原文（`prompt_sections`），标注上游提交、来源文件和组合推导，测试不读取 submodule。对齐工具集合以该 fixture 的 `tools` 为准。`TestComposition_MatchesUpstreamBaseTools` 要求同名工具逐字节一致；规划模式与目标 assembled 测试要求请求中的规划段落与目标段落和 fixture 原文一致。更新参考指针时按 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md) 重新推导这份数据。
+[`cmd/nano-harness/testdata/upstream-base-tools.json`](../cmd/nano-harness/testdata/upstream-base-tools.json) 记录本仓已采纳的上游 Base 工具子集、Web preset 的 `ask_user_question` 定义，以及 Base 规划段落与目标段落原文（`prompt_sections`），标注上游提交、来源文件和组合推导，测试不读取 submodule。对齐工具集合以该 fixture 的 `tools` 为准；它不代表完整的 Base 组合，未采纳的 Base 工具见[参考分析的暂缓项](reference-deepseek-harness.md#暂缓项)。`TestComposition_MatchesUpstreamBaseTools` 要求同名工具逐字节一致；规划模式与目标 assembled 测试要求请求中的规划段落与目标段落和 fixture 原文一致。更新参考指针时按 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md) 重新推导这份数据。
 
 ## 性能观测与预算
 

@@ -130,7 +130,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 
 ## Base 工具集对齐
 
-内置工具按当前参考提交的上游 Base 组合（非 Windows 主机）对齐，另加 Web preset 默认的阻塞式 `ask_user_question`。同名工具的名称、描述和参数 schema 逐字节一致，由 [`upstream-base-tools.json`](../cmd/nano-harness/testdata/upstream-base-tools.json) 与 [`tool-catalog.json`](../cmd/nano-harness/testdata/tool-catalog.json) 冻结，比较规则见[模型可见工具目录](testing.md#模型可见工具目录)；没有上游对应的旧工具 `apply_patch`、`list_files` 已删除。会话恢复边界由 composition 身份承担，当前值以 [`cmd/nano-harness/main.go`](../cmd/nano-harness/main.go) 的 `compositionID` 为准。
+内置工具对齐当前参考提交上游 Base 组合（非 Windows 主机）中本仓采纳的工具，另加 Web preset 默认的阻塞式 `ask_user_question`。同名工具的名称、描述和参数 schema 逐字节一致，由 [`upstream-base-tools.json`](../cmd/nano-harness/testdata/upstream-base-tools.json) 与 [`tool-catalog.json`](../cmd/nano-harness/testdata/tool-catalog.json) 冻结。前者只记录本仓已采纳的 Base 工具子集加 Web preset 的 `ask_user_question`，未采纳的 Base 工具见[暂缓项](#暂缓项)，不代表完整的 Base 组合；比较规则见[模型可见工具目录](testing.md#模型可见工具目录)；没有上游对应的旧工具 `apply_patch`、`list_files` 已删除。会话恢复边界由 composition 身份承担，当前值以 [`cmd/nano-harness/main.go`](../cmd/nano-harness/main.go) 的 `compositionID` 为准。
 
 本节只汇总状态并链接权威位置：行为、上限、错误文本与持久化契约由所列 ADR 拥有，实施与验证证据在各 ADR 链接的 Agent Note 中。
 
@@ -170,7 +170,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 
 | 偏差 | 理由 | 权威 | 复审条件 |
 |---|---|---|---|
-| read-only 与 workspace-write 下，读取和搜索只到 workspace 与本 workspace 的精确 spill 文件；full access 下 `glob` 仍限 workspace。`write`/`edit` 拒绝路径上已存在的 symlink 组件，full access 下仍保留先读后写、原子发布与 symlink 禁写。上游读取不限 root，写入跟随 symlink | 保持本仓 workspace 文件边界 | ADR-0007、ADR-0021 | — |
+| read-only 与 workspace-write 下，读取和搜索只到 workspace 与本 workspace 的精确 spill 文件；full access 下 `glob` 仍限 workspace。`write`/`edit` 拒绝路径上已存在的 symlink 组件，full access 下仍保留先读后写、原子发布与 symlink 禁写；例如 macOS 的 `/tmp`、`/var`、`/etc` 都是指向 `/private/...` 的 symlink，写入须使用 `/private/tmp/...` 等真实路径。上游读取不限 root，写入跟随 symlink | 保持本仓 workspace 文件边界 | ADR-0007、ADR-0021 | — |
 | 含 `..` 的成功路径显示解析后的物理绝对路径；上游 POSIX 保留原始父目录段 | 搜索 consumer 从同一身份安全生成相对搜索根；目标身份不变 | ADR-0007 | — |
 | `read` 按 rune 计行长，上游按 UTF-16 code unit；`offset` 超过 2^53−1 时明确拒绝 | 只在 BMP 以外字符上不同；保证 JSON 数值与行算术精确 | ADR-0007 | — |
 | `edit` 保留 BOM 并限 10 MiB；`write` 新建目录为 `0700`，上游为受 umask 约束的 `0777` | 沿用既有文件安全规则 | ADR-0007 | — |
@@ -197,6 +197,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 | 后台 runner 失败或无法启动的 job 终态为 `failed`，detail 沿用上游 `processOutcome`；上游映射为 `completed` 或 `killed` | 命令没有运行，不能表述为命令的结局 | ADR-0009 | — |
 | runner 可执行文件启动失败时，`Runner failure:` 之后是 Go 的启动错误文本；上游是 Node 的 `String(error)` | Node 错误字符串无法在 Go 中复现；其余文案逐字一致 | ADR-0009 | — |
 | job 输出环运行中保留 128 KiB，上游 256 KiB；首次终态读取后裁到 16 KiB；`job_output` 的状态行与丢失提示有独立预算 | 为 256 KiB 工具结果中的包装、状态行与定位符留出空间 | ADR-0009 | — |
+| 子进程基础环境是固定 allowlist（固定的系统 `PATH`、`C.UTF-8` locale、`TMPDIR`、`NANO_WORKSPACE` 与显式加入的变量），不继承父环境；上游继承按名称去敏的父环境（去掉匹配 `KEY\|PASSWORD\|SECRET\|TOKEN` 的变量与全部 `DSH_*`，保留 `HOME`、用户 `PATH`、locale 与代理变量）再叠加显式变量 | 名称启发式会漏掉不含这些词的凭据，根规则要求子进程环境使用 allowlist。代价是命令看不到 `HOME`、用户 `PATH` 与代理：用户目录中的工具需要绝对路径或在命令中设置 `PATH`，依赖 `HOME` 的配置或缓存可能找不到，需要代理的网络中命令须自行设置代理；bash 的 `~` 仍展开为当前用户目录 | [ADR-0009](decisions/0009-background-jobs.md#固定预算与托管环境) | 用户需要命令继承 `HOME`、用户 `PATH` 或代理配置 |
 | 托管环境只提供 `DSH_SHELL`、`DSH_SESSION_ID` 与固定 allowlist（含 `NANO_WORKSPACE`），不提供 `DSH_HOME`、`DSH_PROFILE`、`DSH_PROFILE_DIR` | 本仓各数据根独立部署，composition 在编译时确定，没有可诚实映射的事实 | ADR-0009 | 出现 profile 或统一 home 的 consumer |
 | 不实现 controller 挂载检查、非消费式观察读取、progress 行，也不设 `maxConsecutiveWakes` 或 `quiet` 投递 | 当前组合没有 UI 观察者或 progress consumer；Base 默认同样不限连续唤醒 | ADR-0009 | 增加 job UI 或观察读取；观察到通知引起的连续自动 turn |
 | 完成通知超过一个文本块时按上游 `fitCompletionNotice` 截断，上限就是 256 KiB 的 durable 文本块，不设 producer 的 `outputLimitBytes` | 上限由持久化文本块决定，不在准入时拒绝长命令 | ADR-0009 | — |
@@ -251,6 +252,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 | `web_search` 复用已配置的 OpenAI/Codex Responses、Anthropic 或 OpenRouter 服务端检索，默认未配置，检索 endpoint 不能独立设置；上游 Base 使用 DeepSeek 检索 provider | 维护者决定不新增凭据；计费账户与模型由用户显式选择 | ADR-0011 | provider 删除服务端检索、Codex live 验证拒绝 `web_search` 或新增 provider |
 | 抓取只声明 `gzip, deflate`，br/zstd 与未知编码失败，截断或损坏的压缩流失败；上游 Undici 另支持 br/zstd 并宽松处理 finish-flush | 不为可协商的优化扩大解码器与供应链审计面 | ADR-0011 | — |
 | Content-Encoding 非空时，网络输入与每个中间解压流各限 5,000,000 字节，比上游严格 | 公网服务端可以用空 gzip member 消耗带宽和 CPU，30 s 时限不能限制累计输入 | ADR-0011 | — |
+| IPv6 目的地址只接受 `2000::/3` 全球单播块内、不属于特殊用途范围的地址；上游 `ipaddr.js` 的 `unicast` 分类还接受该块以外的未分配地址，例如 `4000::1`。IPv4 拒绝范围与上游一致 | 全球单播只从 `2000::/3` 分配，块外地址没有可达的公网目的地；按块允许使未来的特殊用途分配默认被拒绝 | ADR-0011 | — |
 | URL 保留 `net/url` 的严格语法，拒绝内部控制字符、反斜杠、非规范 IPv4 拼写等 WHATWG 宽松输入 | 避免 DNS 与 HTTP 对同一输入作不同解释 | ADR-0011 | — |
 | 正文截断落在代理对中间时省略整个字符，可能比上游少用一个 UTF-16 单元 | 不把孤立代理项交给模型 | ADR-0011 | — |
 | HTML 转 Markdown 由本仓转换器实现，与 Turndown 的差异限于等价排版 | 不引入完整 DOM 或 Turndown | ADR-0011 | — |
@@ -294,6 +296,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 - Windows：CI 只做本机 build/version。逐段路径解析、spill 私有性不按权限位判断、非 Unix runner 只终止直接子进程，都没有原生运行证据；Windows sandbox 后端未实现。平台证据范围见[测试策略](testing.md#平台与发布证据范围)。
 - live provider：三个 provider 的检索请求与工具结果图片只有 loopback 协议证据；Codex Responses 对 `web_search` 工具和数组形态 `function_call_output` 的接受度未经 live 验证。
 - 首次发布迁移：新增记录与 composition token 提升都依靠 composition mismatch 拒绝旧会话。本仓尚无发布 tag；首次向用户发布会话数据前，必须按[根规则](../AGENTS.md#当前阶段)由 ADR 决定版本识别、拒绝或迁移策略，以及数据保留和恢复路径。
+- 会话锁恢复：进程崩溃后残留的 `<session-id>.jsonl.lock` 没有存活检测，再次打开报 `session is already open`；目前只有[人工恢复步骤](security.md#session-与恢复)，进程退出即释放的锁机制尚未实现。
 - 容量与取消：会话文本超过约 16 MiB 时 provider 请求体可能超限，正常运行由主动 compaction 约束，尚无真实触发证据。
 
 ## 工程执行证据补充

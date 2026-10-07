@@ -102,7 +102,7 @@ ADR 编号预先分配，避免并行分支冲突；审查修复期间追加 001
 - 工具名称、参数和运行时语义变化改变了 request header 的工具 schema 与 composition ID，旧会话按严格规则拒绝恢复。本仓尚无发布 tag，没有已发布的用户会话需要迁移；新增记录（todo、goal、规划模式、sandbox 模式、裁剪、检索审计、完成通知、附件引用、结构化结果）各由所属 ADR 说明版本识别、拒绝策略与保留路径。首次向用户发布会话数据前，必须由 ADR 决定迁移或拒绝策略。
 - 子代理沿用 delegated `never` 策略，不能写文件或运行 shell；是否放开不在本次范围。
 - ripgrep 成为运行前提；附件存储成为新的持久化位置，备份会话必须同时备份附件根。
-- 已知的后续项：会话文本超过约 16 MiB 时 provider 请求体可能超限，正常运行由主动 compaction 约束。
+- 已知的后续项：会话文本超过约 16 MiB 时 provider 请求体可能超限，正常运行由主动 compaction 约束。崩溃残留的会话 `.jsonl.lock` 目前只能按[安全规则](../../../docs/security.md#session-与恢复)人工恢复，长期应改用进程退出即自动释放的锁机制，不按锁文件年龄或未经验证的 PID 自动接管。每次 Append 都复制并校验全部历史，成本随历史长度线性增长；已有 `BenchmarkSessionDurableTurn` 只测短会话，缺少 Append 成本随历史长度增长的 benchmark 曲线。
 
 ## Verification
 

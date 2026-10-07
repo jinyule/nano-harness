@@ -228,9 +228,11 @@ func TestComposition_ToolCatalogGolden(t *testing.T) {
 	}
 }
 
-// TestComposition_MatchesUpstreamBaseTools proves each tool that shares a
-// name with the upstream Base composition is byte-identical in name,
-// description, and parameter schema, including property order.
+// TestComposition_MatchesUpstreamBaseTools proves each adopted tool that
+// shares a name with the upstream Base composition, plus the Web preset's
+// ask_user_question, is byte-identical in name, description, and parameter
+// schema, including property order. The fixture covers only the adopted
+// subset; deferred Base tools are listed in docs/reference-deepseek-harness.md.
 func TestComposition_MatchesUpstreamBaseTools(t *testing.T) {
 	frozen := map[string]session.ToolDefinition{}
 	for _, definition := range headerTools(t, runToolChain(t).transcript) {

@@ -174,6 +174,7 @@ spill 文件可能包含命令输出或文件内容，与 transcript 一样只�
 ## Session 与恢复
 
 - session root 使用 `0700`，JSONL transcript 和独占 writer lock 使用 `0600`。session ID 只能生成 root 内固定文件名。
+- writer lock 是以 `O_EXCL` 创建的 `<session-id>.jsonl.lock`，正常关闭时删除，没有存活检测。进程崩溃或被强制终止后锁会残留，再次打开报 `session is already open: <session-id>.jsonl.lock`，transcript 本身不受影响。人工恢复：先退出所有可能打开该会话的 nano-harness 进程（子代理会话由创建它的进程持有）；备份 session root 中的 transcript 与锁文件；确认没有存活的写者后删除该锁文件，再恢复会话，resume 按下文规则追加修复。仍有写者时删除锁会让两个进程交错追加同一日志。程序不按锁文件年龄或未经验证的 PID 自动接管。
 - strict decoder 拒绝未知字段、多 JSON value、未来 version、torn record、unsafe 文件、越界大小、错误 digest、非法因果顺序和 composition mismatch。
 - append 先写、`fsync`，再更新内存状态；失败尝试 truncate 回已知 durable prefix。回滚失败会和原错误一起返回。
 - resume 只对 schema 与因果均有效的完整记录做追加式 repair：取消未决 approval、补 tool error，并关闭 compaction/step/turn。它不截断 torn line、不删除未知内容、不迁移旧格式。

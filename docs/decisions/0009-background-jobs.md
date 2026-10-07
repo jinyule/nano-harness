@@ -85,6 +85,8 @@ owner 销毁清理由 `job.Service.Release` 实现：先取消该 owner 的活�
 
 托管变量只提供 `DSH_SHELL=1`、当前 `DSH_SESSION_ID` 和固定环境 allowlist。上游 `DSH_HOME` 指统一 Harness home，本仓 settings、credentials、session、spill、attachments 根均可独立部署，没有唯一等价目录；不把其中一个根伪装成 home，也不从父环境继承该变量。上游 `DSH_PROFILE` / `DSH_PROFILE_DIR` 描述启动器选择的 profile 及安装包目录，本仓使用编译时 composition，没有 profile 启动上下文，因此省略两者。它们不是仅因凭据隔离而被删除：首先缺少可诚实映射的托管事实。已有 workspace 事实由 `NANO_WORKSPACE` 给出。未来出现 profile 或统一 home consumer 时应按显式注入、allowlist 与启动校验重新评估，不建立无 consumer 的 contributor registry。
 
+子进程基础环境同样是固定 allowlist，不继承父环境：固定的系统与 Homebrew `PATH`、`C.UTF-8` locale、`TMPDIR`、`NANO_WORKSPACE`，加上 bash 显式加入的变量，完整列表归[安全规则](../security.md#凭据oauth-与日志)。上游 `subprocess` 的 `scrubbedParentEnv` 继承父环境，只按名称去掉匹配 `KEY|PASSWORD|SECRET|TOKEN` 的变量与全部 `DSH_*`，保留 `HOME`、用户 `PATH`、locale 与代理变量，再由 `childEnv` 叠加显式变量。本仓不跟随：名称启发式会漏掉不含这些词的凭据（例如带 userinfo 的代理或数据库 URL），根规则要求子进程环境使用 allowlist 或显式清理。代价是命令看不到 `HOME`、用户 `PATH` 与代理变量：安装在用户目录的工具需要绝对路径或在命令中设置 `PATH`；依赖 `HOME` 定位配置或缓存的工具可能找不到用户配置；需要代理的网络中，命令须自行设置代理。`HOME` 缺失时 bash 的 `~` 仍展开为当前用户目录。
+
 ### 完成通知
 
 job settle 时，如果前台完成收集权尚未释放、有正在进行的 wait 收走了结果、settle 由 `Kill` 引起、服务正在关闭或插件启动 context 已取消，则不发通知。前台预留覆盖 `Launch` 到 `Wait`，以及超时/取消的 `Wait` 返回到首次 `Read`/`Remove`，不依赖 producer 与调用方的调度顺序。否则服务通过消费方接口 `job.Notifier` 调用 agent `Registry.Notify`，文本为：
@@ -158,3 +160,4 @@ delegated agent 可以调用对其可见的 `job_*` 工具，但只能访问自�
 - 引入独立容器、VM 或平台后代跟踪，能够提供更强回收保证。
 - 观察到通知引起的连续自动 turn，需要上游的 `maxConsecutiveWakes` 或 `quiet` 投递。
 - 参考指针更新改变了 jobs、tool-jobs 或 tool-bash 的定义或语义。
+- 用户需要命令继承 `HOME`、用户 `PATH` 或代理配置。

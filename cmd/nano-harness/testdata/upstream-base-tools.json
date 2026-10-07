@@ -5,7 +5,7 @@
     "tag": "dsh-v0.2.1-alpha.1",
     "composition": "packages/bundle/base/cordis.patch.yml"
   },
-  "note": "Reviewed copy of the upstream model-visible definitions: the Base composition plus ask_user_question from the Web preset, and the Base plan-mode and goal prompt sections. Tests compare against this file and never read the submodule; refresh it only when the reference pointer moves.",
+  "note": "Reviewed copy of the upstream model-visible definitions: the Base tools this repository adopts (not the complete Base composition; deferred tools are listed in docs/reference-deepseek-harness.md) plus ask_user_question from the Web preset, and the Base plan-mode and goal prompt sections. Tests compare against this file and never read the submodule; refresh it only when the reference pointer moves.",
   "tools": [
     {
       "name": "ask_user_question",
