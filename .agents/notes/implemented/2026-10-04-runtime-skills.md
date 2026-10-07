@@ -5,7 +5,7 @@
 
 ## Context
 
-这是[工具对齐计划](../proposed/2026-10-04-upstream-tool-parity.md)的 WP6。上游 Base 组合挂载 `dsh-skill`、`dsh-skill-filesystem` 和 `dsh-tool-skill`（`dsh-skill-badge` 为 disabled）：从项目和用户目录发现 skill，在每个 step 之前用 `agent.inject()` 追加持久化目录或替换目录，提供 `skill` 加载工具，并把直接用户输入中的 `/name` 视为显式调用。nano-harness 既没有这些能力，engine 也没有在 step 之前追加模型输入的扩展点。
+这是[工具对齐计划](2026-10-04-upstream-tool-parity.md)的 WP6。上游 Base 组合挂载 `dsh-skill`、`dsh-skill-filesystem` 和 `dsh-tool-skill`（`dsh-skill-badge` 为 disabled）：从项目和用户目录发现 skill，在每个 step 之前用 `agent.inject()` 追加持久化目录或替换目录，提供 `skill` 加载工具，并把直接用户输入中的 `/name` 视为显式调用。nano-harness 既没有这些能力，engine 也没有在 step 之前追加模型输入的扩展点。
 
 调研结论：上游目录只渲染名称和截断描述；初始与替换模板不同；基准是最新的、仍在 surface 中可见的目录，所以 compaction 后会重新发布；不完整的发现保留旧目录；工具不可见时用空目录废止旧名称；`skill` 工具结果是 `<skill_content>`，只给基址目录，不列资源文件；上游工具不贡献 prompt 段落；subagent 只要能看到工具就会得到目录；`/name` 只扫描来源为 `user` 的消息，是 `disable-model-invocation` skill 的唯一入口；热更新靠 chokidar 监听加缓存失效。
 

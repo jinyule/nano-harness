@@ -5,7 +5,7 @@
 
 ## Context
 
-这是[工具对齐计划](../proposed/2026-10-04-upstream-tool-parity.md)的 WP11，接在 [WP9](2026-10-05-multimodal-tool-results.md) 之后。WP9 把规范化图片以 base64 内联在会话 JSONL 中；单会话 64 MiB 只容纳约 10 张大图，`fe565ad` 用 8 MiB 图片保留容量把写满变成可恢复的错误，fork 还会复制 parent 的图片字节。上游 Base 组合挂载 `dsh-attachment-local`，图片字节保存在会话日志之外，消息只保留内容寻址引用。维护者 2026-10-06 决定按上游迁移。
+这是[工具对齐计划](2026-10-04-upstream-tool-parity.md)的 WP11，接在 [WP9](2026-10-05-multimodal-tool-results.md) 之后。WP9 把规范化图片以 base64 内联在会话 JSONL 中；单会话 64 MiB 只容纳约 10 张大图，`fe565ad` 用 8 MiB 图片保留容量把写满变成可恢复的错误，fork 还会复制 parent 的图片字节。上游 Base 组合挂载 `dsh-attachment-local`，图片字节保存在会话日志之外，消息只保留内容寻址引用。维护者 2026-10-06 决定按上游迁移。
 
 参照：上游 `packages/attachment/attachment` 与 `attachment-local`（`store.ts` 的暂存、fsync 链、排他硬链接、摘要去重与校验读取）、`docs/subsystems/attachment.zh.md`、tool-fs `read-image.ts` 在追加结果前提交附件，以及 pi-ai adapter 在请求时读取引用。
 

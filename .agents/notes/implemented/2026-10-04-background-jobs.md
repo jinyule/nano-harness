@@ -5,7 +5,7 @@
 
 ## Context
 
-这是[工具对齐计划](../proposed/2026-10-04-upstream-tool-parity.md)的 WP3。WP1 让 `bash` 使用上游 `enableRunInBackground: false` 的前台变体：`timeoutMs` 到期即终止进程组，没有 `run_in_background`，也没有 `job_*` 工具。参考提交 `5badb15009ae` 的 Base 组合加载 `dsh-jobs-local`、`dsh-tool-jobs`，`tool-bash` 使用默认配置，因此模型看到后台变体，前台命令超时后转为后台 job，job 完成后通过 `agent.inject()`/`followup()` 以 `user/message` 通知 owner。
+这是[工具对齐计划](2026-10-04-upstream-tool-parity.md)的 WP3。WP1 让 `bash` 使用上游 `enableRunInBackground: false` 的前台变体：`timeoutMs` 到期即终止进程组，没有 `run_in_background`，也没有 `job_*` 工具。参考提交 `5badb15009ae` 的 Base 组合加载 `dsh-jobs-local`、`dsh-tool-jobs`，`tool-bash` 使用默认配置，因此模型看到后台变体，前台命令超时后转为后台 job，job 完成后通过 `agent.inject()`/`followup()` 以 `user/message` 通知 owner。
 
 调查了上游 `packages/jobs/{jobs,jobs-local,tool-jobs}`、`packages/shell/tool-bash`、`packages/core/agent-loop` 的 inbox 与 turn 循环，以及 Base 组合。上游 inbox 持久化为 `agent/inbox/spliced`；本仓 followup、steer 当前都是内存队列，模型可见事实只来自已提交事件。`tool-call-timeout-policy` 与本工作无关：`job_output` 自己管理 wait 期限，`bash` 的超时由工具自身处理。
 

@@ -5,7 +5,7 @@
 
 ## Context
 
-这是[工具对齐计划](../proposed/2026-10-04-upstream-tool-parity.md)的 WP10。产品没有长期目标，也没有在空闲时自主续跑的能力。上游参考提交 `5badb15009ae` 的 Base 组合挂载 `dsh-goal`、`dsh-tool-goal`、`dsh-goal-round-driver` 与 `dsh-command-goal`。调查结论（细节见 ADR-0016 背景）：
+这是[工具对齐计划](2026-10-04-upstream-tool-parity.md)的 WP10。产品没有长期目标，也没有在空闲时自主续跑的能力。上游参考提交 `5badb15009ae` 的 Base 组合挂载 `dsh-goal`、`dsh-tool-goal`、`dsh-goal-round-driver` 与 `dsh-command-goal`。调查结论（细节见 ADR-0016 背景）：
 
 - 状态只存于日志：`goal/change` 完整快照与 clear tombstone，准入轮次是带 `{goalId, revision, round}` 的 goal 来源 `user/message`，严格 fold 校验迁移与连续性；armed/disarmed 只在进程内，session 开启边沿一律解除。
 - 工具权限在执行点判定：create/edit/pause/resume 需要运行时 root 当前 turn 中的 `{kind:'user'}` 消息；complete/blocked 另接受确切当前轮次，自主 blocked 至少 3 轮；自主终结后延迟注入收尾指令。

@@ -5,7 +5,7 @@
 
 ## Context
 
-内置工具对齐上游 Base 工具集的总体计划（`proposed/2026-10-04-upstream-tool-parity.md`）把 `todo_write` 列为 WP4。产品此前没有任务列表能力，模型无法记录多步计划，界面也无法显示进度。
+内置工具对齐上游 Base 工具集的[总体计划](2026-10-04-upstream-tool-parity.md)把 `todo_write` 列为 WP4。产品此前没有任务列表能力，模型无法记录多步计划，界面也无法显示进度。
 
 上游参考提交 `5badb15009ae` 的 `packages/todo/tool-todo` 与生成工具目录给出行为：模型每次提交完整列表并替换旧列表；列表写入调用方 session 的 `todo/write` 快照，不进入模型 surface；Base 组合设置 `allowParallelInProgress: true`；结果文案固定；空内容、重复内容和非 agent 调用者失败；界面显示最新快照，下一次 `turn/start` 清除，`turn/end` 保留。上游 compaction 与 subagent 不对清单做特殊处理，每个 agent session 各有一份列表。
 

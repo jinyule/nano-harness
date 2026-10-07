@@ -11,7 +11,7 @@
 - `ask_user_question` 来自 Web preset：`packages/bundle/web-app/presets/standard.patch.yml` 挂载 `@deepseek-ai/dsh-tool-ask-user` 且不带配置，选用默认的阻塞（legacy）定义。它通过 `ctx.userQuestions` 接缝提问，答案以紧凑 JSON 返回。上游 `ask()` 只拒绝空问题和不自洽的 intent；只有可选的 timed 变体检查问题 id 唯一。运行时被其他 agent 拥有的子 agent 以 `DELEGATED_CALLER` 拒绝。阻塞模式不写额外会话记录：问题在 `tool/call` 参数中，答案在 `tool/result` 中。
 - 规划模式来自 Base 组合的 `@deepseek-ai/dsh-plan-mode`。状态是只写日志的整值事件 `plan/mode {active}`，最后一条生效。用户选择在没有打开的 turn 时立即追加；turn 进行中则保留在进程内，到下一个被接受的 step 前置点追加。激活时 system prompt 在 `PLAN_POLICY`（500）位置加入 Base 配置的 `section` 原文。`exit_plan_mode` 始终在工具目录中：规划模式外执行失败；规划模式内通过提问接缝提交计划（`plan-review` intent，`Approve`/`Keep planning`），获批后在下一个 step 前置点静默记录退出。用户切换且上一次请求描述的是另一种模式时，追加一条用户切换提示。上游明确只靠提示词约束，“every tool remains available”，强制限制交给 sandbox 与 approval。
 
-本仓的会话格式、approval 和 subagent 模型与上游不同，新增持久化记录前必须说明版本识别、旧格式拒绝和恢复路径（根 AGENTS.md）。总体范围见[工具对齐计划](../../.agents/notes/proposed/2026-10-04-upstream-tool-parity.md)，定义权威规则沿用 [ADR-0007](0007-upstream-base-tool-definitions.md)。
+本仓的会话格式、approval 和 subagent 模型与上游不同，新增持久化记录前必须说明版本识别、旧格式拒绝和恢复路径（根 AGENTS.md）。总体范围见[工具对齐计划](../../.agents/notes/implemented/2026-10-04-upstream-tool-parity.md)，定义权威规则沿用 [ADR-0007](0007-upstream-base-tool-definitions.md)。
 
 非目标：timed 提问、pending 问题与迟到回答（`user-question-reply`）、Web 的 plan-review 专用卡片、创建 agent 时指定规划模式、通用协作模式注册表。
 

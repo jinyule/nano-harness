@@ -13,7 +13,7 @@
 - 工具权限在执行点判定：create、edit、pause、resume 需要运行时 root agent 当前 turn 中的 `{kind: 'user'}` 消息；complete 与 blocked 另接受当前目标的确切当前轮次，自主 blocked 至少 3 轮。模型不能 resume durable paused 目标。自主轮次成功 complete/blocked 后延迟注入 `<goal_complete>`/`<goal_blocked>` 收尾指令。
 - driver 在整个 agent 空闲时预约 `roundsStarted + 1` 并 followup 一条 `<goal_round>` 提示；pre-step 栅栏拒绝陈旧预约，只有进入历史的消息消耗轮次。到上限以 `round-limit` 阻塞；被取消的轮次在下一个空闲点暂停，无关取消只解除 armed；人类 pause 中止当前 turn，模型自己的 pause 正常结束；`max-tokens` 与 agent 错误解除 armed；卸载时解除并取消在途轮次。
 
-本仓的会话格式、agent worker 与命令面和上游不同。新增持久化记录、改变核心循环与模型输入都须由 ADR 说明（根 AGENTS.md）。总体范围见[工具对齐计划](../../.agents/notes/proposed/2026-10-04-upstream-tool-parity.md)，定义权威规则沿用 [ADR-0007](0007-upstream-base-tool-definitions.md)，复用 [ADR-0009](0009-background-jobs.md) 的 `Notify`。
+本仓的会话格式、agent worker 与命令面和上游不同。新增持久化记录、改变核心循环与模型输入都须由 ADR 说明（根 AGENTS.md）。总体范围见[工具对齐计划](../../.agents/notes/implemented/2026-10-04-upstream-tool-parity.md)，定义权威规则沿用 [ADR-0007](0007-upstream-base-tool-definitions.md)，复用 [ADR-0009](0009-background-jobs.md) 的 `Notify`。
 
 非目标：独立评估器、token/费用/时间预算、并行多目标、`/goal` 附件、每命令轮次上限参数、Ralph 式新 agent 迭代、异常失败的自动重试。
 

@@ -9,7 +9,7 @@
 
 WP12 之前，`internal/app/tool` 把类型化错误渲染成文本后丢掉了类别，`session.ToolResult` 只有正文、`is_error` 和图片引用；web、goal、subagent 已有 Code 但不落盘，读取窗口、搜索计数、实际差异与 web 来源返回正文后无法重建。上游只有 read、read_image、write、edit、glob、grep、web_search、web_fetch 有 presentationMeta。
 
-分支标签（K1、审计 3、B1–B5、WP13、WP14）见[上游工具总计划](../proposed/2026-10-04-upstream-tool-parity.md)。重叠审计：[runtime 对齐记录](2026-10-06-tool-runtime-upstream-alignment.md)、[subagent 正确性记录](2026-10-06-subagent-correctness.md)、[spill/问题校验记录](2026-10-06-spill-question-and-call-validation.md)、[搜索/spill 对齐记录](2026-10-06-search-spill-query-parity.md)与[图片存储记录](2026-10-06-content-addressed-image-attachments.md)继续拥有各自已实施的契约；下表的批次记录拥有各自 producer 的细节与修复前证据。它们都是部分补充，保留并互链，不归档。
+分支标签（K1、审计 3、B1–B5、WP13、WP14）见[上游工具总计划](2026-10-04-upstream-tool-parity.md)。重叠审计：[runtime 对齐记录](2026-10-06-tool-runtime-upstream-alignment.md)、[subagent 正确性记录](2026-10-06-subagent-correctness.md)、[spill/问题校验记录](2026-10-06-spill-question-and-call-validation.md)、[搜索/spill 对齐记录](2026-10-06-search-spill-query-parity.md)与[图片存储记录](2026-10-06-content-addressed-image-attachments.md)继续拥有各自已实施的契约；下表的批次记录拥有各自 producer 的细节与修复前证据。它们都是部分补充，保留并互链，不归档。
 
 ## Decision
 

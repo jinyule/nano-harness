@@ -5,7 +5,7 @@
 
 ## Context
 
-这是[工具对齐计划](../proposed/2026-10-04-upstream-tool-parity.md)的 WP8。产品没有让模型向用户提问的能力，也没有规划模式。上游参考提交 `5badb15009ae` 中，`ask_user_question` 来自 Web preset（`tool-ask-user` 不带配置，即阻塞定义），`exit_plan_mode` 与规划指引来自 Base 的 `plan-mode`。调查结论：
+这是[工具对齐计划](2026-10-04-upstream-tool-parity.md)的 WP8。产品没有让模型向用户提问的能力，也没有规划模式。上游参考提交 `5badb15009ae` 中，`ask_user_question` 来自 Web preset（`tool-ask-user` 不带配置，即阻塞定义），`exit_plan_mode` 与规划指引来自 Base 的 `plan-mode`。调查结论：
 
 - 上游提问接缝 `ctx.userQuestions.ask()` 只拒绝空问题与不自洽的 intent；只有 timed 变体检查 id 唯一；运行时子 agent 以 `DELEGATED_CALLER` 拒绝；阻塞模式不写额外记录，问题与答案分别在 tool call 与 tool result 中；结果是紧凑 JSON。
 - 规划模式的持久状态是整值事件 `plan/mode {active}`。没有打开的 turn 时用户选择立即追加，否则保留到下一个 step 前置点；获批退出同样延迟且静默；用户切换在上一次请求描述另一模式时追加切换提示；system prompt 在 `PLAN_POLICY` 位置加入 Base `section`。上游只靠提示词约束，强制限制交给 sandbox 与 approval。

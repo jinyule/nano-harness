@@ -11,7 +11,7 @@ WP15 由维护者确定采用上游发送前审计：记录失败不发送。`in
 
 合入共享 ECMAScript 空白判断后，LLM 请求边界和新增审计 decoder 仍使用 Go `TrimSpace`：前者拒绝非空 U+0085，后者还接受空白 U+FEFF。永久领域、LLM 与 assembled 测试在修正前分别报告 NEL 被拒、BOM 被接受和 `searches=0`，具体命令见 Verification。
 
-与 [web 工具 Note](2026-10-04-web-search-and-fetch.md) 部分重叠：该 Note 保留 provider/fetch/lifecycle 证据，本 Note 拥有发送前审计和 `web-tools-v2`，双方互链。总体 [工具对齐计划](../proposed/2026-10-04-upstream-tool-parity.md) 将 WP15 标记为已实现，并继续拥有其他未完成工作包；不归档仍有效的 Note，不修改归档记录。`internal/adapter/web/fetch` 和 `internal/adapter/tool/web/html.go` 不在本改动范围。
+与 [web 工具 Note](2026-10-04-web-search-and-fetch.md) 部分重叠：该 Note 保留 provider/fetch/lifecycle 证据，本 Note 拥有发送前审计和 `web-tools-v2`，双方互链。总体 [工具对齐计划](2026-10-04-upstream-tool-parity.md) 将 WP15 标记为已实现，并继续拥有其他未完成工作包；不归档仍有效的 Note，不修改归档记录。`internal/adapter/web/fetch` 和 `internal/adapter/tool/web/html.go` 不在本改动范围。
 
 编码网络输入预算、审计 query 与调用参数的精确绑定，以及 web/LLM 空白 helper 收敛的补充证据见[工具边界修补 Note](2026-10-06-web-input-and-audit-validation.md)；本 Note 保留其余实施证据，二者部分重叠。
 

@@ -6,7 +6,7 @@
 
 ## 背景
 
-这是[工具对齐计划](../../.agents/notes/proposed/2026-10-04-upstream-tool-parity.md)的 WP3。[ADR-0007](0007-upstream-base-tool-definitions.md) 让 `bash` 暂用上游 `enableRunInBackground: false` 的前台变体：`timeoutMs` 到期即终止进程组，没有 `run_in_background`，也没有 `job_*` 工具。
+这是[工具对齐计划](../../.agents/notes/implemented/2026-10-04-upstream-tool-parity.md)的 WP3。[ADR-0007](0007-upstream-base-tool-definitions.md) 让 `bash` 暂用上游 `enableRunInBackground: false` 的前台变体：`timeoutMs` 到期即终止进程组，没有 `run_in_background`，也没有 `job_*` 工具。
 
 参考提交 `5badb15009ae` 的 Base 组合加载 `dsh-jobs-local` 与 `dsh-tool-jobs`，`tool-bash` 使用默认配置（`enableRunInBackground: true`、`promoteOnTimeout: true`）。上游语义：
 

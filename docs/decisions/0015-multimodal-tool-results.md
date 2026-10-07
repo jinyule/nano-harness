@@ -10,7 +10,7 @@
 
 本仓此前只允许 `user/message` 携带图片（TUI 的 `/attach`，[ADR-0002](0002-provider-neutral-agent-harness.md) 的图片输入规则；本 ADR 取代其中“只进入 user message”的部分），`tool.Result` 与 `session.ToolResult` 只有文本，三个 provider 在 wire 构造时拒绝 user 以外的图片。根规则要求模型可见信息能从权威会话事件重建，并要求首次持久化新数据前说明版本识别、旧格式拒绝和恢复路径。
 
-总体范围见[工具对齐计划](../../.agents/notes/proposed/2026-10-04-upstream-tool-parity.md)，定义权威规则沿用 [ADR-0007](0007-upstream-base-tool-definitions.md)，spill 策略见 [ADR-0008](0008-tool-output-spill-and-observation-policy.md)。
+总体范围见[工具对齐计划](../../.agents/notes/implemented/2026-10-04-upstream-tool-parity.md)，定义权威规则沿用 [ADR-0007](0007-upstream-base-tool-definitions.md)，spill 策略见 [ADR-0008](0008-tool-output-spill-and-observation-policy.md)。
 
 非目标：上游的内容寻址附件存储与请求图片缓存、PTC `run_code` 的嵌套图片转发、文本模型的图片占位投影、EXIF 方向校正。
 

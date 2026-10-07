@@ -5,7 +5,7 @@
 
 ## Context
 
-这是[工具对齐计划](../proposed/2026-10-04-upstream-tool-parity.md)的 WP7。本仓原有五个自有工具 `spawn_subagent`、`subagent_followup`、`subagent_interrupt`、`subagent_report`、`list_subagents`：spawn 总是等待 child 首轮报告，followup 同步等待，fork 是包含进行中 turn 的 128 KiB 文本快照。上游 Base 组合（参考提交 `5badb15009ae`）提供 `subagent`（spawn、`backgroundMode: continuable`）、`subagent_fork`（fork、`backgroundMode: one-shot`）、`send_message`、`interrupt_agent` 与 `list_agents`。
+这是[工具对齐计划](2026-10-04-upstream-tool-parity.md)的 WP7。本仓原有五个自有工具 `spawn_subagent`、`subagent_followup`、`subagent_interrupt`、`subagent_report`、`list_subagents`：spawn 总是等待 child 首轮报告，followup 同步等待，fork 是包含进行中 turn 的 128 KiB 文本快照。上游 Base 组合（参考提交 `5badb15009ae`）提供 `subagent`（spawn、`backgroundMode: continuable`）、`subagent_fork`（fork、`backgroundMode: one-shot`）、`send_message`、`interrupt_agent` 与 `list_agents`。
 
 调查了上游 `packages/subagent/{subagent,subagent-spawn-in-process,subagent-fork-in-process,subagent-in-process-driver,tool-subagent,tool-subagent-control}`、Base 组合、`docs/tool-catalog.md`，以及 fork 保持 one-shot 与按调用选择模型的两份上游 Note。要点：continuable child 驻留期间接收消息，空闲、收件箱为空且没有 continuable 子代理时结算并释放 activation，parent 收到 runtime 拥有的结算通知；消息只跨越直接父子边；`interrupt_agent` 可指向任一后代且不等待；列表读取 parent 自己的目录记录；fork 以 parent 最后一个 `turn/end` 为止的会话为种子；上游默认深度 1、池上限 8。
 

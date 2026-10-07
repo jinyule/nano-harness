@@ -5,7 +5,7 @@
 
 ## Context
 
-这是[工具对齐计划](../proposed/2026-10-04-upstream-tool-parity.md)的 WP2，接在 [WP1](2026-10-04-upstream-tool-definitions.md) 之后。WP1 让文件、搜索、shell 工具的定义与上游 Base 组合一致，但暂缓了上游 Base 挂载的三个包：`dsh-spill-local`、`dsh-spill-policy`（`maxInlineTokens: 12500`）和 `dsh-fs-observation-policy`。现状是 `glob`/`grep` 超出上限时只能报告 “The complete result could not be saved”，其他工具的超大结果直接截断到 256 KiB，`write` 可以覆盖模型从未读过的文件，`write`/`edit` 也不贡献上游 guidance。
+这是[工具对齐计划](2026-10-04-upstream-tool-parity.md)的 WP2，接在 [WP1](2026-10-04-upstream-tool-definitions.md) 之后。WP1 让文件、搜索、shell 工具的定义与上游 Base 组合一致，但暂缓了上游 Base 挂载的三个包：`dsh-spill-local`、`dsh-spill-policy`（`maxInlineTokens: 12500`）和 `dsh-fs-observation-policy`。现状是 `glob`/`grep` 超出上限时只能报告 “The complete result could not be saved”，其他工具的超大结果直接截断到 256 KiB，`write` 可以覆盖模型从未读过的文件，`write`/`edit` 也不贡献上游 guidance。
 
 上游的 spill 文件在 workspace 之外，靠 `read`/`grep` 读回；本仓文件工具限制在 workspace 内。上游观察策略不持久化，resume 后必须重新读取。
 

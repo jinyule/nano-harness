@@ -5,7 +5,7 @@
 
 ## Context
 
-这是[工具对齐计划](../proposed/2026-10-04-upstream-tool-parity.md)的 WP9，接在 [WP2](2026-10-05-tool-output-spill-and-read-before-write.md) 之后。上游 Base 组合挂载附件存储，`dsh-tool-fs` 因此注册 `read_image`，工具结果是一段文本信封加一张图片；Base 还挂载 `dsh-compaction-image-offload`。本仓此前只有 TUI `/attach` 把 JPEG/PNG 作为 `user/message` 图片持久化，`tool.Result` 与 `session.ToolResult` 只有文本，三个 provider 拒绝 user 以外的图片。
+这是[工具对齐计划](2026-10-04-upstream-tool-parity.md)的 WP9，接在 [WP2](2026-10-05-tool-output-spill-and-read-before-write.md) 之后。上游 Base 组合挂载附件存储，`dsh-tool-fs` 因此注册 `read_image`，工具结果是一段文本信封加一张图片；Base 还挂载 `dsh-compaction-image-offload`。本仓此前只有 TUI `/attach` 把 JPEG/PNG 作为 `user/message` 图片持久化，`tool.Result` 与 `session.ToolResult` 只有文本，三个 provider 拒绝 user 以外的图片。
 
 上游各 provider 的工具结果图片形态来自 pi-ai 0.87.1：本次在本机已安装的上游依赖（`node_modules/@earendil-works/pi-ai/dist/api`，只读）中逐一核对 `openai-responses-shared.js`、`anthropic-messages.js` 和 `openai-completions.js`，不复制代码。
 

@@ -6,7 +6,7 @@
 
 ## 背景
 
-产品原先注册 `read_file`、`list_files`、`search_files`、`apply_patch`、`run_shell` 和五个 subagent 工具。参考提交 `5badb15009ae1756c3afe0ae0cef1faafc290ccc`（`dsh-v0.2.1-alpha.1`）中，同类工具的名称、参数和能力都不同。维护者确定：同类工具对齐上游能力，模型可见定义（名称、描述、参数 schema、必填项、枚举、属性顺序）与上游默认组合一致。总体范围和工作包见[工具对齐计划](../../.agents/notes/proposed/2026-10-04-upstream-tool-parity.md)。
+产品原先注册 `read_file`、`list_files`、`search_files`、`apply_patch`、`run_shell` 和五个 subagent 工具。参考提交 `5badb15009ae1756c3afe0ae0cef1faafc290ccc`（`dsh-v0.2.1-alpha.1`）中，同类工具的名称、参数和能力都不同。维护者确定：同类工具对齐上游能力，模型可见定义（名称、描述、参数 schema、必填项、枚举、属性顺序）与上游默认组合一致。总体范围和工作包见[工具对齐计划](../../.agents/notes/implemented/2026-10-04-upstream-tool-parity.md)。
 
 上游 `docs/tool-catalog.md` 用每个工具包的默认配置启动，并不等于 Base 组合。`packages/bundle/base/cordis.patch.yml` 把 `sampleOverCapGlobResults` 设为 `false`，并在非 Windows 主机挂载 `dsh-fs-sandbox` 与 `dsh-bash-sandbox`。因此 Base 中的 `glob` 描述不同，`write`、`edit`、`bash` 还会声明 `sandbox_permissions` 和 `justification`。
 

@@ -6,7 +6,7 @@
 
 ## 背景
 
-这是[工具对齐计划](../../.agents/notes/proposed/2026-10-04-upstream-tool-parity.md)的 WP7。本仓原有 `spawn_subagent`、`subagent_followup`、`subagent_interrupt`、`subagent_report` 和 `list_subagents` 五个自有工具：`spawn_subagent` 总是等待 child 首轮报告，continuable child 也一样；followup 同样同步等待；fork 把 parent 当前 surface 压成一条最多 128 KiB 的文本消息，连同进行中的 turn 一起交给 child。
+这是[工具对齐计划](../../.agents/notes/implemented/2026-10-04-upstream-tool-parity.md)的 WP7。本仓原有 `spawn_subagent`、`subagent_followup`、`subagent_interrupt`、`subagent_report` 和 `list_subagents` 五个自有工具：`spawn_subagent` 总是等待 child 首轮报告，continuable child 也一样；followup 同样同步等待；fork 把 parent 当前 surface 压成一条最多 128 KiB 的文本消息，连同进行中的 turn 一起交给 child。
 
 上游 Base 组合（参考提交 `5badb15009ae`，`packages/bundle/base/cordis.patch.yml`）提供 `subagent`（spawn provider、`backgroundMode: continuable`）、`subagent_fork`（fork provider、`backgroundMode: one-shot`）、`send_message`、`interrupt_agent` 和 `list_agents`：continuable child 在后台运行，立即返回 id，结束时通知 parent；parent 与 resident child 之间可以双向发消息；fork child 以 parent 已完成 turn 的会话前缀为种子；列表读取 parent 自己的子代理目录记录，不打开 child 日志。
 

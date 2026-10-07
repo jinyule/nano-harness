@@ -5,7 +5,7 @@
 
 ## Context
 
-这是[工具对齐计划](../proposed/2026-10-04-upstream-tool-parity.md)的 WP1。产品原先注册 `read_file`、`list_files`、`search_files`、`apply_patch`、`run_shell`，每个工具手写 JSON schema、手写解码，并在 `Execute` 内校验参数，所以参数错误也会先触发 approval。`run_shell` 的 `host` 参数和 `apply_patch` 在上游参考提交 `5badb15009ae` 的 Base 组合中都没有对应定义。
+这是[工具对齐计划](2026-10-04-upstream-tool-parity.md)的 WP1。产品原先注册 `read_file`、`list_files`、`search_files`、`apply_patch`、`run_shell`，每个工具手写 JSON schema、手写解码，并在 `Execute` 内校验参数，所以参数错误也会先触发 approval。`run_shell` 的 `host` 参数和 `apply_patch` 在上游参考提交 `5badb15009ae` 的 Base 组合中都没有对应定义。
 
 上游 `docs/tool-catalog.md` 用工具包的默认配置启动，与 Base 组合不同：Base 关闭 glob 抽样，并挂载 fs/bash sandbox，因此 `write`、`edit`、`bash` 还声明 `sandbox_permissions` 和 `justification`。上游 `defineTool` 的根对象对未知成员开放，并在 `execute` 内校验参数；上游工具包通过 `ctx.systemPrompt` 贡献 `tool:*` 段落。
 

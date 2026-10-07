@@ -5,7 +5,7 @@
 
 ## Context
 
-[工具对齐计划](../proposed/2026-10-04-upstream-tool-parity.md)的 WP5 要求补齐参考 Base 组合的 `web_search` 与 `web_fetch`。参考提交 `5badb15009ae` 的 `packages/web/` 把能力拆为 `ctx.web` 服务、DeepSeek Messages 检索 provider、匿名 HTTP 抓取 provider 和 `tool-web` 消费方；生成目录给出两个工具的精确 schema，Base 把检索时限设为 60 s，抓取只到公网 HTTP(S)、逐个校验并固定连接，两者都不需要逐次确认。维护者确定 `web_search` 复用已配置 LLM provider 的服务端检索，不新增凭据。
+[工具对齐计划](2026-10-04-upstream-tool-parity.md)的 WP5 要求补齐参考 Base 组合的 `web_search` 与 `web_fetch`。参考提交 `5badb15009ae` 的 `packages/web/` 把能力拆为 `ctx.web` 服务、DeepSeek Messages 检索 provider、匿名 HTTP 抓取 provider 和 `tool-web` 消费方；生成目录给出两个工具的精确 schema，Base 把检索时限设为 60 s，抓取只到公网 HTTP(S)、逐个校验并固定连接，两者都不需要逐次确认。维护者确定 `web_search` 复用已配置 LLM provider 的服务端检索，不新增凭据。
 
 本仓此前没有 web 能力、HTML/字符集依赖或网络地址策略；provider 请求会跟随 HTTP 重定向。WP1（[ADR-0007](../../../docs/decisions/0007-upstream-base-tool-definitions.md)）已提供 `tool.Spec`/`tool.Define`、guidance 与 `Error: ` 结果格式，本 WP 基于它实现。
 
@@ -36,7 +36,7 @@
 
 代价：检索默认关闭，用户必须在 `settings.yaml` 选择 route，每次检索额外计费；Codex Responses 边界对 `web_search` 工具的接受度没有 live 证据。检索 endpoint 复用所选 provider，无法独立配置，取舍见 ADR-0011。抓取不读取代理环境变量；没有逐次确认，模型仍可把数据编码进公网 URL。两个工具的文本成功结果已进入 [通用 spill 策略](2026-10-05-tool-output-spill-and-read-before-write.md)；抓取先按 ADR-0011 的 UTF-16 格式化预算限额，再保存超过内联预算的完整格式化结果，存储不可用时仍受 runtime 的字节兜底。查询空白判定的补充证据见[对齐 Note](2026-10-06-search-spill-query-parity.md)。HTML 语义与预算的实施证据由 [转换与输出预算 Note](2026-10-06-web-fetch-html-and-output-budget.md)补充，等价排版差异归 ADR-0011。旧会话因 composition ID 变化而拒绝恢复，本仓尚无发布数据。
 
-参考 `docs/reference-deepseek-harness.md` 中“新工具暂缓”的那一行由总体计划在全部 WP 合并后更新，本 WP 未改动。
+参考 `docs/reference-deepseek-harness.md` 中“新工具暂缓”的那一行已在[参考分析收尾](2026-10-07-reference-closeout.md)中更新，本 WP 未改动。
 
 ## Verification
 

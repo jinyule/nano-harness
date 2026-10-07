@@ -6,7 +6,7 @@
 
 ## 背景
 
-[工具对齐计划](../../.agents/notes/proposed/2026-10-04-upstream-tool-parity.md)要求补齐参考 Base 组合的 `web_search` 与 `web_fetch`，模型可见定义与参考默认组合一致。参考实现（`third_party/deepseek-harness/packages/web/`，提交 `5badb15009ae`）把能力拆为 `ctx.web` 服务、检索/抓取 provider 和 `tool-web` 消费方：Base 用 DeepSeek 的 Anthropic 兼容 Messages API 加 `web_search_20250305` 服务端工具检索（`searchTimeoutMs: 60000`），匿名抓取只到公网 HTTP(S)，逐个解析并校验目标并固定实际连接；两者都不需要逐次确认，结果是外部不可信数据。
+[工具对齐计划](../../.agents/notes/implemented/2026-10-04-upstream-tool-parity.md)要求补齐参考 Base 组合的 `web_search` 与 `web_fetch`，模型可见定义与参考默认组合一致。参考实现（`third_party/deepseek-harness/packages/web/`，提交 `5badb15009ae`）把能力拆为 `ctx.web` 服务、检索/抓取 provider 和 `tool-web` 消费方：Base 用 DeepSeek 的 Anthropic 兼容 Messages API 加 `web_search_20250305` 服务端工具检索（`searchTimeoutMs: 60000`），匿名抓取只到公网 HTTP(S)，逐个解析并校验目标并固定实际连接；两者都不需要逐次确认，结果是外部不可信数据。
 
 本仓已有 OpenAI（含 ChatGPT Codex Responses 边界）、Anthropic 与 OpenRouter 三个 provider，它们各自提供服务端检索。本仓没有 web 能力、HTML 解析或字符集解码依赖，也没有可直接复用的网络地址策略。
 

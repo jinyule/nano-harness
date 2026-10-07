@@ -5,7 +5,7 @@
 
 ## Context
 
-这是[工具对齐计划](../proposed/2026-10-04-upstream-tool-parity.md)的 WP16。[ADR-0009](../../../docs/decisions/0009-background-jobs.md) 原先让待投递的完成通知只存在内存里，进程退出就丢弃。上游能力对齐审计（`_coord/reports/codex-audit3-report.md`“已记录的有意偏离”）指出理由不成立：已经完成、只是还没送达的通知仍是有效的完成事实。
+这是[工具对齐计划](2026-10-04-upstream-tool-parity.md)的 WP16。[ADR-0009](../../../docs/decisions/0009-background-jobs.md) 原先让待投递的完成通知只存在内存里，进程退出就丢弃。上游能力对齐审计（`_coord/reports/codex-audit3-report.md`“已记录的有意偏离”）指出理由不成立：已经完成、只是还没送达的通知仍是有效的完成事实。
 
 调查了参考提交 `5badb15009ae` 的 `packages/core/agent-loop/src/inbox.ts`、`agent.ts`、`packages/core/agent/src/consumed-work.ts` 和 `packages/jobs/tool-jobs`：上游 inbox 把每次入队、认领和丢弃写成 `agent/inbox/spliced`，投影从这些事件折叠；认领后的消息作为 step 的 `user/message` 提交；恢复后待投递项仍在 inbox 中，只有下一次唤醒才开启 turn。`tool-jobs` 对空闲 owner `followup`、对忙碌 owner `inject`，被 wait 收走、模型自己 kill 和 teardown 的 settle 不入队。
 
