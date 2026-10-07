@@ -108,7 +108,7 @@ ADR 编号预先分配，避免并行分支冲突；审查修复期间追加 001
 
 ### 门禁
 
-每个 WP 与修复合入前都在其分支上通过 `make check`（全仓 race、逐产品文件 100% coverage、lint 0 issues、架构、submodule、Agent Note、清单内 mutation 全部 killed、真实 cmd build/smoke）；改动 TUI 或模型可见行为的同时通过 `make tui-e2e`。具体证据在各 WP 与修复的 Agent Note 中。集成分支上最近一次完整记录来自[文件结果对齐 Note](2026-10-06-structured-file-result-alignment.md)：基于 `a1cd3c9` 的 `make check` 通过，180 项 mutation 全部 killed；`make tui-e2e` 通过，真实二进制与 PTY 下 19 个 root 工具调用。
+每个 WP 与修复合入前都在其分支上通过 `make check`（全仓 race、逐产品文件 100% coverage、lint 0 issues、架构、submodule、Agent Note、清单内 mutation 全部 killed、真实 cmd build/smoke）；改动 TUI 或模型可见行为的同时通过 `make tui-e2e`。具体证据在各 WP 与修复的 Agent Note 中。第七轮修复全部合入后，集成分支 HEAD `dc39d48` 上的 `make check` 通过：全仓 race、逐产品文件 100% coverage、lint 0 issues，清单中 189 项 mutation 全部 killed，真实 cmd build 与 smoke 通过；`make tui-e2e` 也通过，真实二进制与 PTY 下 19 个 root 工具调用，覆盖附件存储、sandbox 模式切换、规划审查、goal 轮次、spawn/fork、审批、resume 与 cleanup。最终 HEAD 的复跑结果见下文“最终 Fable 整体 review”一节。
 
 ### 审查与处理
 
@@ -120,11 +120,26 @@ ADR 编号预先分配，避免并行分支冲突；审查修复期间追加 001
 | 第三轮 | `bbfd8a5..d7d199d`，三位 opus 分 agent、tools、wiring | 唤醒 turn 开场被打断留下未闭合 turn、已取出通知丢失（`4f4c193`）；超长后台命令的完成通知被拒（`3966344`）；单层压缩输入无上限与审计未绑定调用参数（`5d786ab`）；附加 mutation 清单进门禁（`1d5dc58`）；结算通知与释放顺序的偶发失败（`1f2aa37`）。“已执行的成功结果被改成 aborted”经核对与上游一致，驳回 |
 | 第四轮 | `d7d199d..005a3a8`，opus | C1：同一结算窗口中暂停被后续取消覆盖（`5866270`），“取消后重新授权再取消”保留为有意偏差；`Maybe` 返回值与 fork surface 措辞（`7799a5e`）；shell 与 job 文案、排空窗口对齐上游（`7667d02`）；subagent 随时序变化的覆盖路径（`52d3715`）；取消改写错误结果，与上游只替换成功结果不一致（`7c60a92`） |
 | 第五轮 | `005a3a8..3e1d726`，Codex | approval 决定落盘期间关闭仍授权执行（`287e199`）；sandbox 与委派两份局部快照各自声明取代、策略路径转义与上游不同（`91aef9e`） |
-| 最终联合评审 | `3e1d726..289e970`，Codex 与 opus（wiring 视角）独立评审 | 没有 Blocker。broker 故障被误分类为 `NO_PROVIDER`、非法答案批被分类为 `BAD_ANSWER`（`de1a12a`）；context 段落按 order 排序、web cleanup 取消有界测试、版本号文档改为引用 `compositionID`（`168aa92`）；文件 diff 与文件系统错误分类边界（`0e4d084`）；参考分析收敛为当前事实（`a1cd3c9`） |
+| 最终联合评审 | `3e1d726..289e970`，Codex 与 opus（wiring 视角）独立评审 | opus 侧没有 Blocker。Codex 侧确认 4 个 Blocker：FB1 edit diff 把整个替换块当作变化；FB2 普通 I/O 错误被过度分类；FB3 目录发布冲突被误分类；FB4 broker 故障被误分类为 `NO_PROVIDER`。修复：`0e4d084`（FB1–FB3），diff 工作预算与取消 `e60f095`，`de1a12a`（FB4，同时去掉 `BAD_ANSWER`）。Suggestion 由 `168aa92` 处理：context 段落按 order 排序、web cleanup 取消有界测试、版本号文档改为引用 `compositionID`。参考分析由 `a1cd3c9` 收敛为当前事实 |
 
 ### 第七轮交叉评审
 
-待补。范围 `289e970..HEAD`，由 opus 与 Codex（`gpt-6-astra`）交叉评审，结论与处理由协调者填写。
+范围 `289e970..e60f095`，交叉进行：opus 审 Codex 写的 `0e4d084`、`e60f095`；Codex（`gpt-6-astra`）审 opus 写的 `de1a12a`、`168aa92`、`a1cd3c9`。双方的发现都由对方核实后再派修复。两侧都没有 Blocker。
+
+- opus 的发现经 Codex 核实：
+  - S1 等长最短路径的取舍与 jsdiff 不同，成立，记为偏差。
+  - S2 约 1 MiB 以上的文件因扫描计费而没有 edit diff，部分成立：同样内容的 write 会先被参数上限拒绝。只补记预算后果。
+  - S3 guarded create 三处模型可见文案与上游不同，成立，已修。
+  - S4 两个变异存活，成立，已补测试。
+- Codex 的发现经 opus 核实：
+  - 参考分析漏写 full-access 搜索根例外，成立。
+  - “Check 不接收 context”已过时，成立。
+  - broker 错误被折叠的偏差未记录，部分成立，补充了普通错误 message 被改写一项。
+  - 偏差表漏写 edit diff 预算，成立。
+  - 稳定排序测试不足，成立。
+- 修复：`e5851d9`（文档）、`9ff8572`（48 个 section 的稳定排序测试）、`46b16a5`（guarded create 文案、diff 守卫与 hunk 边界测试、ADR-0019 偏差）。
+- Codex 对修复做交叉复审时又发现以下问题，均已修复：文件工具路径用 `%q` 而上游直接插入原文（`9c9836f`，审计全部带路径的模型可见文本，审批原因保留 `%q`，见 ADR-0007）；broker 影响表述过宽、旧 Note 缺少取代链接（`6101031`）；bash workdir 文案仍用 `%q`、question 测试注释有误（`dc39d48`）。
+- 第三次复核结论：第七轮交叉复审通过。
 
 ### 最终 Fable 整体 review
 
