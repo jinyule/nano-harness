@@ -1300,5 +1300,19 @@
     "before": "change.startA <= hunks[len(hunks)-1].endA && change.startB <= hunks[len(hunks)-1].endB",
     "after": "change.startA < hunks[len(hunks)-1].endA && change.startB < hunks[len(hunks)-1].endB",
     "test": "^TestEditMeta_MergesHunksAtJsdiffBoundary$"
+  },
+  {
+    "id": "file-path-quote-raw",
+    "file": "internal/adapter/tool/file/observe.go",
+    "before": "cannot modify \\\"%s\\\": file has not been read",
+    "after": "cannot modify %q: file has not been read",
+    "test": "^TestFileTools_QuotePathsLikeUpstream$"
+  },
+  {
+    "id": "file-guarded-create-path-quote-raw",
+    "file": "internal/adapter/tool/file/provider.go",
+    "before": "fmt.Sprintf(\"cannot write \\\"%s\\\": not a regular file\", target)",
+    "after": "fmt.Sprintf(\"cannot write %q: not a regular file\", target)",
+    "test": "^TestGuardedCreateFailure_QuotesPathsLikeUpstream$"
   }
 ]

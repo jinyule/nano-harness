@@ -49,7 +49,7 @@ func (provider *Provider) writeTool() *appTool.Tool {
 			// are hashed only at the execution point.
 			target, err := provider.root.WritableIn(arguments.FilePath, mode)
 			if err != nil {
-				return classifyPath(arguments.FilePath, fmt.Errorf("cannot write %q: %w", arguments.FilePath, err))
+				return classifyPath(arguments.FilePath, fmt.Errorf("cannot write \"%s\": %w", arguments.FilePath, err))
 			}
 			_, _, _, err = provider.admitWrite(invocation.SessionID, target, maxEditBytes, false, ctx.Err)
 			return err
@@ -88,7 +88,7 @@ func (provider *Provider) write(ctx context.Context, invocation appTool.Invocati
 	}
 	target, err := provider.root.WritableIn(arguments.FilePath, mode)
 	if err != nil {
-		return appTool.Result{}, classifyPath(arguments.FilePath, fmt.Errorf("cannot write %q: %w", arguments.FilePath, err))
+		return appTool.Result{}, classifyPath(arguments.FilePath, fmt.Errorf("cannot write \"%s\": %w", arguments.FilePath, err))
 	}
 	defer provider.mutate.lock(target)()
 	info, exists, before, err := provider.admitWrite(invocation.SessionID, target, math.MaxInt64, len(arguments.Content) < maxEditBytes, ctx.Err)
@@ -100,7 +100,7 @@ func (provider *Provider) write(ctx context.Context, invocation appTool.Invocati
 		permissions, operation = info.Mode().Perm(), "Updated"
 	}
 	if err := makeDirs(filepath.Dir(target), newDirectoryMode); err != nil {
-		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot write %q: %w", target, err))
+		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot write \"%s\": %w", target, err))
 	}
 	content := []byte(arguments.Content)
 	meta := writeMeta(target, exists, before, content)
@@ -112,7 +112,7 @@ func (provider *Provider) write(ctx context.Context, invocation appTool.Invocati
 		if _, statErr := lstatFile(target); !exists && statErr == nil {
 			return appTool.Result{}, &plainFileError{message: errNotRead(target).Error(), err: err}
 		}
-		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot write %q: %w", target, err))
+		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot write \"%s\": %w", target, err))
 	}
 	provider.observed.record(invocation.SessionID, target, observed(content))
 	return appTool.Result{Text: fmt.Sprintf("<path>%s</path>\n<type>file</type>\n<content>\n%s file\n</content>", target, operation), Meta: &session.ToolMeta{Write: &meta}}, nil
@@ -130,9 +130,9 @@ func (provider *Provider) admitWrite(sessionID, target string, hashLimit int64, 
 	exists := err == nil
 	switch {
 	case exists && !info.Mode().IsRegular():
-		return nil, false, nil, fsFailure("FS_NOT_REGULAR_FILE", fmt.Errorf("cannot write %q: not a regular file", target))
+		return nil, false, nil, fsFailure("FS_NOT_REGULAR_FILE", fmt.Errorf("cannot write \"%s\": not a regular file", target))
 	case !exists && !errors.Is(err, fs.ErrNotExist):
-		return nil, false, nil, classifyKnown(fmt.Errorf("cannot write %q: %w", target, err))
+		return nil, false, nil, classifyKnown(fmt.Errorf("cannot write \"%s\": %w", target, err))
 	}
 	var before []byte
 	prior, _ := provider.observed.lookup(sessionID, target)
@@ -144,7 +144,7 @@ func (provider *Provider) admitWrite(sessionID, target string, hashLimit int64, 
 	case prior.present && info.Size() <= hashLimit:
 		current, content, err := digestFile(target, retain && info.Size() < maxEditBytes, stop)
 		if err != nil {
-			return nil, false, nil, classifyKnown(fmt.Errorf("cannot write %q: %w", target, err))
+			return nil, false, nil, classifyKnown(fmt.Errorf("cannot write \"%s\": %w", target, err))
 		}
 		before = content
 		if current != prior.version {

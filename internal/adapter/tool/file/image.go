@@ -65,14 +65,14 @@ func checkReadImage(_ context.Context, invocation appTool.Invocation, arguments 
 	}
 	extension := strings.ToLower(extname(arguments.FilePath))
 	if _, ok := imageExtensions[extension]; !ok && extension != "" {
-		return fmt.Errorf("cannot read %q: the %s extension does not declare a supported image format; read_image accepts PNG/JPEG/WebP/GIF files, including extension-less files in those formats", arguments.FilePath, extension)
+		return fmt.Errorf("cannot read \"%s\": the %s extension does not declare a supported image format; read_image accepts PNG/JPEG/WebP/GIF files, including extension-less files in those formats", arguments.FilePath, extension)
 	}
 	route := invocation.Route
 	if route.Provider == "" || route.Model == "" {
-		return fmt.Errorf("cannot read %q as an image: the current model route could not be resolved", arguments.FilePath)
+		return fmt.Errorf("cannot read \"%s\" as an image: the current model route could not be resolved", arguments.FilePath)
 	}
 	if !route.ImageInput {
-		return fmt.Errorf("cannot read %q as an image: model %q does not declare image input; switch to an image-capable model to read images", arguments.FilePath, route.Model)
+		return fmt.Errorf("cannot read \"%s\" as an image: model \"%s\" does not declare image input; switch to an image-capable model to read images", arguments.FilePath, route.Model)
 	}
 	return nil
 }
@@ -85,34 +85,34 @@ func (provider *Provider) readImage(ctx context.Context, invocation appTool.Invo
 	case errors.Is(err, fs.ErrNotExist):
 		provider.observed.record(invocation.SessionID, display, observation{})
 		if display == "" {
-			return appTool.Result{}, fmt.Errorf("cannot read %q: not found", display)
+			return appTool.Result{}, fmt.Errorf("cannot read \"%s\": not found", display)
 		}
-		return appTool.Result{}, &fsError{code: "FS_NOT_FOUND", message: fmt.Sprintf("cannot read %q: not found", display), err: err}
+		return appTool.Result{}, &fsError{code: "FS_NOT_FOUND", message: fmt.Sprintf("cannot read \"%s\": not found", display), err: err}
 	case err != nil:
-		return appTool.Result{}, classifyPath(display, fmt.Errorf("cannot read %q: %w", arguments.FilePath, err))
+		return appTool.Result{}, classifyPath(display, fmt.Errorf("cannot read \"%s\": %w", arguments.FilePath, err))
 	}
 	info, err := statFile(path)
 	switch {
 	case err != nil:
-		return appTool.Result{}, classifyPath(display, fmt.Errorf("cannot read %q: %w", display, err))
+		return appTool.Result{}, classifyPath(display, fmt.Errorf("cannot read \"%s\": %w", display, err))
 	case !info.Mode().IsRegular():
-		return appTool.Result{}, fsFailure("FS_NOT_REGULAR_FILE", fmt.Errorf("cannot read %q: not a regular file", display))
+		return appTool.Result{}, fsFailure("FS_NOT_REGULAR_FILE", fmt.Errorf("cannot read \"%s\": not a regular file", display))
 	case info.Size() > session.MaxImageSourceBytes:
-		return appTool.Result{}, fsFailure("FS_TOO_LARGE", fmt.Errorf("cannot read %q: %d bytes exceeds the %d-byte limit", display, info.Size(), session.MaxImageSourceBytes))
+		return appTool.Result{}, fsFailure("FS_TOO_LARGE", fmt.Errorf("cannot read \"%s\": %d bytes exceeds the %d-byte limit", display, info.Size(), session.MaxImageSourceBytes))
 	}
 	data, err := readImageBytes(path)
 	if err != nil {
-		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot read %q: %w", display, err))
+		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot read \"%s\": %w", display, err))
 	}
 	declared := imageExtensions[strings.ToLower(extname(arguments.FilePath))]
 	actual := sniffImage(data)
 	switch {
 	case actual == "" && declared == "":
-		return appTool.Result{}, fmt.Errorf("cannot read %q: the file content is not a supported image format; read_image accepts PNG/JPEG/WebP/GIF", display)
+		return appTool.Result{}, fmt.Errorf("cannot read \"%s\": the file content is not a supported image format; read_image accepts PNG/JPEG/WebP/GIF", display)
 	case actual == "":
 		return appTool.Result{}, errUndecodable(display)
 	case declared != "" && actual != declared:
-		return appTool.Result{}, fmt.Errorf("cannot read %q: the %s extension declares %s, but the bytes use a different image format; rename the file to match its actual format if it is PNG/JPEG/WebP/GIF, or convert it to one of those formats", display, strings.ToLower(extname(arguments.FilePath)), declared)
+		return appTool.Result{}, fmt.Errorf("cannot read \"%s\": the %s extension declares %s, but the bytes use a different image format; rename the file to match its actual format if it is PNG/JPEG/WebP/GIF, or convert it to one of those formats", display, strings.ToLower(extname(arguments.FilePath)), declared)
 	}
 	// The image is durable before the result that references it is
 	// committed, so the log never cites bytes the store does not hold.
@@ -121,18 +121,18 @@ func (provider *Provider) readImage(ctx context.Context, invocation appTool.Invo
 	case errors.Is(err, session.ErrImageFormat):
 		return appTool.Result{}, errUndecodable(display)
 	case errors.Is(err, session.ErrImagePixels):
-		return appTool.Result{}, fmt.Errorf("cannot read %q: the image exceeds the %d-pixel decoded-size limit; downscale the image and read the smaller copy", display, session.MaxImageSourcePixels)
+		return appTool.Result{}, fmt.Errorf("cannot read \"%s\": the image exceeds the %d-pixel decoded-size limit; downscale the image and read the smaller copy", display, session.MaxImageSourcePixels)
 	case errors.Is(err, session.ErrImageBytes):
-		return appTool.Result{}, fmt.Errorf("cannot read %q: the image cannot be stored within the deployment's byte limits; downscale the image and read the smaller copy", display)
+		return appTool.Result{}, fmt.Errorf("cannot read \"%s\": the image cannot be stored within the deployment's byte limits; downscale the image and read the smaller copy", display)
 	case err != nil:
-		return appTool.Result{}, fmt.Errorf("cannot read %q: %w", display, err)
+		return appTool.Result{}, fmt.Errorf("cannot read \"%s\": %w", display, err)
 	}
 	provider.observed.record(invocation.SessionID, path, observed(data))
 	return appTool.Result{Text: formatImageRead(display, normalized, source), Image: &normalized, Meta: &session.ToolMeta{ReadImage: &session.ReadImageMeta{Path: display}}}, nil
 }
 
 func errUndecodable(display string) error {
-	return fmt.Errorf("cannot read %q: the bytes do not decode as a supported PNG/JPEG/WebP/GIF image; the file may be truncated or corrupt", display)
+	return fmt.Errorf("cannot read \"%s\": the bytes do not decode as a supported PNG/JPEG/WebP/GIF image; the file may be truncated or corrupt", display)
 }
 
 // readImageBytes reads a whole source within the byte limit; a file that

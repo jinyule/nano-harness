@@ -139,14 +139,14 @@ func writeAtomic(ctx context.Context, target string, data []byte, mode fs.FileMo
 // publication cause and any inspection failure.
 func guardedCreateFailure(target string, cause error) error {
 	info, err := lstatFile(target)
-	code, message := "FS_IO_ERROR", fmt.Errorf("cannot write %q: %w", target, cause).Error()
+	code, message := "FS_IO_ERROR", fmt.Errorf("cannot write \"%s\": %w", target, cause).Error()
 	switch {
 	case err == nil && info.Mode().IsRegular():
 		code, message = "FS_NOT_OBSERVED", errNotRead(target).Error()
 	case err == nil:
-		code, message = "FS_NOT_REGULAR_FILE", fmt.Sprintf("cannot write %q: not a regular file", target)
+		code, message = "FS_NOT_REGULAR_FILE", fmt.Sprintf("cannot write \"%s\": not a regular file", target)
 	case !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR):
-		message = fmt.Errorf("cannot write %q: %w", target, err).Error()
+		message = fmt.Errorf("cannot write \"%s\": %w", target, err).Error()
 		cause = errors.Join(cause, err)
 	case errors.Is(cause, fs.ErrExist):
 		code, message = "FS_NOT_OBSERVED", errNotRead(target).Error()

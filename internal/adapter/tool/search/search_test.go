@@ -614,3 +614,26 @@ func TestSearch_SavesCompleteResultsAndSearchesTheSpillPartition(t *testing.T) {
 		t.Fatalf("unsaved grep = %q", result.Output[len(result.Output)-120:])
 	}
 }
+
+// TestSearch_QuotePathsLikeUpstreamStyle keeps search path errors in the same
+// plain-double-quote form as the file tools: the path is not escaped.
+func TestSearch_QuotePathsLikeUpstreamStyle(t *testing.T) {
+	h := newHarness(t, &scriptedRunner{version: supported()})
+	name := `say "hi" back\slash 文件`
+	if err := syscall.Mkfifo(filepath.Join(h.root, name), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		tool string
+		path string
+		want string
+	}{
+		{"grep", name + ".missing", `Error: grep search failed: "` + name + `.missing" not found`},
+		{"glob", name + ".missing", `Error: glob search failed: "` + name + `.missing" not found`},
+		{"grep", name, `Error: grep search failed: "` + name + `" is not a regular file or directory`},
+	} {
+		if result := h.call(t, test.tool, map[string]any{"pattern": "x", "path": test.path}); result.Output != test.want {
+			t.Errorf("%s(%q)\n got: %s\nwant: %s", test.tool, test.path, result.Output, test.want)
+		}
+	}
+}

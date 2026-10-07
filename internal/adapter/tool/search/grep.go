@@ -109,7 +109,7 @@ func (provider *Provider) grep(ctx context.Context, invocation appTool.Invocatio
 	}
 	// ripgrep would block reading a FIFO or device named explicitly.
 	if !start.info.IsDir() && !start.info.Mode().IsRegular() {
-		return appTool.Result{}, searchError("SEARCH_FAILED", fmt.Errorf("grep search failed: %q is not a regular file or directory", start.relative))
+		return appTool.Result{}, searchError("SEARCH_FAILED", fmt.Errorf("grep search failed: \"%s\" is not a regular file or directory", start.relative))
 	}
 	command := []string{"--json", "--regexp=" + arguments.Pattern}
 	if arguments.Include != nil {

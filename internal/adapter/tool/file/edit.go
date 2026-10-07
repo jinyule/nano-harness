@@ -60,7 +60,7 @@ func (provider *Provider) editTool() *appTool.Tool {
 			// execution re-checks them under the target's lock.
 			target, err := provider.root.WritableIn(arguments.FilePath, mode)
 			if err != nil {
-				return classifyPath(arguments.FilePath, fmt.Errorf("cannot edit %q: %w", arguments.FilePath, err))
+				return classifyPath(arguments.FilePath, fmt.Errorf("cannot edit \"%s\": %w", arguments.FilePath, err))
 			}
 			_, _, err = provider.observedContent(invocation.SessionID, target)
 			return err
@@ -93,7 +93,7 @@ func (provider *Provider) edit(ctx context.Context, invocation appTool.Invocatio
 	}
 	target, err := provider.root.WritableIn(arguments.FilePath, mode)
 	if err != nil {
-		return appTool.Result{}, classifyPath(arguments.FilePath, fmt.Errorf("cannot edit %q: %w", arguments.FilePath, err))
+		return appTool.Result{}, classifyPath(arguments.FilePath, fmt.Errorf("cannot edit \"%s\": %w", arguments.FilePath, err))
 	}
 	defer provider.mutate.lock(target)()
 	info, raw, err := provider.observedContent(invocation.SessionID, target)
@@ -105,7 +105,7 @@ func (provider *Provider) edit(ctx context.Context, invocation appTool.Invocatio
 		return appTool.Result{}, err
 	}
 	if err := writeAtomic(ctx, target, edited, info.Mode().Perm(), false); err != nil {
-		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot edit %q: %w", target, err))
+		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot edit \"%s\": %w", target, err))
 	}
 	provider.observed.record(invocation.SessionID, target, observed(edited))
 	// Display-only work uses the committed snapshot. Cancellation here leaves
@@ -126,24 +126,24 @@ func (provider *Provider) observedContent(sessionID, target string) (fs.FileInfo
 	case !seen:
 		return nil, nil, errNotRead(target)
 	case !prior.present:
-		return nil, nil, fsFailure("FS_NOT_FOUND", fmt.Errorf("cannot edit %q: not found", target))
+		return nil, nil, fsFailure("FS_NOT_FOUND", fmt.Errorf("cannot edit \"%s\": not found", target))
 	}
 	info, err := lstatFile(target)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return nil, nil, errStale("edit", target, "file changed since it was read")
 	case err != nil:
-		return nil, nil, classifyKnown(fmt.Errorf("cannot edit %q: %w", target, err))
+		return nil, nil, classifyKnown(fmt.Errorf("cannot edit \"%s\": %w", target, err))
 	case !info.Mode().IsRegular():
-		return nil, nil, fsFailure("FS_NOT_REGULAR_FILE", fmt.Errorf("cannot edit %q: not a regular file", target))
+		return nil, nil, fsFailure("FS_NOT_REGULAR_FILE", fmt.Errorf("cannot edit \"%s\": not a regular file", target))
 	case info.Size() != prior.size:
 		return nil, nil, errStale("edit", target, "file changed since it was read")
 	case info.Size() > maxEditBytes:
-		return nil, nil, fsFailure("FS_TOO_LARGE", fmt.Errorf("cannot edit %q: %d bytes exceeds the %d-byte limit", target, info.Size(), maxEditBytes))
+		return nil, nil, fsFailure("FS_TOO_LARGE", fmt.Errorf("cannot edit \"%s\": %d bytes exceeds the %d-byte limit", target, info.Size(), maxEditBytes))
 	}
 	raw, err := readLimited(target)
 	if err != nil {
-		return nil, nil, classifyKnown(fmt.Errorf("cannot edit %q: %w", target, err))
+		return nil, nil, classifyKnown(fmt.Errorf("cannot edit \"%s\": %w", target, err))
 	}
 	if digest(raw) != prior.version {
 		return nil, nil, errStale("edit", target, "file changed since it was read")
@@ -172,10 +172,10 @@ func readLimited(path string) ([]byte, error) {
 // restored on write-back, and a leading BOM is preserved.
 func replaceLiteral(raw []byte, oldString, newString string, replaceAll bool, display string) ([]byte, error) {
 	if bytes.IndexByte(raw, 0) >= 0 {
-		return nil, fsFailure("FS_NOT_TEXT", fmt.Errorf("cannot edit %q: binary file", display))
+		return nil, fsFailure("FS_NOT_TEXT", fmt.Errorf("cannot edit \"%s\": binary file", display))
 	}
 	if !utf8.Valid(raw) {
-		return nil, fsFailure("FS_NOT_TEXT", fmt.Errorf("cannot edit %q: invalid UTF-8 text", display))
+		return nil, fsFailure("FS_NOT_TEXT", fmt.Errorf("cannot edit \"%s\": invalid UTF-8 text", display))
 	}
 	bom := bytes.HasPrefix(raw, utf8BOM)
 	text := string(bytes.TrimPrefix(raw, utf8BOM))
@@ -188,9 +188,9 @@ func replaceLiteral(raw []byte, oldString, newString string, replaceAll bool, di
 	matches := strings.Count(content, needle)
 	switch {
 	case matches == 0:
-		return nil, fsFailure("FS_EDIT_NOT_FOUND", fmt.Errorf("old_string was not found in %q", display))
+		return nil, fsFailure("FS_EDIT_NOT_FOUND", fmt.Errorf("old_string was not found in \"%s\"", display))
 	case matches > 1 && !replaceAll:
-		return nil, fsFailure("FS_AMBIGUOUS_EDIT", fmt.Errorf("old_string matched %d times in %q; provide a more specific old_string or set replace_all to true", matches, display))
+		return nil, fsFailure("FS_AMBIGUOUS_EDIT", fmt.Errorf("old_string matched %d times in \"%s\"; provide a more specific old_string or set replace_all to true", matches, display))
 	}
 	content = strings.ReplaceAll(content, needle, replacement)
 	if useCRLF {

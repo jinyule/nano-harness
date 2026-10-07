@@ -97,18 +97,18 @@ func (provider *Provider) read(ctx context.Context, invocation appTool.Invocatio
 	case errors.Is(err, fs.ErrNotExist):
 		provider.observed.record(invocation.SessionID, display, observation{})
 		if display == "" {
-			return appTool.Result{}, fmt.Errorf("cannot read %q: not found", display)
+			return appTool.Result{}, fmt.Errorf("cannot read \"%s\": not found", display)
 		}
-		return appTool.Result{}, &fsError{code: "FS_NOT_FOUND", message: fmt.Sprintf("cannot read %q: not found", display), err: err}
+		return appTool.Result{}, &fsError{code: "FS_NOT_FOUND", message: fmt.Sprintf("cannot read \"%s\": not found", display), err: err}
 	case err != nil:
-		return appTool.Result{}, classifyPath(display, fmt.Errorf("cannot read %q: %w", arguments.FilePath, err))
+		return appTool.Result{}, classifyPath(display, fmt.Errorf("cannot read \"%s\": %w", arguments.FilePath, err))
 	}
 	info, err := statFile(path)
 	if err != nil {
-		return appTool.Result{}, classifyPath(display, fmt.Errorf("cannot read %q: %w", display, err))
+		return appTool.Result{}, classifyPath(display, fmt.Errorf("cannot read \"%s\": %w", display, err))
 	}
 	if !info.Mode().IsRegular() {
-		return appTool.Result{}, fsFailure("FS_NOT_REGULAR_FILE", fmt.Errorf("cannot read %q: not a regular file", display))
+		return appTool.Result{}, fsFailure("FS_NOT_REGULAR_FILE", fmt.Errorf("cannot read \"%s\": not a regular file", display))
 	}
 	offset, limit := int64(1), readLimit
 	if arguments.Offset != nil {
@@ -119,16 +119,16 @@ func (provider *Provider) read(ctx context.Context, invocation appTool.Invocatio
 	}
 	reader, err := openFile(path)
 	if err != nil {
-		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot read %q: %w", display, err))
+		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot read \"%s\": %w", display, err))
 	}
 	defer func() { _ = reader.Close() }() // read-only; close cannot lose data
 	hasher := &countingHash{Hash: sha256.New()}
 	window, err := readWindow(ctx, io.TeeReader(reader, hasher), offset, limit)
 	if err != nil {
-		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot read %q: %w", display, err))
+		return appTool.Result{}, classifyKnown(fmt.Errorf("cannot read \"%s\": %w", display, err))
 	}
 	if !window.capped && offset > window.total && (window.total != 0 || offset != 1) {
-		return appTool.Result{}, fmt.Errorf("offset %d is out of range for %q (%d lines)", offset, display, window.total)
+		return appTool.Result{}, fmt.Errorf("offset %d is out of range for \"%s\" (%d lines)", offset, display, window.total)
 	}
 	provider.observed.record(invocation.SessionID, path, observation{present: true, size: hasher.bytes, version: version(hasher.Sum(nil))})
 	lines := make([]session.ReadLine, len(window.lines))

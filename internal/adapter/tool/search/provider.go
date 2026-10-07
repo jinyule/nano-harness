@@ -106,7 +106,7 @@ func (provider *Provider) locate(ctx context.Context, invocation appTool.Invocat
 	lexical, resolved, err := resolve(requested)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return location{}, &searchFailure{text: fmt.Sprintf("%s search failed: %q not found", tool, requested), code: "SEARCH_FAILED", cause: err}
+		return location{}, &searchFailure{text: fmt.Sprintf("%s search failed: \"%s\" not found", tool, requested), code: "SEARCH_FAILED", cause: err}
 	case err != nil:
 		return location{}, searchError("SEARCH_FAILED", fmt.Errorf("%s search failed: %w", tool, err))
 	}

@@ -123,7 +123,7 @@ func walk(directory, target string, writable bool) (string, error) {
 			return "", err
 		}
 		if !info.IsDir() {
-			return "", fmt.Errorf("cannot traverse %q: parent path segment is not a directory: %w", resolved, syscall.ENOTDIR)
+			return "", fmt.Errorf("cannot traverse \"%s\": parent path segment is not a directory: %w", resolved, syscall.ENOTDIR)
 		}
 		switch part {
 		case "", ".":
@@ -136,7 +136,7 @@ func walk(directory, target string, writable bool) (string, error) {
 			if errors.Is(err, fs.ErrNotExist) {
 				suffix := strings.Join(parts[index:], string(filepath.Separator))
 				if hasParent(suffix) {
-					return "", fmt.Errorf("parent traversal crosses a missing directory %q: %w", next, err)
+					return "", fmt.Errorf("parent traversal crosses a missing directory \"%s\": %w", next, err)
 				}
 				if writable {
 					err = nil

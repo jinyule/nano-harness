@@ -21,6 +21,8 @@
 - S1 记为偏差：ADR-0019 写明保证最短行变化，但等长路径的选择与 hunk 不保证与 jsdiff 相同，复审条件为 UI 卡片工作开始。`TestEditMeta_RepeatedLinesKeepAShortestPath` 固定三组含重复行样本的当前输出（含评审反例），并用独立 LCS 预期证明最短。
 - S2 只改文档：ADR-0019 写明约 1 MiB 以上文件可能因扫描计费没有 edit diff，预算契约不变。
 
+复审补充（`46b16a5` 之后）：Codex 复审指出路径仍用 `%q` 格式化，文件名含 `"` 或 `\` 时与上游 `"${displayPath}"` 逐字节不同，且测试也用 `%q` 构造期望，发现不了差异。处理：逐条对照上游后，把 read、read_image、write、edit、guarded create、观察指引、路径遍历错误和搜索根错误中所有模型可见的路径引用改为原文加双引号（read_image 的模型名同样按上游原样引用）；本仓特有的搜索与遍历文案沿用同一形式。审批原因不是模型可见文本，保留 `%q`，理由记入 ADR-0007。新增逐字节测试，期望按上游格式手写；默认 mutation 新增 `file-path-quote-raw` 与 `file-guarded-create-path-quote-raw`。
+
 ## Consequences
 
 模型在 guarded create 失败时看到与上游相同、可执行的指引；两条资源与对齐规则从此由变异门禁保护。代价是两份文档偏差需要在 UI 卡片工作开始时复审；如果未来要求 hunk 与 jsdiff 完全一致，需要整体改用 jsdiff 的正向取舍，因为差异从剥离公共首尾时就开始。
@@ -33,4 +35,5 @@
 - 第一次 `make check` 发现既有用例 `file-create-collision-checks-type` 因 `guardedCreateFailure` 改写而成为 stale-site；定位改为 `case err == nil && info.Mode().IsRegular():` → `!info.Mode().IsRegular()`，单独运行为 killed，ID 与定向测试不变。
 - `GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check`：通过，lint 0 issues，逐文件 coverage 100.0%，默认 mutation 清单全部 killed。
 - `make tui-e2e`：PASS（19 次根工具调用、附件与 read_image、todo、后台 job、提问、sandbox 模式切换、规划审批、/goal、子代理、审批、文件、resume、清理）。
+- 复审补充的两个逐字节测试在旧代码上共报告 14 处不一致，修复后通过；新增的两项 mutation 单独运行均 killed。
 - 未运行：上游仓库内的 jsdiff TypeScript 测试；Linux/Windows 原生执行。

@@ -156,9 +156,9 @@ func (locks *pathLocks) lock(path string) func() {
 // errNotRead and errStale carry upstream's model-facing remedies for the two
 // guarded-mutation failures.
 func errNotRead(target string) error {
-	return fsFailure("FS_NOT_OBSERVED", fmt.Errorf("cannot modify %q: file has not been read — read the file, then retry", target))
+	return fsFailure("FS_NOT_OBSERVED", fmt.Errorf("cannot modify \"%s\": file has not been read — read the file, then retry", target))
 }
 
 func errStale(operation, target, reason string) error {
-	return fsFailure("FS_STALE_VERSION", fmt.Errorf("cannot %s %q: %s — re-read the file, then retry", operation, target, reason))
+	return fsFailure("FS_STALE_VERSION", fmt.Errorf("cannot %s \"%s\": %s — re-read the file, then retry", operation, target, reason))
 }
