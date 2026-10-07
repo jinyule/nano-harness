@@ -324,7 +324,7 @@ goal driver ──Followup(<goal_round>)──► agent worker ──► engine.
 图片字节保存在会话日志之外的附件存储中，会话只保存内容寻址引用 `{id: "sha256:<hex>", name, media_type, bytes, width, height}`。`attachments` 插件（`internal/adapter/attachment`）同时负责规范化和本地存储，与上游 `attachment-local` 对应：
 
 - 规范化接受 PNG、JPEG、WebP 和 GIF（取第一帧），源文件最多 20 MiB、1600 万像素，透明像素先合成到白色，再把最长边缩放到 2048，重新编码为不超过 4 MiB 的 JPEG。与上游相同，同一存储最多同时规范化两张图片，等待中的调用随 context 取消。
-- 存储根由 `--attachment-root` 配置（默认 `<用户配置目录>/nano-harness/attachments`），不得与 workspace 互相包含。对象位于 `v1/objects/<sha256 前两位>/<sha256>`：暂存、`fsync`、排他硬链接发布、只读 `0400`、同步目录后才返回引用；相同字节共享一个对象，从不自动删除。读取时校验长度、SHA-256、类型和宽高。
+- 存储根由 `--attachment-root` 配置（默认 `<用户配置目录>/nano-harness/attachments`），不得与 workspace 互相包含（[安全规则](security.md#凭据oauth-与日志)）。对象位于 `v1/objects/<sha256 前两位>/<sha256>`：暂存、`fsync`、排他硬链接发布、只读 `0400`、同步目录后才返回引用；相同字节共享一个对象，从不自动删除。读取时校验长度、SHA-256、类型和宽高。
 - TUI 的 `/attach` 只规范化并在内存中保留待发送图片；消息提交（`Submit` 或 `Steer`）前先写入存储，再提交引用，未发送的附件不留下对象。
 - 模型调用 `read_image` 读取 workspace 图片。工具在执行点要求本 step 的模型声明图片输入，路径约束与 `read` 相同；规范化图片先写入存储，再作为 `tool/result` 的 `image` 引用提交，结果文本是上游信封（路径、尺寸、字节数和缩放倍数）。
 

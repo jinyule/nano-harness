@@ -56,13 +56,13 @@ Git hook 只做快速检查：pre-commit 处理 staged whitespace/gofmt，pre-pu
 
 | flag | 默认 | 内容 |
 |---|---|---|
-| `--session-root` | `sessions` | JSONL 会话；不得与 workspace 互相包含 |
-| `--spill-root` | `spill` | 超出内联预算的完整工具输出，30 天后启动时清理；不得与 workspace 互相包含 |
-| `--attachment-root` | `attachments` | `/attach` 与 `read_image` 的规范化图片，按内容寻址，从不自动删除；不得与 workspace 互相包含 |
-| `--credentials` | `credentials.yaml` | provider 账户；解析链接后不得位于 workspace 内 |
-| `--settings` | `settings.yaml` | 可热重载设置；解析链接后不得位于 workspace 内 |
+| `--session-root` | `sessions` | JSONL 会话 |
+| `--spill-root` | `spill` | 超出内联预算的完整工具输出，30 天后启动时清理 |
+| `--attachment-root` | `attachments` | `/attach` 与 `read_image` 的规范化图片，按内容寻址，从不自动删除 |
+| `--credentials` | `credentials.yaml` | provider 账户 |
+| `--settings` | `settings.yaml` | 可热重载设置 |
 
-调试或测试时为这些 flag 指定临时目录，可以避免触碰真实会话与附件。会话只保存图片引用，复制会话复现问题时需要同时复制附件根，规则见 [ADR-0017](decisions/0017-content-addressed-image-attachments.md)。
+这些位置都不能放进 workspace，规则见[安全规则](security.md#凭据oauth-与日志)。调试或测试时为这些 flag 指定临时目录，可以避免触碰真实会话与附件。会话只保存图片引用，复制会话复现问题时需要同时复制附件根，规则见 [ADR-0017](decisions/0017-content-addressed-image-attachments.md)。
 
 ## 包与文件
 

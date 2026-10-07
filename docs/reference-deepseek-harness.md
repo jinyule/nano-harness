@@ -165,7 +165,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 | 工具参数的流式字节与持久化 JSON 各限 768 KiB，超限得到可恢复的错误结果；上游文件工具没有对应限值 | 约束持久化、模型请求与内存，并为 6 MiB 单记录留出转义余量 | [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#工具参数预算与可恢复失败) | — |
 | 上游可配置的预算在本仓是固定常量，不提供部署配置：bash 与 job 的超时、终止宽限、排空、输出尾部、输出环、活动 job 数与 wait，web_fetch 上限，委派深度与池上限，skill 描述上限，pruner 预算，meta 上限 | 固定资源与交接契约，使模型可见边界、恢复结果和静止证据可复现；当前没有需要另一套预算的部署 consumer | [ADR-0009](decisions/0009-background-jobs.md#固定预算与托管环境)，以及 ADR-0011、ADR-0012、ADR-0013、ADR-0019、ADR-0020 | — |
 | `glob`、`grep`、`skill` 声明并发安全；上游未声明 | 只读遍历可以并行 | ADR-0007、ADR-0012 | — |
-| 私有位置与 workspace 互斥，启动时检查：session、spill、附件根与 workspace 不得互相包含，凭据文件与设置文件解析链接后不得位于 workspace 内；上游没有这项启动检查 | 默认档位下 `read`/`grep` 与 `web_fetch` 都无需 approval，私有文件进入 workspace 就可能被读入模型请求并外传。检查只保护本仓自己的私有文件：home 中 `~/.ssh` 等其他秘密仍可被免审批读取，`--root` 不应选含秘密的目录 | [ADR-0002](decisions/0002-provider-neutral-agent-harness.md)、ADR-0008、ADR-0017、[安全规则](security.md#凭据oauth-与日志) | — |
+| 本仓的私有位置（凭据、设置、session、spill、附件）不能放进 workspace，启动时检查；上游没有这项检查 | 默认档位下 `read`/`grep` 与 `web_fetch` 都无需 approval；检查不保护 workspace 内的其他秘密 | [ADR-0002](decisions/0002-provider-neutral-agent-harness.md)，规则见[安全规则](security.md#凭据oauth-与日志) | — |
 
 #### 文件
 
@@ -198,7 +198,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 | 后台 runner 失败或无法启动的 job 终态为 `failed`，detail 沿用上游 `processOutcome`；上游映射为 `completed` 或 `killed` | 命令没有运行，不能表述为命令的结局 | ADR-0009 | — |
 | runner 可执行文件启动失败时，`Runner failure:` 之后是 Go 的启动错误文本；上游是 Node 的 `String(error)` | Node 错误字符串无法在 Go 中复现；其余文案逐字一致 | ADR-0009 | — |
 | job 输出环运行中保留 128 KiB，上游 256 KiB；首次终态读取后裁到 16 KiB；`job_output` 的状态行与丢失提示有独立预算 | 为 256 KiB 工具结果中的包装、状态行与定位符留出空间 | ADR-0009 | — |
-| 子进程基础环境是固定 allowlist（固定的系统 `PATH`、`C.UTF-8` locale、`TMPDIR`、`NANO_WORKSPACE` 与显式加入的变量），不继承父环境；上游继承按名称去敏的父环境（去掉匹配 `KEY\|PASSWORD\|SECRET\|TOKEN` 的变量与全部 `DSH_*`，保留 `HOME`、用户 `PATH`、locale 与代理变量）再叠加显式变量 | 名称启发式会漏掉不含这些词的凭据，根规则要求子进程环境使用 allowlist。代价是命令看不到 `HOME`、用户 `PATH` 与代理：用户目录中的工具需要绝对路径或在命令中设置 `PATH`，依赖 `HOME` 的配置或缓存可能找不到，需要代理的网络中命令须自行设置代理；bash 的 `~` 仍展开为当前用户目录 | [ADR-0009](decisions/0009-background-jobs.md#固定预算与托管环境) | 用户需要命令继承 `HOME`、用户 `PATH` 或代理配置 |
+| 子进程基础环境是固定 allowlist（固定的系统与 Homebrew `PATH`、`C.UTF-8` locale、`TMPDIR`、`NANO_WORKSPACE` 与显式加入的变量），不继承父环境；上游继承按名称去敏的父环境（去掉匹配 `KEY\|PASSWORD\|SECRET\|TOKEN` 的变量与全部 `DSH_*`，保留 `HOME`、用户 `PATH`、locale 与代理变量）再叠加显式变量 | 名称启发式会漏掉不含这些词的凭据，根规则要求子进程环境使用 allowlist。代价是命令看不到 `HOME`、用户 `PATH` 与代理：用户目录中的工具需要绝对路径或在命令中设置 `PATH`，依赖 `HOME` 的配置或缓存可能找不到，需要代理的网络中命令须自行设置代理；bash 的 `~` 仍展开为当前用户目录 | [ADR-0009](decisions/0009-background-jobs.md#固定预算与托管环境) | 用户需要命令继承 `HOME`、用户 `PATH` 或代理配置 |
 | 托管环境只提供 `DSH_SHELL`、`DSH_SESSION_ID` 与固定 allowlist（含 `NANO_WORKSPACE`），不提供 `DSH_HOME`、`DSH_PROFILE`、`DSH_PROFILE_DIR` | 本仓各数据根独立部署，composition 在编译时确定，没有可诚实映射的事实 | ADR-0009 | 出现 profile 或统一 home 的 consumer |
 | 不实现 controller 挂载检查、非消费式观察读取、progress 行，也不设 `maxConsecutiveWakes` 或 `quiet` 投递 | 当前组合没有 UI 观察者或 progress consumer；Base 默认同样不限连续唤醒 | ADR-0009 | 增加 job UI 或观察读取；观察到通知引起的连续自动 turn |
 | 完成通知超过一个文本块时按上游 `fitCompletionNotice` 截断，上限就是 256 KiB 的 durable 文本块，不设 producer 的 `outputLimitBytes` | 上限由持久化文本块决定，不在准入时拒绝长命令 | ADR-0009 | — |
@@ -282,8 +282,8 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 | 暂缓项 | 原因 | 复审条件 |
 |---|---|---|
 | Base 的 `workflow`、PTC `run_code`、`mcp-resources` | 需要内嵌 JS 运行时或 MCP 客户端，当前没有产品需求 | 出现对应产品需求 |
-| 其他组合或 preset 的 `schedule_*`、`present`、`terminal_*`、`lsp`、会话查询、`list_subagent_models`、Agent Teams、浏览器与桌面自动化、Cordis 插件管理 | 不在 Base 工具集范围，当前没有产品需求 | 出现对应产品需求 |
-| Base 中默认关闭的 `ralph`，Windows 主机的 `pwsh` | `ralph` 在 Base 默认 disabled；本仓不对齐 Windows 组合 | 需要 Windows/pwsh 组合（ADR-0007） |
+| 其他组合或 preset 的 `schedule_*`、`present`、`terminal_*`、`lsp`、会话查询、`list_subagent_models`、Agent Teams、浏览器与桌面自动化 | 不在 Base 工具集范围，当前没有产品需求 | 出现对应产品需求 |
+| Base 中默认关闭的 `ralph` 与 Cordis 插件管理（`tool-plugin-manager`），Windows 主机的 `pwsh` | 两者在 Base 中默认 disabled；本仓不对齐 Windows 组合 | 需要 Windows/pwsh 组合（ADR-0007） |
 | Base 的守卫组件 `repeat-tool-reminder`、`tool-call-timeout-policy` | 不属于模型可见工具，工具集对齐时未逐项评估 | 出现重复调用循环或工具超时的实测问题 |
 | TUI 的结构化结果卡片 | meta 已持久化，当前没有消费方 | UI 卡片工作开始，同时复审 `lang` 与单 hunk diff（ADR-0019） |
 | 上游 `ToolErrorInfo.reason` | 只有上游 experimental auto-review 产生，本仓没有生产者 | 出现生产者或卡片需要它（ADR-0019） |

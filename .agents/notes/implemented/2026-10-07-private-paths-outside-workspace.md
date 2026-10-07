@@ -24,6 +24,7 @@ astra 复审（基线 `92e3599`）发现第一版的包含判断只比较字符�
 - 全部冲突在一条错误中列出，每项写明应改用的 flag：home workspace 会同时命中全部默认位置。`parseTUIConfig` 把配置错误打印到 stderr 后再以退出码 2 返回。
 - 错误发生在组装之前，不启动任何插件，不创建会话、锁或设置文件，也不改写已有凭据。
 - 约束写入拥有凭据与会话的 [ADR-0002](../../../docs/decisions/0002-provider-neutral-agent-harness.md)。[ADR-0008](../../../docs/decisions/0008-tool-output-spill-and-observation-policy.md) 的 home workspace 示例补上另外三个 flag。security、README 与开发文档的数据目录表同步更新。没有新 ADR、新组件或新配置项，模型可见文本与 composition 不变。
+- 完整判定规则（五个位置、文件身份比较、配置路径不得经过 workspace、剩余风险）只在[安全规则](../../../docs/security.md#凭据oauth-与日志)维护；ADR-0002 记录决定与理由，ADR-0008、ADR-0017、README、开发规范、架构与参考分析只写一句话并链接到那里。
 
 ## Consequences
 

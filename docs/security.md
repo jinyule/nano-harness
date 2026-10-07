@@ -10,7 +10,7 @@
 
 - provider 账户只来自 owner-only credential store、明确的 TUI login 或 provider 配置指定的环境变量。凭据不进入仓库、命令行参数、session、prompt、TUI account 列表、错误或测试 snapshot。
 - credential YAML 是 versioned strict document，目录使用 `0700`，文件、lock 和随机临时文件使用 `0600`。同进程与跨进程写入均由同一 `O_EXCL` 文件锁保护 read-decide-write，经 `fsync` 后原子 rename；symlink target 与 group/other 可读文件拒绝。取消与提交边界见 [ADR-0002](decisions/0002-provider-neutral-agent-harness.md#2-provider-neutral-llm-与-provider-owned-wireauth)。
-- `--credentials` 与 `--settings` 文件解析链接后（含已存在的最终链接）不得位于 workspace 内，session root 与 workspace 不得互相包含；包含关系与 spill、附件根一样先比较拼写，再把已存在的各级祖先与 workspace 按文件身份（`os.SameFile`）比较，所以大小写或 Unicode 规范化不敏感的文件系统（macOS 默认）上 `WorkSpace` 或 NFD 拼写的别名、macOS firmlink 的 `/System/Volumes/Data/...` 拼写与 bind mount 同样被拒绝，未创建的后缀不可能是已存在的 workspace；配置时写下的路径本身也不得经过 workspace，即使途经的链接指向外部，因为经批准的命令之后可以把它改指回 workspace；否则启动失败，并在一条错误中列出全部冲突及应改用的 flag。默认 workspace-write 下 `read`/`grep` 无需 approval、`web_fetch` 无需 approval，若允许这些文件进入 workspace，API key、OAuth refresh token 与其他会话的 transcript 可以被读入模型请求并外传。文件只要求自身在 workspace 外，workspace 位于其所在目录内不受限制。以 home 目录作为 `--root` 时，默认的 `<用户配置目录>/nano-harness`（`~/.config` 或 `~/Library/Application Support` 下）落进 workspace，必须改用 `--session-root`、`--credentials`、`--settings`、`--spill-root` 与 `--attachment-root`。
+- 私有位置不得经 workspace 暴露：session、spill 与附件三个目录根与 workspace 不得互相包含；`--credentials` 与 `--settings` 文件解析链接后（含已存在的最终链接）不得位于 workspace 内。包含关系先比较拼写，再把已存在的各级祖先与 workspace 按文件身份（`os.SameFile`）比较，所以大小写或 Unicode 规范化不敏感的文件系统（macOS 默认）上 `WorkSpace` 或 NFD 拼写的别名、macOS firmlink 的 `/System/Volumes/Data/...` 拼写与 bind mount 同样被拒绝，未创建的后缀不可能是已存在的 workspace；配置时写下的路径本身也不得经过 workspace，即使途经的链接指向外部，因为经批准的命令之后可以把它改指回 workspace；否则启动失败，并在一条错误中列出全部冲突及应改用的 flag。默认 workspace-write 下 `read`/`grep` 无需 approval、`web_fetch` 无需 approval，若允许这些文件进入 workspace，API key、OAuth refresh token 与其他会话的 transcript 可以被读入模型请求并外传。文件只要求自身在 workspace 外，workspace 位于其所在目录内不受限制。以 home 目录作为 `--root` 时，默认的 `<用户配置目录>/nano-harness`（`~/.config` 或 `~/Library/Application Support` 下）落进 workspace，必须改用 `--session-root`、`--credentials`、`--settings`、`--spill-root` 与 `--attachment-root`。
 - 这一检查只保护 nano-harness 自己的私有文件。workspace 内的其他秘密（例如 home workspace 中的 `~/.ssh`、其他工具的令牌缓存）在 read-only/workspace-write 下同样可被无需 approval 的 `read`/`grep` 读取并经 `web_fetch` 发出；`--root` 不应选择含有秘密的目录。
 - OpenAI browser login 使用 loopback callback、随机 state 和 PKCE；device login 只显示 verification URL 与 user code。Anthropic 和 OpenRouter browser login 同样由各自 provider 拥有随机 state/PKCE 与 token exchange。
 - OAuth access token 临近过期时，LLM runtime 在 credential store 的串行 read-decide-write 事务内调用 provider refresh，避免并发刷新覆盖新 grant。refresh 失败不回退到过期 token。
@@ -128,7 +128,7 @@ skill 正文是交给模型的指令。项目根 `<project>/.nano-harness/skills
 
 超出内联预算的工具结果和 `glob`/`grep` 的完整结果保存在 `--spill-root` 下：
 
-- spill 根目录与 workspace 不得互相包含（对 spill 根目录已存在的最长前缀解析链接后判断），否则启动失败。默认遍历不会列出 spill，read-only/workspace-write 不能改写它；danger-full-access 允许 host 访问，不保护 spill 文件免受已批准的修改。
+- spill 根目录不得与 workspace 互相包含，见[私有位置规则](#凭据oauth-与日志)。默认遍历不会列出 spill，read-only/workspace-write 不能改写它；danger-full-access 允许 host 访问，不保护 spill 文件免受已批准的修改。
 
 - 根目录为 `0700`，可以是链接但解析后必须是 owner-only 目录；workspace 分区与会话目录为 `0700` 的真实目录，两者复用同一私有目录校验：分区启动时检查，会话目录每次创建文件前以 `Lstat` 检查；链接、非目录或 group/other 权限非零都被拒绝。Windows 不用 Unix 权限位判断私有性。
 - 文件名是随机前缀加只含 `[A-Za-z0-9._-]` 的名称提示，以 `O_EXCL`、`0600` 创建，已存在的条目（包括预置链接）一律拒绝；提交前 `fsync`，失败删除部分文件；单个文件最多 64 MiB。

@@ -3,7 +3,8 @@
 /dist/
 /release-artifacts/
 *.coverprofile
-coverage.out
+*.out
+*.test
 
 # Local configuration and credentials
 .env
@@ -20,5 +21,6 @@ coverage.out
 # Tool caches
 .cache/
 
-# Root build output from `go build ./cmd/nano-harness`
+# Build output from `go build ./cmd/nano-harness` at the root or `go build` in cmd/nano-harness
 /nano-harness
+/cmd/nano-harness/nano-harness
