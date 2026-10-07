@@ -42,7 +42,7 @@ credential store 的 modify、refresh 与 delete 共用 `O_EXCL` 文件锁串行
 
 `approval/asked` 用 call ID 关联尚未完成的工具调用，并要求工具名一致；`approval/decided` 只通过 approval ID 关联问题，不得携带多余的 `call_id`。生产写入和恢复修复都使用这一关联，额外 call ID 没有消费者且可能与原问题矛盾。补齐该校验不改变 format 或 composition ID：合法日志保持可读，非法日志整体拒绝，原文件保留供离线检查，不迁移或改写。
 
-approval ID 在会话内唯一，日志拒绝重复 ID。approval service 与上游一样用随机值生成 ID：`approval-` 加 `crypto/rand.Text()` 的 26 个 base32 字符（至少 128 位熵），不依赖进程内计数，因此重启、恢复或重建 composition 后的新问题不会与日志已有 ID 冲突，并发分配也无需协调。此前进程计数生成的 `approval-<n>` 仍是合法 ID，旧日志照常读取，不迁移或改写。
+approval ID 在会话内唯一，日志拒绝重复 ID。approval service 与上游一样用随机值生成 ID：`approval-` 加 `crypto/rand.Text()` 的 26 个 base32 字符（至少 128 位熵），不依赖进程内计数，因此重启、恢复或重建 composition 后的新问题，以及 fork child 在继承父会话问题之后提出的问题，都不会与日志已有 ID 冲突，并发分配也无需协调。此前进程计数生成的 `approval-<n>` 仍是合法 ID，旧日志照常读取，不迁移或改写。
 
 `session.Surface` 从 raw log 折叠模型输入。compaction 追加 summary 与 shadowed sequence，不删除原事件。resume 对语法和因果均有效的中断 tail 追加 cancelled approval、interrupted tool result 和 step/turn closure；不截断或猜测损坏内容。
 
