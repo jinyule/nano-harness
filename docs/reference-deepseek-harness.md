@@ -219,7 +219,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 | `todo/write` 增加 `call_id`；列表最多 256 项、每项 2048 字节 | 日志能证明快照来自哪个已提交的 `todo_write` call；持久化有界 | ADR-0010 | — |
 | 提问请求另有上限（16 题、每题 32 个选项、id 1–128 字节且唯一、同题标签唯一），并校验 broker 返回的答案批 | 答案以标签回指选项；不符时失败关闭 | ADR-0014 | — |
 | 等待中取消优先于 broker 的任何返回：合法答案或 broker 返回的已分类错误都报告为 `ASK_ABORTED`。上游成功答案不再检查中止，`UserQuestionError` 先于中止检查重抛 | 已取消的调用不能产生成功审查或待生效的退出选择 | ADR-0014、ADR-0019 | — |
-| context 仍有效时，broker 返回 `ErrCancelled` 以外的任何错误都改为固定文案 `no user-questions answerer accepted the request` 且不分类：broker 的已分类错误不再保留分类，普通错误不保留原 message。上游对 `UserQuestionError` 原样重抛，普通错误保留原 message 重抛。生产环境唯一的 broker（TUI）只返回 `ErrCancelled`、`ErrNotRunning` 或 context 错误，目前对运行时没有影响 | 不把 broker 内部的分类或原因带进模型结果与日志 | ADR-0014、ADR-0019 | 出现会返回已分类错误或有意义原因的第二个 broker |
+| context 仍有效时，broker 返回 `ErrCancelled` 以外的任何错误都改为固定文案 `no user-questions answerer accepted the request` 且不分类：broker 的已分类错误不再保留分类，普通错误不保留原 message。上游对 `UserQuestionError` 原样重抛，普通错误保留原 message 重抛。生产环境唯一的 broker（TUI）不会返回其他已分类的提问错误，但普通错误原因仍会被折叠，例如 TUI 已关闭时 `TUI is not running` 被改写为固定文案 | 不把 broker 内部的分类或原因带进模型结果与日志 | ADR-0014、ADR-0019 | 出现第二个 broker，或需要向模型保留 broker 原因 |
 | 本仓额外拒绝未知 intent kind，归入 `BAD_INTENT`；上游以类型约束同一条件 | 不为同一条件新造码 | ADR-0019 | — |
 | `ask_user_question` 结果中的 U+2028/U+2029 被 Go 转义，`JSON.stringify` 不转义 | JSON 语义相同的已知字节差异 | ADR-0014 | — |
 | fork child 不继承规划模式；上游继承 | child 不能选择模式也不能通过审查，继承后无法离开 | ADR-0014 | — |

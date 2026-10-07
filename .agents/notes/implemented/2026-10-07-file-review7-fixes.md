@@ -5,7 +5,7 @@
 
 ## Context
 
-第七轮交叉评审（opus 报告 S1–S4，Codex 核实）针对 `0e4d084`、`e60f095` 的文件工具提出四项建议，没有 Blocker。相关的既有记录是[结构化文件结果对齐 Note](2026-10-06-structured-file-result-alignment.md)、[diff 工作预算 Note](2026-10-06-file-diff-work-budget.md) 和 [WP2 Note](2026-10-05-tool-output-spill-and-read-before-write.md)；本 Note 只拥有这四项的处理与证据。
+第七轮交叉评审（opus 报告 S1–S4，Codex 核实）针对 `0e4d084`、`e60f095` 的文件工具提出四项建议，没有 Blocker。相关的既有记录是[结构化文件结果对齐 Note](2026-10-06-structured-file-result-alignment.md)、[diff 工作预算 Note](2026-10-06-file-diff-work-budget.md) 和 [WP2 Note](2026-10-05-tool-output-spill-and-read-before-write.md)；本 Note 只拥有这四项的处理与证据；其中 guarded create 的三处正文部分取代结构化文件结果对齐 Note 中“原有模型文本逐字保留”的决定，该 Note 的分类、diff 与历史验证记录仍由它拥有。
 
 - S3：guarded create 的 link 发布失败后，分类码已与上游一致，但三处正文不同。目录碰撞提示“先读取文件”，这个指引无法执行；EEXIST 后目标消失时展示原始 link 错误；metadata 检查失败时展示 link 原因。上游依据是 `fs-local/src/fsio.ts:536-571` 加 `tool-fs/src/error.ts:22-34`，`write.ts:127` 应用改写。
 - S4：前沿分配守卫（`diff.go` 中 `2*offset+1 > maxDiffWork-work.used`）和 hunk 合并边界（`<=`）在手工变异下存活，与 ADR-0019 的资源承诺和 jsdiff 9 的合并规则都没有测试保护。

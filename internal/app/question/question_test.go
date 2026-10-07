@@ -342,11 +342,13 @@ func TestError_ClassifiesTheUpstreamFailures(t *testing.T) {
 	}
 }
 
-// TestService_BrokerFailuresStayUnclassified keeps the upstream boundary:
-// NO_PROVIDER means no answerer was registered. A registered broker that
-// fails, or answers a batch that does not fit the request, keeps the same
-// text but carries no classification, as upstream propagates such failures
-// as plain errors and never checks a blocking answer batch.
+// TestService_BrokerFailuresStayUnclassified pins the classification
+// boundary: NO_PROVIDER means no answerer was registered. A registered broker
+// that fails, or answers a batch that does not fit the request, gets the
+// unavailable text without a classification. Upstream likewise leaves these
+// failures unclassified and never checks a blocking answer batch, but it
+// rethrows a broker's UserQuestionError and keeps a plain error's message;
+// ADR-0014 records that deliberate difference.
 func TestService_BrokerFailuresStayUnclassified(t *testing.T) {
 	service, _ := startService(t)
 	request := Request{SessionID: "s", Questions: []Question{choice()}}
