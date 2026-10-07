@@ -1314,5 +1314,12 @@
     "before": "fmt.Sprintf(\"cannot write \\\"%s\\\": not a regular file\", target)",
     "after": "fmt.Sprintf(\"cannot write %q: not a regular file\", target)",
     "test": "^TestGuardedCreateFailure_QuotesPathsLikeUpstream$"
+  },
+  {
+    "id": "shell-workdir-quote-raw",
+    "file": "internal/adapter/tool/shell/bash.go",
+    "before": "fmt.Errorf(\"invalid workdir \\\"%s\\\": not found\", *requested)",
+    "after": "fmt.Errorf(\"invalid workdir %q: not found\", *requested)",
+    "test": "^TestBash_QuotesWorkdirLikeFileTools$"
   }
 ]

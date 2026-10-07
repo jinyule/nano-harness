@@ -66,7 +66,7 @@ subagent 工具名称不变；它们的 schema 改用共享子集表达，去掉
 
 相对路径按启动时解析的 workspace root 解析。描述中的 “resolved by the filesystem backend” 在本仓指 `internal/adapter/tool/workspace.Root`：绝对路径只在词法上位于已解析 root 内时接受，其余一律拒绝。读取和搜索可以经过解析后仍在 root 内的 symlink；`write` 与 `edit` 拒绝 root 到目标之间任何已存在的 symlink 组件。上游读取和搜索不限制在 workspace 内，且写入会更新 symlink 目标；本仓保持更严格的既有规则。`read`、`write`、`edit` 像上游一样显示绝对路径；`glob`、`grep` 显示 workspace 相对路径。
 
-模型可见的文件与搜索错误按上游的 `"${displayPath}"` 把路径原样放进双引号，不做转义；文件名含 `"`、`\`、空格或非 ASCII 字符时与上游逐字节一致。本仓特有的路径文案（搜索根不存在或不是普通文件、路径遍历经过非目录段）沿用同一形式。审批原因（例如 `write file "<p>"`）不是模型可见文本，保留 Go 的 `%q` 转义，便于操作者在审批提示中辨认控制字符和换行。
+模型可见的文件与搜索错误按上游的 `"${displayPath}"` 把路径原样放进双引号，不做转义；文件名含 `"`、`\`、空格或非 ASCII 字符时与上游逐字节一致。本仓特有的路径文案（搜索根不存在或不是普通文件、路径遍历经过非目录段、`bash` 的 `invalid workdir` 校验）沿用同一形式。审批原因（例如 `write file "<p>"`）不是模型可见文本，保留 Go 的 `%q` 转义，便于操作者在审批提示中辨认控制字符和换行。
 
 > 后续决定：workspace 之外的只读 spill 分区由 [ADR-0008](0008-tool-output-spill-and-observation-policy.md#读回与安全边界) 开放给 `read`/`grep`，[ADR-0015](0015-multimodal-tool-results.md#read_image) 将同一读取边界扩展到 `read_image`；其他文件路径约束保留。
 

@@ -707,3 +707,27 @@ func TestBash_RealBackgroundAndPromotedProcesses(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// TestBash_QuotesWorkdirLikeFileTools keeps the workdir errors in the file
+// tools' upstream form: the requested path sits verbatim between double
+// quotes. Expectations are concatenated by hand, never built with %q.
+func TestBash_QuotesWorkdirLikeFileTools(t *testing.T) {
+	h := newHarness(t, &fakeRunner{})
+	name := `say "hi" back\slash 文件`
+	if err := os.WriteFile(filepath.Join(h.root.Path(), name), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		workdir, want string
+		prefix        bool
+	}{
+		{name + ".missing", `Error: invalid workdir "` + name + `.missing": not found`, false},
+		{name, `Error: invalid workdir "` + name + `": not a directory`, false},
+		{"../" + name, `Error: invalid workdir "../` + name + `": `, true},
+	} {
+		result := h.call(t, map[string]any{"description": "List", "command": "ls", "workdir": test.workdir})
+		if test.prefix && !strings.HasPrefix(result.Output, test.want) || !test.prefix && result.Output != test.want {
+			t.Errorf("workdir %s\n got: %s\nwant: %s", test.workdir, result.Output, test.want)
+		}
+	}
+}

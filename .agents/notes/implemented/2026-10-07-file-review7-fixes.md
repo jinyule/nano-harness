@@ -21,7 +21,7 @@
 - S1 记为偏差：ADR-0019 写明保证最短行变化，但等长路径的选择与 hunk 不保证与 jsdiff 相同，复审条件为 UI 卡片工作开始。`TestEditMeta_RepeatedLinesKeepAShortestPath` 固定三组含重复行样本的当前输出（含评审反例），并用独立 LCS 预期证明最短。
 - S2 只改文档：ADR-0019 写明约 1 MiB 以上文件可能因扫描计费没有 edit diff，预算契约不变。
 
-复审补充（`46b16a5` 之后）：Codex 复审指出路径仍用 `%q` 格式化，文件名含 `"` 或 `\` 时与上游 `"${displayPath}"` 逐字节不同，且测试也用 `%q` 构造期望，发现不了差异。处理：逐条对照上游后，把 read、read_image、write、edit、guarded create、观察指引、路径遍历错误和搜索根错误中所有模型可见的路径引用改为原文加双引号（read_image 的模型名同样按上游原样引用）；本仓特有的搜索与遍历文案沿用同一形式。审批原因不是模型可见文本，保留 `%q`，理由记入 ADR-0007。新增逐字节测试，期望按上游格式手写；默认 mutation 新增 `file-path-quote-raw` 与 `file-guarded-create-path-quote-raw`。
+复审补充（`46b16a5` 之后）：Codex 复审指出路径仍用 `%q` 格式化，文件名含 `"` 或 `\` 时与上游 `"${displayPath}"` 逐字节不同，且测试也用 `%q` 构造期望，发现不了差异。处理：逐条对照上游后，把 read、read_image、write、edit、guarded create、观察指引、路径遍历错误和搜索根错误中所有模型可见的路径引用改为原文加双引号（read_image 的模型名同样按上游原样引用）；本仓特有的搜索与遍历文案沿用同一形式。审批原因不是模型可见文本，保留 `%q`，理由记入 ADR-0007。新增逐字节测试，期望按上游格式手写；默认 mutation 新增 `file-path-quote-raw` 与 `file-guarded-create-path-quote-raw`。随后 `bash` 的 `invalid workdir` 系列文案也改为原文加双引号（`TestBash_QuotesWorkdirLikeFileTools`，旧代码 3 处不一致；mutation `shell-workdir-quote-raw`），并修正 `TestService_BrokerFailuresStayUnclassified` 中把非法答案批说成 unavailable 文案的注释，断言不变。
 
 ## Consequences
 

@@ -313,7 +313,8 @@ func promoted(output, id string, timeoutMS float64) string {
 }
 
 // workdirIn resolves an existing directory under the operation file policy;
-// relative paths and the default use the session workspace.
+// relative paths and the default use the session workspace. Errors quote the
+// requested path verbatim, like the file tools' upstream texts.
 func (provider *Provider) workdirIn(requested *string, mode session.SandboxMode) (string, error) {
 	if requested == nil {
 		return provider.root.Path(), nil
@@ -321,16 +322,16 @@ func (provider *Provider) workdirIn(requested *string, mode session.SandboxMode)
 	_, resolved, err := provider.root.ExistingIn(*requested, mode)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return "", fmt.Errorf("invalid workdir %q: not found", *requested)
+		return "", fmt.Errorf("invalid workdir \"%s\": not found", *requested)
 	case err != nil:
-		return "", fmt.Errorf("invalid workdir %q: %w", *requested, err)
+		return "", fmt.Errorf("invalid workdir \"%s\": %w", *requested, err)
 	}
 	info, err := statPath(resolved)
 	if err != nil {
-		return "", fmt.Errorf("invalid workdir %q: %w", *requested, err)
+		return "", fmt.Errorf("invalid workdir \"%s\": %w", *requested, err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("invalid workdir %q: not a directory", *requested)
+		return "", fmt.Errorf("invalid workdir \"%s\": not a directory", *requested)
 	}
 	return resolved, nil
 }
