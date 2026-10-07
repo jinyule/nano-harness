@@ -1409,16 +1409,37 @@
   {
     "id": "agent-step-skips-call-recovery",
     "file": "internal/app/agent/engine.go",
-    "before": "for _, callID := range unresolved {",
-    "after": "for _, callID := range unresolved[:0] {",
+    "before": "for _, callID := range calls {",
+    "after": "for _, callID := range calls[:0] {",
     "test": "^TestEngine_FailedToolRecordingResolvesCommittedCalls$"
   },
   {
     "id": "agent-result-keeps-call-unresolved",
     "file": "internal/app/agent/engine.go",
-    "before": "\t\t\tunresolved = unresolved[1:]\n",
-    "after": "\n",
+    "before": "calls = slices.DeleteFunc(calls, func(id string) bool { return id == record.Result.CallID })",
+    "after": "calls = slices.Clip(calls)",
     "test": "^TestEngine_FailedToolRecordingResolvesCommittedCalls$"
+  },
+  {
+    "id": "agent-closeout-skips-open-questions",
+    "file": "internal/app/agent/engine.go",
+    "before": "for _, approvalID := range approvals {",
+    "after": "for _, approvalID := range approvals[:0] {",
+    "test": "^TestEngine_FailedDecisionRecordingCancelsTheQuestion$"
+  },
+  {
+    "id": "agent-decision-keeps-question-open",
+    "file": "internal/app/agent/engine.go",
+    "before": "approvals = slices.DeleteFunc(approvals, func(id string) bool { return id == record.Approval.ID })",
+    "after": "approvals = slices.Clip(approvals)",
+    "test": "^TestEngine_FailedDecisionRecordingCancelsTheQuestion$"
+  },
+  {
+    "id": "agent-closeout-drops-read-failure",
+    "file": "internal/app/agent/engine.go",
+    "before": "result.Err = errors.Join(result.Err, eventsErr)",
+    "after": "_ = eventsErr",
+    "test": "^TestEngine_CloseoutReportsAnUnreadableLog$"
   },
   {
     "id": "web-html-self-closing",

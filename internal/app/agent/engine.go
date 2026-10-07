@@ -111,9 +111,6 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 	turnOpen := false
 	stepOpen := false
 	var openStep uint64
-	// unresolved lists the open step's committed calls still without a
-	// result, in call order.
-	var unresolved []string
 	// Like upstream's finally block, this closes every turn whose
 	// turn/start committed, whatever ends it, including its opening.
 	defer func() {
@@ -122,9 +119,18 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			result.Outcome = session.OutcomeError
 		}
 		if stepOpen {
-			// A step cannot close over a committed call without a result;
-			// like resume repair, a call that may have run gets one.
-			for _, callID := range unresolved {
+			// A step cannot close over an open question or a committed call
+			// without a result. The batch has returned, so no decision is in
+			// flight; like resume repair, each question the log leaves open
+			// is cancelled, then each call that may have run gets a result.
+			events, eventsErr := input.journal.Events(context.WithoutCancel(ctx))
+			result.Err = errors.Join(result.Err, eventsErr)
+			approvals, calls := unresolved(events)
+			for _, approvalID := range approvals {
+				_, decideErr := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordApprovalDecided, Turn: turn, Step: openStep, Approval: &session.ApprovalData{ID: approvalID, Outcome: session.ApprovalCancelled}})
+				result.Err = errors.Join(result.Err, decideErr)
+			}
+			for _, callID := range calls {
 				interrupted := session.InterruptedToolResult(callID)
 				_, resultErr := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordToolResult, Turn: turn, Step: openStep, Result: &interrupted})
 				result.Err = errors.Join(result.Err, resultErr)
@@ -310,7 +316,6 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 				result.Err, result.Outcome = err, session.OutcomeError
 				return result
 			}
-			unresolved = append(unresolved, call.ID)
 		}
 		result.Text = session.Text(message)
 		if len(completion.Calls) == 0 {
@@ -347,13 +352,11 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			SessionID: result.SessionID, Cwd: input.journal.Header().Cwd, Route: toolRoute, Turn: turn, Step: step,
 			Calls: completion.Calls, Delegated: input.delegated, Journal: input.journal,
 		})
-		// Results keep call order, so each commit resolves the oldest call.
 		for index := range toolResults {
 			if _, err := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordToolResult, Turn: turn, Step: step, Result: &toolResults[index]}); err != nil {
 				result.Err, result.Outcome = err, session.OutcomeError
 				return result
 			}
-			unresolved = unresolved[1:]
 		}
 		if _, err := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordStepEnd, Turn: turn, Step: step, Usage: completion.Usage}); err != nil {
 			result.Err, result.Outcome = err, session.OutcomeError
@@ -399,6 +402,29 @@ func nextTurn(events []session.Event) uint64 {
 		}
 	}
 	return turn + 1
+}
+
+// unresolved lists, in commit order, the approval questions without a
+// decision and the calls without a result, as resume repair finds them. The
+// log accepts step/end only once a step pairs both, so every one belongs to
+// the open step.
+func unresolved(events []session.Event) (approvals, calls []string) {
+	for _, event := range events {
+		record := event.Record
+		if record.Type == session.RecordApprovalAsked {
+			approvals = append(approvals, record.Approval.ID)
+		}
+		if record.Type == session.RecordApprovalDecided {
+			approvals = slices.DeleteFunc(approvals, func(id string) bool { return id == record.Approval.ID })
+		}
+		if record.Type == session.RecordToolCall {
+			calls = append(calls, record.Call.ID)
+		}
+		if record.Type == session.RecordToolResult {
+			calls = slices.DeleteFunc(calls, func(id string) bool { return id == record.Result.CallID })
+		}
+	}
+	return approvals, calls
 }
 
 // requestRoute is the route one request uses: a delegated agent's
