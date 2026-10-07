@@ -319,6 +319,7 @@ func TestServiceUpdateValidationStorageAndUnmountedFailures(t *testing.T) {
 func TestServiceWatch_DisposeWaitsForRunningCallbacks(t *testing.T) {
 	service, _ := startService(t)
 	entered := make(chan struct{})
+	var firstCall sync.Once
 	release := make(chan struct{})
 	releaseAll := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(releaseAll)
@@ -331,10 +332,13 @@ func TestServiceWatch_DisposeWaitsForRunningCallbacks(t *testing.T) {
 		}
 		running = true
 		mu.Unlock()
-		select {
-		case entered <- struct{}{}:
+		// Only the first callback blocks; closing entered signals it even
+		// when the test has not started waiting yet.
+		blocking := false
+		firstCall.Do(func() { blocking = true })
+		if blocking {
+			close(entered)
 			<-release
-		default:
 		}
 		mu.Lock()
 		running = false

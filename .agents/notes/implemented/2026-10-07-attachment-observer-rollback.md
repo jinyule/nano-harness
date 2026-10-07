@@ -27,3 +27,4 @@
 - mutation 新增 `attachment-observer-rollback`、`attachment-observer-quiescence`、`provider-watch-rollback`，均 killed。
 - 复审追加：修复前 `TestServiceWatch_DisposeWaitsForRunningCallbacks`（屏障让回调停在执行中，报 `dispose returned while the watcher's callback ran`）与 `TestProviderStop_IgnoresCallbacksThatOutliveCleanup`（cleanup 后调用捕获的回调，报 `a late callback republished the catalog`）失败，修复后通过；`TestServiceWatch_DisposeReportsAnExpiredWait` 覆盖等待超时。mutation 新增 `settings-watch-quiescence` 与 `provider-stopped-install`。
 - `GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check`（基于 `74f420b`）：exit 0，lint 0 issues，逐产品文件 100.0% coverage，192 个 mutation 全部 killed。
+- 测试时序修正（`finalrecheck` S1）：两个静止测试原用无缓冲 channel 加 `default` 的发送表示“回调已进入”，回调先于接收者运行时通知会丢失、测试挂起。现在第一个回调关闭 `entered` 再阻塞，后续回调不阻塞，信号不会丢失。设置、附件与 provider 的相关测试各以 `go test -race -count=200` 运行通过；在接收前人为延迟 50 ms 的探针下 settings 测试仍通过。产品代码未改。
