@@ -102,16 +102,7 @@ func awaitCallback(ctx context.Context, results <-chan oauthCallback, expectedSt
 }
 
 func (provider *Provider) postForm(ctx context.Context, endpoint string, values url.Values, headers map[string]string) ([]byte, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(values.Encode()))
-	if err != nil {
-		return nil, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
-	}
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	request.Header.Set("Accept", "application/json")
-	for name, value := range headers {
-		request.Header.Set(name, value)
-	}
-	return provider.doOAuth(request)
+	return provider.postOAuth(ctx, endpoint, "application/x-www-form-urlencoded", values.Encode(), headers)
 }
 
 func (provider *Provider) postJSON(ctx context.Context, endpoint string, payload any, headers map[string]string) ([]byte, error) {
@@ -119,19 +110,27 @@ func (provider *Provider) postJSON(ctx context.Context, endpoint string, payload
 	if err != nil {
 		return nil, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(encoded)))
+	return provider.postOAuth(ctx, endpoint, "application/json", string(encoded), headers)
+}
+
+// postOAuth sends one bounded OAuth request under the exchange watchdog.
+func (provider *Provider) postOAuth(ctx context.Context, endpoint, contentType, body string, headers map[string]string) ([]byte, error) {
+	ctx, dog, stop := provider.watch(ctx)
+	defer stop()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(body))
 	if err != nil {
 		return nil, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
 	}
-	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Content-Type", contentType)
 	request.Header.Set("Accept", "application/json")
 	for name, value := range headers {
 		request.Header.Set(name, value)
 	}
-	return provider.doOAuth(request)
+	data, err := provider.readOAuth(request, dog)
+	return data, provider.idleFailure(ctx, err)
 }
 
-func (provider *Provider) doOAuth(request *http.Request) ([]byte, error) {
+func (provider *Provider) readOAuth(request *http.Request, dog *watchdog) ([]byte, error) {
 	response, err := provider.do(request)
 	if err != nil {
 		return nil, err
@@ -140,9 +139,9 @@ func (provider *Provider) doOAuth(request *http.Request) ([]byte, error) {
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, statusError(provider.id, response.StatusCode, response.Header.Get("Retry-After"))
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxOAuthResponseBytes+1))
+	data, err := io.ReadAll(io.LimitReader(dog.body(response.Body), maxOAuthResponseBytes+1))
 	if err != nil {
-		return nil, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
+		return nil, readFailure(provider.id, err)
 	}
 	if len(data) > maxOAuthResponseBytes {
 		return nil, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("OAuth response exceeds size limit")}

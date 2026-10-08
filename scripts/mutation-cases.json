@@ -1685,5 +1685,54 @@
     "before": "if change.Operation == session.GoalOpPause && change.Actor == ActorHost {",
     "after": "if change.Operation == session.GoalOpPause {",
     "test": "^TestDriver_ModelPauseDoesNotInterrupt$"
+  },
+  {
+    "id": "provider-default-client-deadline",
+    "file": "internal/adapter/model/provider/provider.go",
+    "before": "client = &http.Client{}",
+    "after": "client = &http.Client{Timeout: 2 * time.Minute}",
+    "test": "^TestNew_DefaultClientHasNoTotalDeadline$"
+  },
+  {
+    "id": "provider-idle-rearm",
+    "file": "internal/adapter/model/provider/wire_common.go",
+    "before": "reader.dog.timer.Reset(reader.dog.idle)",
+    "after": "_ = reader.dog.idle",
+    "test": "^TestSend_ActiveStreamOutlivesIdleWindow$"
+  },
+  {
+    "id": "provider-idle-body-unwatched",
+    "file": "internal/adapter/model/provider/wire_common.go",
+    "before": "consume(io.LimitReader(dog.body(response.Body), maxProviderResponseBytes+1))",
+    "after": "consume(io.LimitReader(response.Body, maxProviderResponseBytes+1+int64(dog.idle*0)))",
+    "test": "^TestSend_ActiveStreamOutlivesIdleWindow$"
+  },
+  {
+    "id": "provider-idle-classification",
+    "file": "internal/adapter/model/provider/wire_common.go",
+    "before": "if err != nil && errors.Is(context.Cause(ctx), errIdleTimeout) {",
+    "after": "if err != nil && errors.Is(context.Cause(ctx), errProviderRedirect) {",
+    "test": "^TestSend_(StalledStreamTimesOut|ResponseHeaderStallTimesOut|ConnectStallTimesOut)$"
+  },
+  {
+    "id": "provider-read-deadline-timeout",
+    "file": "internal/adapter/model/provider/wire_common.go",
+    "before": "\t\tcode = llm.ErrorTimeout\n",
+    "after": "\t\tcode = llm.ErrorProtocol\n",
+    "test": "^TestSend_(BodyDeadlineIsTimeout|CallerDeadlineKeepsItsCause)$"
+  },
+  {
+    "id": "provider-oauth-idle-classification",
+    "file": "internal/adapter/model/provider/oauth.go",
+    "before": "\tdata, err := provider.readOAuth(request, dog)\n\treturn data, provider.idleFailure(ctx, err)",
+    "after": "\treturn provider.readOAuth(request, dog)",
+    "test": "^TestPostOAuth_StalledResponseTimesOut$"
+  },
+  {
+    "id": "agent-outcome-internal-deadline",
+    "file": "internal/app/agent/engine.go",
+    "before": "ctx.Err() != nil && errors.Is(err, context.DeadlineExceeded)",
+    "after": "errors.Is(err, context.DeadlineExceeded)",
+    "test": "^TestAgent_ProviderTimeoutWakesPendingNotices$"
   }
 ]

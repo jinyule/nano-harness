@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jinyule/nano-harness/internal/app/llm"
 	"github.com/jinyule/nano-harness/internal/core/session"
@@ -63,7 +64,7 @@ func recordingServer(t *testing.T) (*httptest.Server, func() []string) {
 
 func preparedFor(server *httptest.Server, id string, vision bool) *prepared {
 	return &prepared{
-		owner:    &Provider{id: id, client: server.Client()},
+		owner:    &Provider{id: id, client: server.Client(), idleTimeout: time.Minute},
 		snapshot: &snapshot{baseURL: server.URL},
 		info:     llm.ModelInfo{Provider: id, ID: "m", Vision: vision, Tools: true},
 	}

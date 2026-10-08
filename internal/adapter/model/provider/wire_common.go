@@ -17,8 +17,61 @@ import (
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
-// errProviderRedirect marks a refused redirect on a credential-bearing request.
-var errProviderRedirect = errors.New("provider redirect refused")
+var (
+	// errProviderRedirect marks a refused redirect on a credential-bearing request.
+	errProviderRedirect = errors.New("provider redirect refused")
+	// errIdleTimeout is the cause an exchange watchdog cancels with. It does
+	// not wrap context.DeadlineExceeded: the caller's context is still live.
+	errIdleTimeout = errors.New("provider exchange idle timeout")
+)
+
+// watchdog ends one provider exchange that makes no progress for its idle
+// interval. Arming covers connecting, sending the request, and waiting for
+// response headers; every body read that returns data rearms it.
+type watchdog struct {
+	idle  time.Duration
+	timer *time.Timer
+}
+
+// watch derives the exchange context and its watchdog. The returned stop
+// releases both and must run after the response body is closed.
+func (provider *Provider) watch(ctx context.Context) (context.Context, *watchdog, func()) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	dog := &watchdog{idle: provider.idleTimeout}
+	dog.timer = time.AfterFunc(dog.idle, func() { cancel(errIdleTimeout) })
+	return ctx, dog, func() {
+		dog.timer.Stop()
+		cancel(nil)
+	}
+}
+
+// body returns reader with each data-bearing read rearming the watchdog.
+func (dog *watchdog) body(reader io.Reader) io.Reader {
+	return activityReader{reader: reader, dog: dog}
+}
+
+type activityReader struct {
+	reader io.Reader
+	dog    *watchdog
+}
+
+func (reader activityReader) Read(buffer []byte) (int, error) {
+	count, err := reader.reader.Read(buffer)
+	if count > 0 {
+		reader.dog.timer.Reset(reader.dog.idle)
+	}
+	return count, err
+}
+
+// idleFailure reports a failure of an exchange its watchdog ended as a
+// provider timeout. The aborted transport or body read surfaces as a
+// cancellation, which would otherwise read as the caller's own.
+func (provider *Provider) idleFailure(ctx context.Context, err error) error {
+	if err != nil && errors.Is(context.Cause(ctx), errIdleTimeout) {
+		return &llm.Error{Code: llm.ErrorTimeout, Provider: provider.id, Cause: fmt.Errorf("no data for %s: %w", provider.idleTimeout, errIdleTimeout)}
+	}
+	return err
+}
 
 func (provider *Provider) streamRequest(ctx context.Context, endpoint string, payload any, headers map[string]string, consume func(io.Reader) (llm.Completion, error)) (llm.Completion, error) {
 	return send(ctx, provider, endpoint, "text/event-stream", payload, headers, consume)
@@ -50,6 +103,8 @@ func send[T any](ctx context.Context, provider *Provider, endpoint, accept strin
 	if len(encoded) > maxProviderRequestBytes {
 		return zero, &llm.Error{Code: llm.ErrorInvalid, Provider: provider.id, Cause: errors.New("request exceeds size limit")}
 	}
+	ctx, dog, stop := provider.watch(ctx)
+	defer stop()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
 	if err != nil {
 		return zero, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
@@ -62,7 +117,7 @@ func send[T any](ctx context.Context, provider *Provider, endpoint, accept strin
 	}
 	response, err := provider.do(request)
 	if err != nil {
-		return zero, err
+		return zero, provider.idleFailure(ctx, err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -73,14 +128,15 @@ func send[T any](ctx context.Context, provider *Provider, endpoint, accept strin
 		}
 		return zero, failure
 	}
-	return consume(io.LimitReader(response.Body, maxProviderResponseBytes+1))
+	value, err := consume(io.LimitReader(dog.body(response.Body), maxProviderResponseBytes+1))
+	return value, provider.idleFailure(ctx, err)
 }
 
 // decodeJSON strictly bounds and decodes one non-streaming provider response.
 func decodeJSON(body io.Reader, providerID string, target any) error {
 	encoded, err := io.ReadAll(body)
 	if err != nil {
-		return &llm.Error{Code: llm.ErrorProtocol, Provider: providerID, Cause: err}
+		return readFailure(providerID, err)
 	}
 	if len(encoded) > maxProviderResponseBytes {
 		return &llm.Error{Code: llm.ErrorProtocol, Provider: providerID, Cause: errors.New("response exceeds size limit")}
@@ -118,9 +174,19 @@ func scanSSE(body io.Reader, providerID string, visit func([]byte) error) error 
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return &llm.Error{Code: llm.ErrorProtocol, Provider: providerID, Cause: err}
+		return readFailure(providerID, err)
 	}
 	return nil
+}
+
+// readFailure classifies a failed body read: a deadline that ended the read
+// is a timeout; any other failure leaves the response incomplete.
+func readFailure(providerID string, err error) error {
+	code := llm.ErrorProtocol
+	if errors.Is(err, context.DeadlineExceeded) {
+		code = llm.ErrorTimeout
+	}
+	return &llm.Error{Code: code, Provider: providerID, Cause: err}
 }
 
 func parseRetryAfter(value string) int64 {

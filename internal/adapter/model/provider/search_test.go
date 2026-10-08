@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jinyule/nano-harness/internal/app/llm"
 	appsettings "github.com/jinyule/nano-harness/internal/app/settings"
@@ -457,7 +458,7 @@ func TestOAuth_RefusesRedirectsWithoutContactingTarget(t *testing.T) {
 		http.Redirect(writer, request, target.URL+"/stolen", http.StatusPermanentRedirect)
 	}))
 	t.Cleanup(origin.Close)
-	provider := &Provider{id: "openai", client: origin.Client(), auth: authConfig{openAIAuthURL: origin.URL, anthropicExchangeURL: origin.URL}}
+	provider := &Provider{id: "openai", client: origin.Client(), idleTimeout: time.Minute, auth: authConfig{openAIAuthURL: origin.URL, anthropicExchangeURL: origin.URL}}
 	_, err := provider.refreshOpenAI(context.Background(), llm.Credential{Kind: llm.CredentialOAuth, AccessToken: "old", RefreshToken: "refresh-secret"})
 	expectLLMError(t, err, llm.ErrorProtocol)
 	if !errors.Is(err, errProviderRedirect) {

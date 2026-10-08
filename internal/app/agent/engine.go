@@ -103,7 +103,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 	}
 	events, err := input.journal.Events(ctx)
 	if err != nil {
-		result.Err, result.Outcome = err, outcomeFor(err)
+		result.Err, result.Outcome = err, outcomeFor(ctx, err)
 		return result
 	}
 	turn := nextTurn(events)
@@ -163,7 +163,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		return result
 	}
 	if err != nil {
-		result.Err, result.Outcome = err, outcomeFor(err)
+		result.Err, result.Outcome = err, outcomeFor(ctx, err)
 		return result
 	}
 	// Every boundary that takes queued input checks cancellation first, so
@@ -191,11 +191,11 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		// request header below is the first to reflect them.
 		planPolicy, err := engine.plan.Step(ctx, input.journal, turn)
 		if err != nil {
-			result.Err, result.Outcome = fmt.Errorf("plan mode boundary: %w", err), outcomeFor(err)
+			result.Err, result.Outcome = fmt.Errorf("plan mode boundary: %w", err), outcomeFor(ctx, err)
 			return result
 		}
 		if err := engine.stepContext(ctx, input, turn); err != nil {
-			result.Err, result.Outcome = fmt.Errorf("step context: %w", err), outcomeFor(err)
+			result.Err, result.Outcome = fmt.Errorf("step context: %w", err), outcomeFor(ctx, err)
 			return result
 		}
 		// Step context commits regardless of cancellation; a cancellation
@@ -205,7 +205,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			return result
 		}
 		if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordStepStart, Turn: turn, Step: step}); err != nil {
-			result.Err, result.Outcome = err, outcomeFor(err)
+			result.Err, result.Outcome = err, outcomeFor(ctx, err)
 			return result
 		}
 		stepOpen = true
@@ -238,7 +238,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		}
 		call, err := engine.llm.PrepareCall(ctx, route.Provider, route.Model)
 		if err != nil {
-			result.Err, result.Outcome = err, outcomeFor(err)
+			result.Err, result.Outcome = err, outcomeFor(ctx, err)
 			return result
 		}
 		events, err = input.journal.Events(ctx)
@@ -279,7 +279,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 				}
 				continue
 			}
-			result.Err, result.Outcome = err, outcomeFor(err)
+			result.Err, result.Outcome = err, outcomeFor(ctx, err)
 			return result
 		}
 		message := completion.Message
@@ -445,8 +445,14 @@ func findModel(document settings.Document, provider, model string) settings.Mode
 	return settings.Model{ID: model}
 }
 
-func outcomeFor(err error) session.TurnOutcome {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+// outcomeFor classifies a failed turn. A cancellation is canceled wherever
+// it surfaced, since shutdown reaches the turn through its dependencies. A
+// deadline is canceled only when it ended the turn's own context: one a
+// dependency enforced internally, such as a provider timeout whose cause
+// wraps context.DeadlineExceeded, is an error, so pending notices still
+// open the next turn.
+func outcomeFor(ctx context.Context, err error) session.TurnOutcome {
+	if errors.Is(err, context.Canceled) || ctx.Err() != nil && errors.Is(err, context.DeadlineExceeded) {
 		return session.OutcomeCanceled
 	}
 	return session.OutcomeError
