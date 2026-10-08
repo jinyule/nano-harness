@@ -143,7 +143,59 @@ ADR 编号预先分配，避免并行分支冲突；审查修复期间追加 001
 
 ### 最终 Fable 整体 review
 
-待补。由协调者填写。
+范围 `main..74f420b`。Fable 整体 review 与 Codex（`gpt-6-astra`）最终 review 各自独立进行，再互相核实对方的发现。
+
+- 成立并修复：
+  - workspace 可以包含凭据文件、设置文件与 session root，`read`/`grep` 免审批读出密钥，`web_fetch` 免审批外传（Fable B1）；
+  - 重启后审批编号与历史重复（astra B1）；
+  - 批次 tool/call 记录中途取消后会话无法继续（astra B2）；
+  - 附件 observer 注册失败后回调残留（astra S1）；
+  - HTML 自闭合标记暴露 hidden 内容（astra S2）；
+  - write/edit 执行点的 delegated 拒绝缺少有效断言（Fable 3.1）。
+- 收窄后处理：
+  - bash 环境 allowlist 原本已记录，只补与上游的比较、代价与理由，`~` 仍会展开；
+  - 残留 `.lock` 补人工恢复步骤；
+  - Append 成本只记后续项，仓库已有短会话 benchmark；
+  - macOS full access 的 symlink 拒绝原本已记录，只补示例；
+  - fixture 口径改为“已采纳的 Base 子集”；
+  - IP 黑名单只有 IPv6 `2000::/3` 一处差异。
+- 不成立：Fable 列出的 IPv4 额外拒绝范围，上游 ipaddr.js 同样拒绝。
+
+修复提交：
+
+- 审批 ID 随机化：`4757e3b`、`cf34590`。
+- 批次取消收尾：`90591e3`，以及关闭中止 step 前先取消未决审批的 `cf9e6b1`。
+- 附件 observer：`47af5a2`。
+- delegated 执行点测试：`b746f3d`。
+- 私有路径排除：`8e6e7b3`；按文件身份判断包含关系 `666a114`；配置路径经过 workspace 时拒绝 `cb56da0`。
+- provider watch 等待在途回调：`901a42a`；watcher 测试不丢通知：`d8b4090`。
+- HTML：自闭合 `2600c6e`；改用 x/net/html 解析器建树 `4c8d690`；建树预算 `633844b` → `3339104` → `02dafbf`。
+- 文档：`7dad11b`、`92e3599`、`be1f126`；已知缺口 `daf3af4` 与 `e6c145f`。
+- 二进制产物清理：`2c84fc5`。
+
+复审：
+
+- `finalrecheck-latest.md`：私有路径别名、活动格式重建泄漏、integration-point 变异等原发现均已闭合；新发现 HTML 建树内存放大（B1，由 `4c8d690` 引入）与 watcher 测试丢通知。
+- `fable-final-recheck.md` 第 1–6 节：
+  - 私有路径的大小写与 firmlink 别名可以绕过（RB1），由 `666a114`、`cb56da0` 修复；
+  - HTML foreign 规则与误嵌套格式元素泄漏，由 `4c8d690` 改用解析器后闭合；
+  - 审批决定落盘失败的收尾缺口由 `cf9e6b1` 修复；
+  - provider watch 由 `901a42a` 修复。
+- `fable-final-recheck.md` 第 7–9 节、`b1review-latest.md` 与 opus 的交叉核实（`opus-verify-astra-b1.md`、`opus-verify-codex-b1review.md`）：建树预算经三次改写后仍有五类低估，并核对了已知缺口的文档记录。
+
+B1 剩余的低估由维护者决定遇到真实场景再修，情形、量级与复审条件见 [ADR-0011](../../../docs/decisions/0011-provider-web-search-and-public-fetch.md) 第 7 条。
+
+维护者后续项：
+
+- 会话写满 64 MiB 后，resume 修复的补写同样失败，会话无法再通过产品打开；预留收尾容量需要单独的 ADR。
+- 崩溃残留的 `.jsonl.lock` 改为进程退出即自动释放的锁。
+- 补充 Append 成本随历史长度增长的 benchmark 曲线。
+- 升级 `golang.org/x/net` 时重新验证 HTML 建树预算的论证，包括 5 处 tokenizer 回馈的调用点及其执行条件。
+
+门禁：在 `e6c145f`（`daf3af4` 之后只改注释与文档）上：
+
+- `GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check` 通过：全仓 race、逐产品文件 100% coverage、lint 0 issues，清单中 240 项 mutation 全部 killed，真实 cmd build 与 smoke 通过。
+- `make tui-e2e` 通过：真实二进制与 PTY，19 个 root 工具调用，覆盖附件存储与冲突引用占位、任务计划、后台任务通知、提问、sandbox 模式切换、规划审查、`/goal` 轮次、spawn/fork、审批、粘贴、窗口缩放、打断、resume 与 cleanup。
 
 ### 证据缺口
 
