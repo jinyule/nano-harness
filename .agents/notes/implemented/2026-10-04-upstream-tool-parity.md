@@ -194,7 +194,7 @@ B1 剩余的低估由维护者决定遇到真实场景再修，情形、量级�
 
 门禁：在 `e6c145f`（`daf3af4` 之后只改注释与文档）上：
 
-- `GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check` 通过：全仓 race、逐产品文件 100% coverage、lint 0 issues，清单中 240 项 mutation 全部 killed，真实 cmd build 与 smoke 通过。
+- `GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check` 通过：全仓 race、逐产品文件 100% coverage、lint 0 issues，清单中 239 项 mutation 全部 killed，真实 cmd build 与 smoke 通过。
 - `make tui-e2e` 通过：真实二进制与 PTY，19 个 root 工具调用，覆盖附件存储与冲突引用占位、任务计划、后台任务通知、提问、sandbox 模式切换、规划审查、`/goal` 轮次、spawn/fork、审批、粘贴、窗口缩放、打断、resume 与 cleanup。
 
 ### 证据缺口
