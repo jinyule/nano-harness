@@ -67,6 +67,7 @@ workflow-tools: ## Test deterministic repository workflow helpers.
 	scripts/change-scope_test.sh
 	scripts/coverage_test.sh
 	scripts/verify-release_test.sh
+	scripts/install-ripgrep_test.sh
 	python3 scripts/publish-release_test.py
 	python3 scripts/mutation-check_test.py
 

@@ -13,6 +13,8 @@
 
 复杂度、重复与性能拥有可运行 Make target、负例和独立观察 workflow。gocyclo 的 10 与独立 dupl 的 100 节点是报告阈值，非硬通过线。dupl 固定为 lint 已采用的 v0.0.0-20260401084720-c99c5cf5c202，MIT、无第三方传递 module，不进入产品；独立进程覆盖跨包重复，避免 lint 按包分析漏检。原始报告保存为 artifact，不自动改写 expected 或基线。
 
+默认 mutation 清单的格式、唯一性与 file/fetch 回归接入由[清单门禁 Note](2026-10-06-mutation-manifest-gate.md)补充；本 Note 保留初次工程门禁的决定与执行证据。
+
 ## Consequences
 
 规则能阻止此前漏检的输入，代价是 Python 3 和 mutation 的编译时间，Unix 进程组用于可等待回收。未引入自动全仓 mutation、Python parser 工具、通用插件基类、持久化迁移或未经 CI 校准的性能预算。源码形状不代替运行时组装和原生平台证据。

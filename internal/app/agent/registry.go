@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jinyule/nano-harness/internal/app/plan"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/app/transcript"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
@@ -66,6 +67,20 @@ func (registry *Registry) SetPolicy(ctx context.Context, sessionID string, polic
 	return registry.approval.SetPolicy(ctx, sessionID, current.journal, policy)
 }
 
+// SetPlanMode selects plan mode for one live root agent. Between turns the
+// selection is recorded at once; during a turn it applies from the next step
+// boundary.
+func (registry *Registry) SetPlanMode(ctx context.Context, sessionID string, active bool) (plan.Change, error) {
+	current, err := registry.Find(sessionID)
+	if err != nil {
+		return "", err
+	}
+	if current.delegated {
+		return "", ErrInvalidConfig
+	}
+	return current.selectPlan(ctx, active)
+}
+
 // ID returns the stable registry plugin identity.
 func (*Registry) ID() string { return "agents" }
 
@@ -93,11 +108,15 @@ func (registry *Registry) stop(ctx context.Context) error {
 	}
 	registry.agents = map[string]mountedAgent{}
 	registry.mu.Unlock()
-	var failures []error
-	for _, candidate := range mounted {
-		candidate.agent.Interrupt()
-		failures = append(failures, candidate.scope.Close(ctx))
+	// Every agent closes at once, so turn admission stops for the root and
+	// all children together; closing them one by one would let agents not
+	// yet reached open new turns while earlier ones drain.
+	failures := make([]error, len(mounted))
+	var group sync.WaitGroup
+	for index, candidate := range mounted {
+		group.Go(func() { failures[index] = candidate.agent.close(ctx, candidate.scope) })
 	}
+	group.Wait()
 	return errors.Join(failures...)
 }
 
@@ -113,7 +132,7 @@ func (registry *Registry) Create(ctx context.Context, request CreateRequest) (*A
 	if request.Mode == "" {
 		request.Mode = "continuable"
 	}
-	if request.Mode != "one-shot" && request.Mode != "continuable" || request.Depth < 0 || request.Depth > 16 || request.ParentID == "" && request.Depth != 0 || request.ParentID != "" && request.Depth == 0 {
+	if request.Mode != "one-shot" && request.Mode != "continuable" || request.Depth < 0 || request.Depth > 16 || request.ParentID == "" && (request.Depth != 0 || request.Provider != "" || request.Route != (session.SubagentRoute{}) || len(request.Seed) > 0 || request.Sandbox != "") || request.ParentID != "" && request.Depth == 0 || request.Sandbox != "" && !request.Sandbox.Valid() {
 		return nil, ErrInvalidConfig
 	}
 	registry.mu.Lock()
@@ -128,7 +147,7 @@ func (registry *Registry) Create(ctx context.Context, request CreateRequest) (*A
 	registry.mu.Unlock()
 	log, err := registry.repository.OpenSession(ctx, transcript.OpenOptions{
 		SessionID: request.SessionID, Create: request.Create, Cwd: registry.workspace,
-		ParentSessionID: request.ParentID, DelegationDepth: request.Depth,
+		ParentSessionID: request.ParentID, DelegationDepth: request.Depth, Seed: request.Seed,
 	})
 	if err != nil {
 		return nil, err
@@ -141,10 +160,16 @@ func (registry *Registry) Create(ctx context.Context, request CreateRequest) (*A
 	}
 	if request.Create {
 		if request.ParentID != "" {
-			descriptor := &session.SubagentDescriptor{Version: 1, Provider: "in-process", Mode: request.Mode, Label: request.Label, Persona: request.Persona, Tools: slices.Clone(request.Tools)}
+			descriptor := &session.SubagentDescriptor{Version: session.SubagentDescriptorVersion, Provider: request.Provider, Mode: request.Mode, Label: request.Label, Route: request.Route, Persona: request.Persona, Tools: slices.Clone(request.Tools), Inherited: uint64(len(request.Seed))}
 			if _, err := ownedJournal.Append(ctx, session.Record{Type: session.RecordSubagentDescriptor, Subagent: descriptor}); err != nil {
 				_ = ownedJournal.Close(context.WithoutCancel(ctx))
 				return nil, err
+			}
+			if request.Sandbox != "" {
+				if _, err := ownedJournal.Append(ctx, session.Record{Type: session.RecordSandboxMode, Sandbox: &session.SandboxModeChange{Mode: request.Sandbox, Source: "delegation"}}); err != nil {
+					_ = ownedJournal.Close(context.WithoutCancel(ctx))
+					return nil, err
+				}
 			}
 			if _, err := ownedJournal.Append(ctx, session.Record{Type: session.RecordApprovalPolicy, Approval: &session.ApprovalData{Policy: session.ApprovalNever, Source: "delegation"}}); err != nil {
 				_ = ownedJournal.Close(context.WithoutCancel(ctx))
@@ -169,8 +194,11 @@ func (registry *Registry) Create(ctx context.Context, request CreateRequest) (*A
 	agent := &Agent{
 		engine: registry.engine, journal: ownedJournal, parentID: request.ParentID,
 		label: request.Label, mode: request.Mode, persona: request.Persona,
-		tools: slices.Clone(request.Tools), depth: request.Depth, delegated: request.ParentID != "",
-		turns: make(chan turnRequest, 32), steers: make(chan session.Message, 32), done: make(chan struct{}),
+		tools: slices.Clone(request.Tools), depth: request.Depth, delegated: request.ParentID != "", route: request.Route,
+		turns: make(chan turnRequest, 32), steers: make(chan session.Message, 32), done: make(chan struct{}), wake: make(chan struct{}, 1),
+		// Notices this session still owes wait for its next turn, as
+		// upstream's durable inbox does; resuming opens no turn for them.
+		notices: session.PendingNotices(session.OwnEvents(events)),
 	}
 	agentScope := newAgentScope()
 	if err := agent.start(registry.ctx, agentScope); err != nil {
@@ -200,6 +228,7 @@ func restoreRequest(request CreateRequest, header session.Header, events []sessi
 		if event.Record.Type == session.RecordSubagentDescriptor {
 			request.Label = event.Record.Subagent.Label
 			request.Mode = event.Record.Subagent.Mode
+			request.Route = event.Record.Subagent.Route
 			request.Persona = event.Record.Subagent.Persona
 			request.Tools = slices.Clone(event.Record.Subagent.Tools)
 		}
@@ -219,6 +248,26 @@ func (registry *Registry) Find(sessionID string) (*Agent, error) {
 		return nil, ErrAgentNotFound
 	}
 	return mounted.agent, nil
+}
+
+// Notify delivers a model-facing notice to the live agent of sessionID; see
+// Agent.Notify for delivery timing.
+func (registry *Registry) Notify(sessionID string, message session.Message) error {
+	current, err := registry.Find(sessionID)
+	if err != nil {
+		return err
+	}
+	return current.Notify(message)
+}
+
+// QueueNotice durably delivers a notice to the live agent of sessionID; see
+// Agent.QueueNotice.
+func (registry *Registry) QueueNotice(ctx context.Context, sessionID string, message session.Message) error {
+	current, err := registry.Find(sessionID)
+	if err != nil {
+		return err
+	}
+	return current.QueueNotice(ctx, message)
 }
 
 // Statuses returns lexical live snapshots.

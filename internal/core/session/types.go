@@ -18,9 +18,10 @@ const (
 	FormatVersion = 2
 	// MaxTextBytes bounds one text block or tool result.
 	MaxTextBytes = 256 << 10
-	// MaxArgumentsBytes bounds one serialized tool argument object.
-	MaxArgumentsBytes = 128 << 10
-	// MaxImageBytes bounds one normalized decoded image.
+	// MaxArgumentsBytes bounds one tool argument object in its durable JSON
+	// representation and the raw bytes accumulated by a provider stream.
+	MaxArgumentsBytes = 768 << 10
+	// MaxImageBytes bounds one normalized stored image.
 	MaxImageBytes = 4 << 20
 	// MaxContentBlocks bounds one message or summary.
 	MaxContentBlocks = 32
@@ -62,8 +63,26 @@ const (
 	RecordCompactionSummary RecordType = "compaction/summary"
 	// RecordCompactionEnd closes a successful or failed compaction transaction.
 	RecordCompactionEnd RecordType = "compaction/end"
+	// RecordCompactionPrune replaces one visible tool result's text with its
+	// bounded head and tail on the model surface.
+	RecordCompactionPrune RecordType = "compaction/prune"
 	// RecordSubagentDescriptor commits cold-resume metadata for a delegated agent.
 	RecordSubagentDescriptor RecordType = "subagent/descriptor"
+	// RecordSubagentCatalog commits one child a parent created, from inside the creating tool step.
+	RecordSubagentCatalog RecordType = "subagent/catalog"
+	// RecordTodoWrite commits the complete todo list written by one pending tool call.
+	RecordTodoWrite RecordType = "todo/write"
+	// RecordWebSearchRequest commits a log-only auxiliary request before dispatch.
+	RecordWebSearchRequest RecordType = "web/search-request"
+	// RecordSandboxMode commits the standing file policy for subsequent operations.
+	RecordSandboxMode RecordType = "sandbox/mode"
+	// RecordPlanMode commits the plan mode in force from this point on.
+	RecordPlanMode RecordType = "plan/mode"
+	// RecordGoalChange commits one goal mutation or clear tombstone.
+	RecordGoalChange RecordType = "goal/change"
+	// RecordNoticeQueued commits a notice owed to this session before it is
+	// delivered; a user/message carrying the same notice ID delivers it.
+	RecordNoticeQueued RecordType = "notice/queued"
 	// RecordStepEnd closes an active step after all calls and approvals settle.
 	RecordStepEnd RecordType = "step/end"
 	// RecordTurnEnd closes an active turn with a stable outcome.
@@ -76,6 +95,8 @@ type TurnOutcome string
 const (
 	// OutcomeCompleted identifies a turn that reached a provider completion without tool calls.
 	OutcomeCompleted TurnOutcome = "completed"
+	// OutcomeMaxTokens identifies a response truncated by its output token limit.
+	OutcomeMaxTokens TurnOutcome = "max_tokens"
 	// OutcomeCanceled identifies a turn stopped through context cancellation.
 	OutcomeCanceled TurnOutcome = "canceled"
 	// OutcomeError identifies a turn stopped by a non-cancellation failure.
@@ -106,28 +127,40 @@ const (
 	ContentImage ContentType = "image"
 )
 
-// Image is a normalized, replayable image attachment. Data is standard base64.
+// Image is a durable reference to one normalized image held by the
+// attachment store. ID is "sha256:" followed by the lowercase hex digest of
+// the stored bytes and is the only digest of record; Bytes, Width, and
+// Height describe those bytes. The log never holds image data.
 type Image struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	MediaType string `json:"media_type"`
-	Data      string `json:"data"`
-	SHA256    string `json:"sha256"`
+	Bytes     int    `json:"bytes"`
 	Width     int    `json:"width"`
 	Height    int    `json:"height"`
 }
 
-// ContentBlock is either text or an inline normalized image.
+// ContentBlock is either text or a reference to a normalized image.
 type ContentBlock struct {
 	Type  ContentType `json:"type"`
 	Text  string      `json:"text,omitempty"`
 	Image *Image      `json:"image,omitempty"`
 }
 
-// MessageSource records provenance without granting authority.
+// MessageSource records provenance without granting authority. The goal
+// fields attribute an automatic goal round and are present exactly when
+// Kind is GoalSource.
 type MessageSource struct {
-	Kind   string `json:"kind"`
-	Plugin string `json:"plugin,omitempty"`
+	Kind         string `json:"kind"`
+	Plugin       string `json:"plugin,omitempty"`
+	GoalID       string `json:"goal_id,omitempty"`
+	GoalRevision uint64 `json:"goal_revision,omitempty"`
+	GoalRound    uint64 `json:"goal_round,omitempty"`
+	// NoticeID links a queued notice and the user/message that delivers it.
+	NoticeID string `json:"notice_id,omitempty"`
+	// SenderSessionID names the session whose action produced an
+	// agent-message or subagent-settled message; other kinds omit it.
+	SenderSessionID string `json:"sender_session_id,omitempty"`
 }
 
 // Message is one replayable user or assistant message.
@@ -142,13 +175,23 @@ type ToolCall struct {
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
+	// ArgumentsOmitted marks an oversized proposal. Arguments is then {},
+	// and the runtime must return an error without checking or executing it.
+	ArgumentsOmitted bool `json:"arguments_omitted,omitempty"`
 }
 
 // ToolResult is the single model-visible outcome of a committed tool call.
+// Image is an optional normalized image the model sees after Output; only a
+// successful result may carry one. Error classifies a failure and Meta
+// records presentation data of a success; both are replayable but never
+// part of the model input.
 type ToolResult struct {
-	CallID  string `json:"call_id"`
-	Output  string `json:"output"`
-	IsError bool   `json:"is_error"`
+	CallID  string     `json:"call_id"`
+	Output  string     `json:"output"`
+	IsError bool       `json:"is_error"`
+	Image   *Image     `json:"image,omitempty"`
+	Error   *ToolError `json:"error,omitempty"`
+	Meta    *ToolMeta  `json:"meta,omitempty"`
 }
 
 // ToolDefinition is the exact schema frozen into one request header.
@@ -276,14 +319,61 @@ type CompactionData struct {
 	Error              string         `json:"error,omitempty"`
 }
 
-// SubagentDescriptor is the durable identity needed for cold resume.
+// Subagent provider and mode vocabulary shared by descriptors and catalog entries.
+const (
+	// SubagentDescriptorVersion is the only descriptor version this build reads or writes.
+	SubagentDescriptorVersion = 3
+	// SubagentSpawn identifies a child that starts with a fresh conversation.
+	SubagentSpawn = "spawn"
+	// SubagentFork identifies a child seeded with its parent's completed turns.
+	SubagentFork = "fork"
+	// SubagentOneShot identifies a child that runs one task and is released.
+	SubagentOneShot = "one-shot"
+	// SubagentContinuable identifies a child that accepts later messages.
+	SubagentContinuable = "continuable"
+)
+
+// Message source kinds that name the session whose action produced the
+// message in MessageSource.SenderSessionID.
+const (
+	// SourceAgentMessage marks a message another agent sent with send_message.
+	SourceAgentMessage = "agent-message"
+	// SourceSubagentSettled marks the harness's account of a background child
+	// that finished; the sender is that child.
+	SourceSubagentSettled = "subagent-settled"
+)
+
+// SubagentRoute is the model route a child inherits from the parent request
+// that delegated it. The child sends every request on this route, including
+// after cold resume, while the parent keeps following the hot route.
+type SubagentRoute struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Effort   Effort `json:"effort,omitempty"`
+}
+
+// SubagentDescriptor is the durable identity needed for cold resume. It is
+// the first record the child writes itself: Inherited counts the events
+// copied from the parent before it (always zero for spawn), so the
+// descriptor sits at sequence Inherited+1 and every later event is the
+// child's own.
 type SubagentDescriptor struct {
-	Version  int      `json:"version"`
-	Provider string   `json:"provider"`
-	Mode     string   `json:"mode"`
-	Label    string   `json:"label"`
-	Persona  string   `json:"persona,omitempty"`
-	Tools    []string `json:"tools,omitempty"`
+	Version   int           `json:"version"`
+	Provider  string        `json:"provider"`
+	Mode      string        `json:"mode"`
+	Label     string        `json:"label"`
+	Route     SubagentRoute `json:"route"`
+	Persona   string        `json:"persona,omitempty"`
+	Tools     []string      `json:"tools,omitempty"`
+	Inherited uint64        `json:"inherited,omitempty"`
+}
+
+// SubagentCatalog is a parent's durable record of one child it created.
+// Listing reads these entries instead of opening child logs.
+type SubagentCatalog struct {
+	SessionID string `json:"session_id"`
+	Mode      string `json:"mode"`
+	Label     string `json:"label"`
 }
 
 // Record is an unsequenced fact. A store assigns Sequence at commit.
@@ -301,6 +391,13 @@ type Record struct {
 	Approval   *ApprovalData       `json:"approval,omitempty"`
 	Compaction *CompactionData     `json:"compaction,omitempty"`
 	Subagent   *SubagentDescriptor `json:"subagent,omitempty"`
+	Catalog    *SubagentCatalog    `json:"catalog,omitempty"`
+	Todo       *TodoWrite          `json:"todo,omitempty"`
+	Search     *WebSearchRequest   `json:"search,omitempty"`
+	Sandbox    *SandboxModeChange  `json:"sandbox,omitempty"`
+	Plan       *PlanMode           `json:"plan,omitempty"`
+	Goal       *GoalChange         `json:"goal,omitempty"`
+	Prune      *ToolResultPrune    `json:"prune,omitempty"`
 	Outcome    TurnOutcome         `json:"outcome,omitempty"`
 }
 

@@ -16,48 +16,81 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jinyule/nano-harness/internal/adapter/attachment"
 	credentialfile "github.com/jinyule/nano-harness/internal/adapter/credential/file"
 	modelprovider "github.com/jinyule/nano-harness/internal/adapter/model/provider"
 	sessionjsonl "github.com/jinyule/nano-harness/internal/adapter/session/jsonl"
 	settingsfile "github.com/jinyule/nano-harness/internal/adapter/settings/file"
+	"github.com/jinyule/nano-harness/internal/adapter/spill"
+	filetool "github.com/jinyule/nano-harness/internal/adapter/tool/file"
+	goaltool "github.com/jinyule/nano-harness/internal/adapter/tool/goal"
+	jobtool "github.com/jinyule/nano-harness/internal/adapter/tool/job"
+	plantool "github.com/jinyule/nano-harness/internal/adapter/tool/plan"
+	questiontool "github.com/jinyule/nano-harness/internal/adapter/tool/question"
+	searchtool "github.com/jinyule/nano-harness/internal/adapter/tool/search"
+	shelltool "github.com/jinyule/nano-harness/internal/adapter/tool/shell"
+	skilltool "github.com/jinyule/nano-harness/internal/adapter/tool/skill"
 	subagenttool "github.com/jinyule/nano-harness/internal/adapter/tool/subagent"
+	todotool "github.com/jinyule/nano-harness/internal/adapter/tool/todo"
+	webtool "github.com/jinyule/nano-harness/internal/adapter/tool/web"
+	"github.com/jinyule/nano-harness/internal/adapter/tool/workspace"
 	"github.com/jinyule/nano-harness/internal/adapter/tui"
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/compaction"
+	appGoal "github.com/jinyule/nano-harness/internal/app/goal"
+	appJob "github.com/jinyule/nano-harness/internal/app/job"
 	"github.com/jinyule/nano-harness/internal/app/llm"
+	"github.com/jinyule/nano-harness/internal/app/plan"
 	"github.com/jinyule/nano-harness/internal/app/prompt"
 	"github.com/jinyule/nano-harness/internal/app/retry"
 	"github.com/jinyule/nano-harness/internal/app/settings"
 	"github.com/jinyule/nano-harness/internal/app/subagent"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/app/transcript"
+	appweb "github.com/jinyule/nano-harness/internal/app/web"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
-func TestComposition_EndToEndToolChain(t *testing.T) {
+// toolChain is the observable outcome of one real composition turn.
+type toolChain struct {
+	transcript []byte
+	// wireTools is the tool list the loopback provider received.
+	wireTools []session.ToolDefinition
+}
+
+// runToolChain drives the real cmd composition through one turn in which
+// the model reads proof.txt with the read tool and then answers.
+func runToolChain(t *testing.T) toolChain {
+	t.Helper()
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	var calls atomic.Int32
+	wire := make(chan []session.ToolDefinition, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/responses" || request.Header.Get("Authorization") != "Bearer test-key" {
 			http.Error(writer, "bad request", http.StatusBadRequest)
 			return
 		}
-		var body map[string]any
+		var body struct {
+			Reasoning struct {
+				Effort string `json:"effort"`
+			} `json:"reasoning"`
+			Tools []session.ToolDefinition `json:"tools"`
+		}
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			http.Error(writer, "bad json", http.StatusBadRequest)
 			return
 		}
-		reasoning, _ := body["reasoning"].(map[string]any)
-		if reasoning["effort"] != "max" {
+		if body.Reasoning.Effort != "max" {
 			http.Error(writer, "missing max reasoning effort", http.StatusBadRequest)
 			return
 		}
+		wire <- body.Tools
 		writer.Header().Set("Content-Type", "text/event-stream")
 		if calls.Add(1) == 1 {
-			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read_file\"}}\n\n")
-			_, _ = io.WriteString(writer, "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{\\\"path\\\":\\\"proof.txt\\\"}\"}\n\n")
-			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"proof.txt\\\"}\"}}\n\n")
+			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read\"}}\n\n")
+			_, _ = io.WriteString(writer, "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{\\\"file_path\\\":\\\"proof.txt\\\"}\"}\n\n")
+			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read\",\"arguments\":\"{\\\"file_path\\\":\\\"proof.txt\\\"}\"}}\n\n")
 		} else {
 			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"verified proof\"}\n\n")
 		}
@@ -76,8 +109,9 @@ func TestComposition_EndToEndToolChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	config, err := normalizeConfig(applicationConfig{
-		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), settingsPath: settingsPath,
-		credentialPath: filepath.Join(data, "credentials.yaml"), sessionID: "session-e2e", maxSteps: 8,
+		workspaceRoot: root, sessionRoot: filepath.Join(data, "sessions"), spillRoot: filepath.Join(data, "spill"), attachmentRoot: filepath.Join(data, "attachments"), settingsPath: settingsPath,
+		credentialPath: filepath.Join(data, "credentials.yaml"), skillsDir: filepath.Join(data, "skills"),
+		agentsSkillsDir: filepath.Join(data, "agents-skills"), sessionID: "session-e2e", maxSteps: 8,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -111,21 +145,125 @@ func TestComposition_EndToEndToolChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fact := range []string{`"tool/call"`, `"tool/result"`, `"effort":"max"`, "verified proof", "evidence"} {
-		if !bytes.Contains(encoded, []byte(fact)) {
+	return toolChain{transcript: encoded, wireTools: <-wire}
+}
+
+func TestComposition_EndToEndToolChain(t *testing.T) {
+	chain := runToolChain(t)
+	for _, fact := range []string{`"tool/call"`, `"tool/result"`, `"effort":"max"`, "verified proof", `1: evidence`, `(End of file - total 1 lines)`, "Use the read tool"} {
+		if !bytes.Contains(chain.transcript, []byte(fact)) {
 			t.Fatalf("transcript lacks %s", fact)
 		}
 	}
 }
 
+// catalogEntry is one model-visible tool definition in a reviewed fixture.
+type catalogEntry struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+// headerTools returns the tool schemas frozen into the first request header.
+func headerTools(t *testing.T, transcript []byte) []session.ToolDefinition {
+	t.Helper()
+	for line := range bytes.SplitSeq(transcript, []byte("\n")) {
+		var entry struct {
+			Record struct {
+				Header *session.RequestHeader `json:"header"`
+			} `json:"record"`
+		}
+		if json.Unmarshal(line, &entry) == nil && entry.Record.Header != nil {
+			return entry.Record.Header.Tools
+		}
+	}
+	t.Fatal("transcript has no request header")
+	return nil
+}
+
+func compactJSON(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var buffer bytes.Buffer
+	if err := json.Compact(&buffer, raw); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.String()
+}
+
+func loadCatalog(t *testing.T, path string) []catalogEntry {
+	t.Helper()
+	data, err := os.ReadFile(path) //nolint:gosec // fixed repository testdata path
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Tools []catalogEntry `json:"tools"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document.Tools
+}
+
+// TestComposition_ToolCatalogGolden freezes every model-visible tool schema
+// the real composition persists and sends. CI only compares; a reviewed
+// change edits testdata/tool-catalog.json by hand.
+func TestComposition_ToolCatalogGolden(t *testing.T) {
+	chain := runToolChain(t)
+	frozen := headerTools(t, chain.transcript)
+	golden := loadCatalog(t, filepath.Join("testdata", "tool-catalog.json"))
+	if len(frozen) != len(golden) || len(chain.wireTools) != len(frozen) {
+		t.Fatalf("catalog sizes: header=%d wire=%d golden=%d", len(frozen), len(chain.wireTools), len(golden))
+	}
+	for index, want := range golden {
+		got := frozen[index]
+		if got.Name != want.Name || got.Description != want.Description || compactJSON(t, got.Parameters) != compactJSON(t, want.Parameters) {
+			encoded, _ := json.MarshalIndent(got, "", "  ")
+			t.Errorf("tool %d differs from golden %q:\n%s", index, want.Name, encoded)
+		}
+		wire := chain.wireTools[index]
+		if wire.Name != got.Name || wire.Description != got.Description || compactJSON(t, wire.Parameters) != compactJSON(t, got.Parameters) {
+			t.Errorf("provider received a different %q definition than the request header", got.Name)
+		}
+	}
+}
+
+// TestComposition_MatchesUpstreamBaseTools proves each adopted tool that
+// shares a name with the upstream Base composition, plus the Web preset's
+// ask_user_question, is byte-identical in name, description, and parameter
+// schema, including property order. The fixture covers only the adopted
+// subset; deferred Base tools are listed in docs/reference-deepseek-harness.md.
+func TestComposition_MatchesUpstreamBaseTools(t *testing.T) {
+	frozen := map[string]session.ToolDefinition{}
+	for _, definition := range headerTools(t, runToolChain(t).transcript) {
+		frozen[definition.Name] = definition
+	}
+	upstream := loadCatalog(t, filepath.Join("testdata", "upstream-base-tools.json"))
+	if len(upstream) != 24 {
+		t.Fatalf("upstream fixture lists %d tools", len(upstream))
+	}
+	for _, want := range upstream {
+		got, ok := frozen[want.Name]
+		if !ok {
+			t.Errorf("composition lacks upstream tool %q", want.Name)
+			continue
+		}
+		if got.Description != want.Description {
+			t.Errorf("%s description\n got: %q\nwant: %q", want.Name, got.Description, want.Description)
+		}
+		if compactJSON(t, got.Parameters) != compactJSON(t, want.Parameters) {
+			t.Errorf("%s parameters\n got: %s\nwant: %s", want.Name, got.Parameters, compactJSON(t, want.Parameters))
+		}
+	}
+}
+
 func TestRunAndParsing(t *testing.T) {
-	originalCWD, originalConfig, originalRandom, originalInspect := currentWorkingDirectory, userConfigDirectory, readRandom, inspectPath
-	t.Cleanup(func() {
-		currentWorkingDirectory, userConfigDirectory, readRandom, inspectPath = originalCWD, originalConfig, originalRandom, originalInspect
-	})
+	restoreMainHooks(t)
 	root := t.TempDir()
+	home, configRoot := t.TempDir(), t.TempDir()
 	currentWorkingDirectory = func() (string, error) { return root, nil }
-	userConfigDirectory = func() (string, error) { return root, nil }
+	userConfigDirectory = func() (string, error) { return configRoot, nil }
+	userHomeDirectory = func() (string, error) { return home, nil }
 	readRandom = func(data []byte) (int, error) {
 		for index := range data {
 			data[index] = byte(index + 1)
@@ -150,10 +288,21 @@ func TestRunAndParsing(t *testing.T) {
 	if err != nil || !config.create || config.sessionID != "session-fixed" || config.maxSteps != 4 {
 		t.Fatalf("config=%#v err=%v", config, err)
 	}
+	if config.skillsDir != filepath.Join(configRoot, "nano-harness", "skills") || config.spillRoot != filepath.Join(configRoot, "nano-harness", "spill") || config.agentsSkillsDir != filepath.Join(home, ".agents", "skills") {
+		t.Fatalf("default skill roots = %q, %q", config.skillsDir, config.agentsSkillsDir)
+	}
+	relative, err := filepath.Abs(filepath.Join("relative", "skills"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overridden, err := parseTUIConfig([]string{"--root", root, "--skills-dir", "relative/skills", "--agents-skills-dir", home + "/shared/../agents"}, &stderr)
+	if err != nil || overridden.skillsDir != relative || overridden.agentsSkillsDir != filepath.Join(home, "agents") {
+		t.Fatalf("overridden skill roots = %q, %q (%v)", overridden.skillsDir, overridden.agentsSkillsDir, err)
+	}
 	if _, err := parseTUIConfig([]string{"extra"}, &stderr); err == nil {
 		t.Fatal("positional argument accepted")
 	}
-	if _, err := normalizeConfig(applicationConfig{workspaceRoot: root, sessionRoot: root, settingsPath: "x", credentialPath: "y", sessionID: "x", maxSteps: 0}); err == nil {
+	if _, err := normalizeConfig(applicationConfig{workspaceRoot: root, sessionRoot: root, spillRoot: root, settingsPath: "x", credentialPath: "y", sessionID: "x", maxSteps: 0}); err == nil {
 		t.Fatal("zero max steps accepted")
 	}
 	if got := compositionID(config); len(got) != 64 {
@@ -169,14 +318,12 @@ func TestCommandErrorPaths(t *testing.T) {
 	}{
 		{"cwd", func() { currentWorkingDirectory = func() (string, error) { return "", failure } }},
 		{"config", func() { userConfigDirectory = func() (string, error) { return "", failure } }},
+		{"home", func() { userHomeDirectory = func() (string, error) { return "", failure } }},
 		{"random", func() { readRandom = func([]byte) (int, error) { return 0, failure } }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			originalCWD, originalConfig, originalRandom := currentWorkingDirectory, userConfigDirectory, readRandom
-			t.Cleanup(func() {
-				currentWorkingDirectory, userConfigDirectory, readRandom = originalCWD, originalConfig, originalRandom
-			})
+			restoreMainHooks(t)
 			test.set()
 			if _, err := parseTUIConfig(nil, io.Discard); err == nil {
 				t.Fatal("error=nil")
@@ -184,7 +331,7 @@ func TestCommandErrorPaths(t *testing.T) {
 		})
 	}
 	root := t.TempDir()
-	config := applicationConfig{workspaceRoot: root, sessionRoot: root, settingsPath: filepath.Join(root, "s"), credentialPath: filepath.Join(root, "c"), sessionID: "id", maxSteps: 1, create: true}
+	config := applicationConfig{workspaceRoot: root, sessionRoot: root, spillRoot: filepath.Join(root, "spill"), attachmentRoot: filepath.Join(root, "attachments"), settingsPath: filepath.Join(root, "s"), credentialPath: filepath.Join(root, "c"), skillsDir: filepath.Join(root, "k"), agentsSkillsDir: filepath.Join(root, "a"), sessionID: "id", maxSteps: 1, create: true}
 	_, err := composeTUI(config, dependencies{newRuntime: func(...plugin.Plugin) (*plugin.Runtime, error) { return nil, failure }})
 	if !errors.Is(err, failure) {
 		t.Fatalf("compose error=%v", err)
@@ -210,19 +357,31 @@ func (writer *nthFailWriter) Write(data []byte) (int, error) {
 
 func restoreMainHooks(t *testing.T) {
 	t.Helper()
-	cwd, config, random, inspect, absolute, links := currentWorkingDirectory, userConfigDirectory, readRandom, inspectPath, absolutePath, evaluateLinks
+	cwd, config, home, random, inspect, absolute, links, identify := currentWorkingDirectory, userConfigDirectory, userHomeDirectory, readRandom, inspectPath, absolutePath, evaluateLinks, identifyPath
 	settingsProvider, credentials, modelRuntime := newSettingsProvider, newCredentialStore, newModelRuntime
-	modelProvider, toolRuntime, retryService := newModelProvider, newToolRuntime, newRetryService
+	modelProvider, toolRuntime, spillStore, retryService := newModelProvider, newToolRuntime, newSpillStore, newRetryService
 	compactor, sessions, engine := newCompactionService, newSessionManager, newAgentEngine
 	registry, root, subagents := newAgentRegistry, newRootBootstrap, newSubagentService
-	workspaceTools, subagentTools, terminal := newWorkspaceTools, newSubagentTools, newTerminal
+	workspaceRoot, fileTools, searchTools, shellTools := newWorkspace, newFileTools, newSearchTools, newShellTools
+	subagentTools, todoTools, skillTools, terminal := newSubagentTools, newTodoTools, newSkillTools, newTerminal
+	webService, webTools := newWebService, newWebTools
+	jobService, jobTools := newJobService, newJobTools
+	questionTools, planTools := newQuestionTools, newPlanTools
+	goalService, goalTools, goalDriver := newGoalService, newGoalTools, newGoalDriver
+	attachments := newAttachmentStore
 	t.Cleanup(func() {
-		currentWorkingDirectory, userConfigDirectory, readRandom, inspectPath, absolutePath, evaluateLinks = cwd, config, random, inspect, absolute, links
+		newAttachmentStore = attachments
+		newWebService, newWebTools = webService, webTools
+		currentWorkingDirectory, userConfigDirectory, userHomeDirectory, readRandom, inspectPath, absolutePath, evaluateLinks, identifyPath = cwd, config, home, random, inspect, absolute, links, identify
 		newSettingsProvider, newCredentialStore, newModelRuntime = settingsProvider, credentials, modelRuntime
-		newModelProvider, newToolRuntime, newRetryService = modelProvider, toolRuntime, retryService
+		newModelProvider, newToolRuntime, newSpillStore, newRetryService = modelProvider, toolRuntime, spillStore, retryService
 		newCompactionService, newSessionManager, newAgentEngine = compactor, sessions, engine
 		newAgentRegistry, newRootBootstrap, newSubagentService = registry, root, subagents
-		newWorkspaceTools, newSubagentTools, newTerminal = workspaceTools, subagentTools, terminal
+		newWorkspace, newFileTools, newSearchTools, newShellTools = workspaceRoot, fileTools, searchTools, shellTools
+		newSubagentTools, newTodoTools, newSkillTools, newTerminal = subagentTools, todoTools, skillTools, terminal
+		newJobService, newJobTools = jobService, jobTools
+		newQuestionTools, newPlanTools = questionTools, planTools
+		newGoalService, newGoalTools, newGoalDriver = goalService, goalTools, goalDriver
 	})
 }
 
@@ -261,6 +420,7 @@ func TestRunTUI_MapsParseComposeLifecycleRunAndShutdown(t *testing.T) {
 	configRoot := t.TempDir()
 	currentWorkingDirectory = func() (string, error) { return root, nil }
 	userConfigDirectory = func() (string, error) { return configRoot, nil }
+	userHomeDirectory = func() (string, error) { return configRoot, nil }
 	readRandom = func(data []byte) (int, error) {
 		for index := range data {
 			data[index] = byte(index + 1)
@@ -306,9 +466,17 @@ func TestRunTUI_MapsParseComposeLifecycleRunAndShutdown(t *testing.T) {
 
 func TestNormalizeConfig_ContainsEveryPathBoundary(t *testing.T) {
 	restoreMainHooks(t)
-	root := t.TempDir()
-	base := applicationConfig{workspaceRoot: root, sessionRoot: filepath.Join(root, "sessions"), settingsPath: filepath.Join(root, "settings"), credentialPath: filepath.Join(root, "credentials"), sessionID: "session", maxSteps: 1}
+	root, private := t.TempDir(), t.TempDir()
+	base := applicationConfig{workspaceRoot: root, sessionRoot: filepath.Join(private, "sessions"), spillRoot: filepath.Join(t.TempDir(), "spill"), attachmentRoot: filepath.Join(t.TempDir(), "attachments"), settingsPath: filepath.Join(private, "settings"), credentialPath: filepath.Join(private, "credentials"), skillsDir: filepath.Join(root, "skills"), agentsSkillsDir: filepath.Join(root, "agents-skills"), sessionID: "session", maxSteps: 1}
 	failure := errors.New("failure")
+	for _, field := range []*string{&base.spillRoot, &base.attachmentRoot, &base.skillsDir} {
+		saved := *field
+		*field = ""
+		if _, err := normalizeConfig(base); err == nil || !strings.Contains(err.Error(), "path is required") {
+			t.Fatalf("empty path error = %v", err)
+		}
+		*field = saved
+	}
 	absolutePath = func(string) (string, error) { return "", failure }
 	if _, err := normalizeConfig(base); err == nil || !strings.Contains(err.Error(), "resolve") {
 		t.Fatalf("absolute error = %v", err)
@@ -345,8 +513,9 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 	failure := errors.New("constructor")
 	root := t.TempDir()
 	config := applicationConfig{
-		workspaceRoot: root, sessionRoot: filepath.Join(t.TempDir(), "sessions"), settingsPath: filepath.Join(t.TempDir(), "settings.yaml"),
-		credentialPath: filepath.Join(t.TempDir(), "credentials.yaml"), sessionID: "session", maxSteps: 1, create: true,
+		workspaceRoot: root, sessionRoot: filepath.Join(t.TempDir(), "sessions"), spillRoot: filepath.Join(t.TempDir(), "spill"), attachmentRoot: filepath.Join(t.TempDir(), "attachments"), settingsPath: filepath.Join(t.TempDir(), "settings.yaml"),
+		credentialPath: filepath.Join(t.TempDir(), "credentials.yaml"), skillsDir: filepath.Join(t.TempDir(), "skills"),
+		agentsSkillsDir: filepath.Join(t.TempDir(), "agents-skills"), sessionID: "session", maxSteps: 1, create: true,
 	}
 	tests := []struct {
 		name string
@@ -356,13 +525,21 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 			newSettingsProvider = func(*settings.Service, settingsfile.Config) (*settingsfile.Provider, error) { return nil, failure }
 		}},
 		{name: "credential store", set: func() { newCredentialStore = func(string) (*credentialfile.Store, error) { return nil, failure } }},
-		{name: "model runtime", set: func() { newModelRuntime = func(llm.CredentialStore) (*llm.Runtime, error) { return nil, failure } }},
+		{name: "attachment store", set: func() {
+			newAttachmentStore = func(attachment.Config) (*attachment.Store, error) { return nil, failure }
+		}},
+		{name: "model runtime", set: func() {
+			newModelRuntime = func(llm.CredentialStore, llm.ImageReader) (*llm.Runtime, error) { return nil, failure }
+		}},
 		{name: "model provider", set: func() {
 			newModelProvider = func(*llm.Runtime, *settings.Service, modelprovider.Config) (*modelprovider.Provider, error) {
 				return nil, failure
 			}
 		}},
 		{name: "tool runtime", set: func() { newToolRuntime = func(appTool.Approver) (*appTool.Runtime, error) { return nil, failure } }},
+		{name: "spill store", set: func() {
+			newSpillStore = func(*appTool.Runtime, spill.Config) (*spill.Store, error) { return nil, failure }
+		}},
 		{name: "retry", set: func() { newRetryService = func(*settings.Service) (*retry.Service, error) { return nil, failure } }},
 		{name: "compaction", set: func() {
 			newCompactionService = func(*llm.Runtime, *settings.Service) (*compaction.Service, error) { return nil, failure }
@@ -371,7 +548,7 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 			newSessionManager = func(sessionjsonl.Config) (*sessionjsonl.Manager, error) { return nil, failure }
 		}},
 		{name: "engine", set: func() {
-			newAgentEngine = func(*llm.Runtime, *appTool.Runtime, *retry.Service, *compaction.Service, *prompt.Assembler, *settings.Service, agent.EngineConfig) (*agent.Engine, error) {
+			newAgentEngine = func(*llm.Runtime, *appTool.Runtime, *retry.Service, *compaction.Service, *prompt.Assembler, *plan.Service, *settings.Service, agent.EngineConfig) (*agent.Engine, error) {
 				return nil, failure
 			}
 		}},
@@ -383,9 +560,66 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 		{name: "bootstrap", set: func() {
 			newRootBootstrap = func(*agent.Registry, agent.CreateRequest) (*agent.Bootstrap, error) { return nil, failure }
 		}},
-		{name: "subagents", set: func() { newSubagentService = func(*agent.Registry) (*subagent.Service, error) { return nil, failure } }},
+		{name: "workspace", set: func() {
+			newWorkspace = func(string) (workspace.Root, error) { return workspace.Root{}, failure }
+		}},
+		{name: "file tools", set: func() {
+			newFileTools = func(*appTool.Runtime, workspace.Root, filetool.ImageStore) (*filetool.Provider, error) {
+				return nil, failure
+			}
+		}},
+		{name: "search tools", set: func() {
+			newSearchTools = func(*appTool.Runtime, searchtool.Runner, workspace.Root) (*searchtool.Provider, error) {
+				return nil, failure
+			}
+		}},
+		{name: "jobs", set: func() { newJobService = func(appJob.Notifier) (*appJob.Service, error) { return nil, failure } }},
+		{name: "subagents", set: func() {
+			newSubagentService = func(*agent.Registry, *appJob.Service, transcript.Repository, subagent.Contexts) (*subagent.Service, error) {
+				return nil, failure
+			}
+		}},
+		{name: "shell tools", set: func() {
+			newShellTools = func(*appTool.Runtime, shelltool.Runner, workspace.Root, *appJob.Service) (*shelltool.Provider, error) {
+				return nil, failure
+			}
+		}},
+		{name: "job tools", set: func() {
+			newJobTools = func(*appTool.Runtime, *appJob.Service) (*jobtool.Provider, error) { return nil, failure }
+		}},
 		{name: "subagent tools", set: func() {
 			newSubagentTools = func(*appTool.Runtime, subagenttool.Service) (*subagenttool.Provider, error) { return nil, failure }
+		}},
+		{name: "todo tools", set: func() { newTodoTools = func(*appTool.Runtime) (*todotool.Provider, error) { return nil, failure } }},
+		{name: "web service", set: func() {
+			newWebService = func(*llm.Runtime, *settings.Service, appweb.Fetcher) (*appweb.Service, error) { return nil, failure }
+		}},
+		{name: "web tools", set: func() {
+			newWebTools = func(*appTool.Runtime, webtool.Service) (*webtool.Provider, error) { return nil, failure }
+		}},
+		{name: "question tools", set: func() {
+			newQuestionTools = func(*appTool.Runtime, questiontool.Asker) (*questiontool.Provider, error) { return nil, failure }
+		}},
+		{name: "plan tools", set: func() {
+			newPlanTools = func(*appTool.Runtime, plantool.Mode, plantool.Asker) (*plantool.Provider, error) { return nil, failure }
+		}},
+		{name: "skill tools", set: func() {
+			newSkillTools = func(*appTool.Runtime, skilltool.Contexts, skilltool.Config) (*skilltool.Provider, error) {
+				return nil, failure
+			}
+		}},
+		{name: "goal service", set: func() {
+			newGoalService = func(appGoal.Journals, appGoal.Admissions, appGoal.Config) (*appGoal.Service, error) {
+				return nil, failure
+			}
+		}},
+		{name: "goal tools", set: func() {
+			newGoalTools = func(*appTool.Runtime, goaltool.Goals, goaltool.Notifier) (*goaltool.Provider, error) {
+				return nil, failure
+			}
+		}},
+		{name: "goal driver", set: func() {
+			newGoalDriver = func(appGoal.Goals, appGoal.RootSource) (*appGoal.Driver, error) { return nil, failure }
 		}},
 		{name: "terminal", set: func() { newTerminal = func(tui.Config) (*tui.App, error) { return nil, failure } }},
 	}
@@ -402,5 +636,79 @@ func TestComposeTUI_PropagatesEveryConstructorFailure(t *testing.T) {
 	missing.workspaceRoot = filepath.Join(root, "missing")
 	if _, err := composeTUI(missing, dependencies{}); err == nil {
 		t.Fatal("missing workspace was accepted")
+	}
+}
+
+// TestRunTUI_FailsEarlyWithoutRipgrep proves the real entry point refuses to
+// start, with an actionable message, when rg is not on PATH.
+func TestRunTUI_FailsEarlyWithoutRipgrep(t *testing.T) {
+	restoreMainHooks(t)
+	t.Setenv("PATH", t.TempDir())
+	root, configRoot := t.TempDir(), t.TempDir()
+	currentWorkingDirectory = func() (string, error) { return root, nil }
+	userConfigDirectory = func() (string, error) { return configRoot, nil }
+	var stderr bytes.Buffer
+	code := runTUI(context.Background(), nil, strings.NewReader(""), io.Discard, &stderr, dependencies{})
+	if code != 1 || !strings.Contains(stderr.String(), "configure TUI: ripgrep is unavailable: rg was not found on PATH; install ripgrep 15.0.0 or newer") {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+}
+
+// TestNormalizeConfig_KeepsPrivateRootsOutsideTheWorkspace proves the spill
+// and attachment roots and the workspace may not contain each other, judged
+// after links are resolved and before either path needs to exist.
+func TestNormalizeConfig_KeepsPrivateRootsOutsideTheWorkspace(t *testing.T) {
+	restoreMainHooks(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceRoot, outside := filepath.Join(base, "home"), filepath.Join(base, "outside")
+	for _, dir := range []string{filepath.Join(workspaceRoot, ".config"), outside} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(workspaceRoot, ".config"), filepath.Join(outside, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	config := func(spill, attachments string) applicationConfig {
+		return applicationConfig{
+			workspaceRoot: workspaceRoot, sessionRoot: filepath.Join(outside, "sessions"), spillRoot: spill, attachmentRoot: attachments,
+			settingsPath: filepath.Join(outside, "settings"), credentialPath: filepath.Join(outside, "credentials"),
+			skillsDir: filepath.Join(outside, "skills"), agentsSkillsDir: filepath.Join(outside, "agents"), sessionID: "session", maxSteps: 1,
+		}
+	}
+	for _, test := range []struct {
+		name, spill string
+		allowed     bool
+	}{
+		{"inside, not yet created", filepath.Join(workspaceRoot, ".config", "nano-harness", "spill"), false},
+		{"the workspace itself", workspaceRoot, false},
+		{"linked into the workspace", filepath.Join(outside, "alias", "nano-harness", "spill"), false},
+		{"containing the workspace", base, false},
+		{"sibling", filepath.Join(outside, "spill"), true},
+		{"sibling with a shared prefix", workspaceRoot + "-spill", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := normalizeConfig(config(test.spill, filepath.Join(outside, "attachments")))
+			if test.allowed != (err == nil) || !test.allowed && !strings.Contains(err.Error(), "spill root") {
+				t.Fatalf("normalizeConfig(%s) = %v", test.spill, err)
+			}
+			_, err = normalizeConfig(config(filepath.Join(outside, "spill"), test.spill))
+			if test.allowed != (err == nil) || !test.allowed && !strings.Contains(err.Error(), "attachment root") || !test.allowed && !strings.Contains(err.Error(), "--attachment-root") {
+				t.Fatalf("normalizeConfig(attachments %s) = %v", test.spill, err)
+			}
+		})
+	}
+	failure := errors.New("failure")
+	evaluateLinks = func(path string) (string, error) {
+		if path == workspaceRoot {
+			return path, nil
+		}
+		return "", failure
+	}
+	if _, err := normalizeConfig(config(filepath.Join(outside, "spill"), filepath.Join(outside, "attachments"))); !errors.Is(err, failure) {
+		t.Fatalf("spill link failure = %v", err)
 	}
 }

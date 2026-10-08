@@ -1,0 +1,28 @@
+{"type":"session","version":2,"header":{"session_id":"fixture","composition_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","created_at_unix_ms":1,"cwd":"/synthetic/workspace"}}
+{"seq":1,"record":{"type":"turn/start","turn":1}}
+{"seq":2,"record":{"type":"user/message","turn":1,"message":{"role":"user","content":[{"type":"text","text":"inspect"}],"source":{"kind":"test"}}}}
+{"seq":3,"record":{"type":"step/start","turn":1,"step":1}}
+{"seq":4,"record":{"type":"request/header","turn":1,"step":1,"header":{"provider":"openai","model":"model","system":""}}}
+{"seq":5,"record":{"type":"assistant/message","turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"calling tools"}],"source":{"kind":"provider"}}}}
+{"seq":6,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-read","name":"read","arguments":{"file_path":"a.go"}}}}
+{"seq":7,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-missing","name":"read","arguments":{"file_path":"missing.go"}}}}
+{"seq":8,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-image","name":"read_image","arguments":{"file_path":"red.png"}}}}
+{"seq":9,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-write","name":"write","arguments":{"file_path":"a.go","content":"new line\n"}}}}
+{"seq":10,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-edit","name":"edit","arguments":{"file_path":"a.go","old_string":"x","new_string":"y"}}}}
+{"seq":11,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-glob","name":"glob","arguments":{"pattern":"*.go"}}}}
+{"seq":12,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-grep","name":"grep","arguments":{"pattern":"line"}}}}
+{"seq":13,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-search","name":"web_search","arguments":{"queries":["nano"]}}}}
+{"seq":14,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-fetch","name":"web_fetch","arguments":{"url":"https://example.com"}}}}
+{"seq":15,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-unknown","name":"nope","arguments":{}}}}
+{"seq":16,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-read","output":"\u003cpath\u003ea.go\u003c/path\u003e","is_error":false,"meta":{"read":{"path":"a.go","offset":2,"lines":[{"number":2,"text":"second"},{"number":3,"text":"third"}],"total_lines":4,"truncated":false}}}}}
+{"seq":17,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-missing","output":"Error: cannot read \"missing.go\": not found","is_error":true,"error":{"name":"FsError","code":"FS_NOT_FOUND"}}}}
+{"seq":18,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-image","output":"\u003cpath\u003e/synthetic/workspace/red.png\u003c/path\u003e\n\u003ctype\u003eimage\u003c/type\u003e\n\u003ccontent\u003e\nimage/jpeg image, 1x1 px, 600 bytes\n\u003c/content\u003e","is_error":false,"image":{"id":"sha256:d0eea4b962c16b0f039d6e746d9bb8e78d355cb5e7b5f95fbdc20d774f4a4ff0","name":"red.png","media_type":"image/jpeg","bytes":600,"width":1,"height":1},"meta":{"read_image":{"path":"red.png"}}}}}
+{"seq":19,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-write","output":"Updated file","is_error":false,"meta":{"write":{"operation":"update","diffs":[{"path":"a.go","old_text":"old line","new_text":"new line"}],"truncated":false}}}}}
+{"seq":20,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-edit","output":"The file a.go has been updated successfully.","is_error":false,"meta":{"edit":{"diffs":[{"path":"a.go","old_text":null,"new_text":"inserted"}],"truncated":true}}}}}
+{"seq":21,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-glob","output":"a.go\nb.go","is_error":false,"meta":{"glob":{"paths":["a.go","b.go"],"total":3,"truncated":true}}}}}
+{"seq":22,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-grep","output":"a.go:\n  Line 2: second line","is_error":false,"meta":{"grep":{"files":[{"path":"a.go","matches":[{"line_number":2,"line":"second line"}]}],"total":1,"truncated":false}}}}}
+{"seq":23,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-search","output":"nano answer","is_error":false,"meta":{"web_search":{"sources":[{"url":"https://example.com/nano","title":"Nano","snippet":"harness","published_at":"2026-10-01"}],"answer":"nano answer","truncated":false}}}}}
+{"seq":24,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-fetch","output":"Fetched https://example.com/ (HTTP 404)","is_error":false,"meta":{"web_fetch":{"url":"https://example.com/","status_code":404,"truncated":false}}}}}
+{"seq":25,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-unknown","output":"Error: unknown tool \"nope\"","is_error":true,"error":{"name":"ToolNotFoundError","code":"UNKNOWN_TOOL"}}}}
+{"seq":26,"record":{"type":"step/end","turn":1,"step":1}}
+{"seq":27,"record":{"type":"turn/end","turn":1,"outcome":"completed"}}

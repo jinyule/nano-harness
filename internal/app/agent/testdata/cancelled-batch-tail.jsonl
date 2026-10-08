@@ -1,0 +1,6 @@
+{"seq":6,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-1","name":"inspect","arguments":{}}}}
+{"seq":7,"record":{"type":"tool/call","turn":1,"step":1,"call":{"id":"call-2","name":"inspect","arguments":{}}}}
+{"seq":8,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-1","output":"Error: tool call aborted before dispatch","is_error":true,"error":{"name":"AbortError","code":"ABORTED_BEFORE_DISPATCH"}}}}
+{"seq":9,"record":{"type":"tool/result","turn":1,"step":1,"result":{"call_id":"call-2","output":"Error: tool call aborted before dispatch","is_error":true,"error":{"name":"AbortError","code":"ABORTED_BEFORE_DISPATCH"}}}}
+{"seq":10,"record":{"type":"step/end","turn":1,"step":1,"usage":{"input_tokens":3,"output_tokens":2}}}
+{"seq":11,"record":{"type":"turn/end","turn":1,"outcome":"canceled"}}

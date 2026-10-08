@@ -102,7 +102,7 @@ func TestModelUpdate_HandlesEveryEnvelopeAndTerminalInput(t *testing.T) {
 		t.Fatalf("operation lines = %#v", current.lines)
 	}
 	current, _ = update(t, current, attachmentMessage{err: errors.New("image")})
-	image := session.Image{Name: "image.png", Width: 10, Height: 20}
+	image := pendingImage{ref: session.Image{Name: "image.png", Width: 10, Height: 20}, data: []byte("jpeg")}
 	current, _ = update(t, current, attachmentMessage{image: image})
 	if len(current.images) != 1 || !strings.Contains(current.lines[len(current.lines)-1], "10x20") {
 		t.Fatalf("attachment state = %+v", current)
@@ -188,7 +188,7 @@ func TestModelSubmit_NormalMessageImagesErrorsAndCancellation(t *testing.T) {
 	if command != nil || !strings.Contains(current.lines[len(current.lines)-1], "commands>") {
 		t.Fatalf("help submission lines = %#v", current.lines)
 	}
-	current.images = []session.Image{{Name: "one"}, {Name: "two"}}
+	current.images = []pendingImage{{ref: session.Image{Name: "one"}}, {ref: session.Image{Name: "two"}}}
 	current.input.SetValue("inspect")
 	next, command = current.submit()
 	current = next.(model)
@@ -222,7 +222,7 @@ func TestModelCommand_LocalImmediateAndUsageBranches(t *testing.T) {
 	fixture, current := modelFixture(t)
 	for _, commandText := range []string{
 		"/models", "/models one two", "/login", "/login one", "/logout", "/logout one two",
-		"/model", "/model one", "/permission", "/permission always", "/unknown",
+		"/model", "/model one", "/permission", "/permission always", "/Unknown",
 	} {
 		next, command := current.command(commandText)
 		current = next.(model)
@@ -248,7 +248,7 @@ func TestModelCommand_LocalImmediateAndUsageBranches(t *testing.T) {
 
 func TestModelCommand_ExecutesAllAsyncUseCases(t *testing.T) {
 	fixture, current := modelFixture(t)
-	fixture.images.image = session.Image{Name: "attached.png"}
+	fixture.images.image, fixture.images.data = session.Image{Name: "attached.png"}, []byte("jpeg")
 	fixture.models.accounts = []llm.AccountInfo{{Provider: "openai", Kind: llm.CredentialOAuth, Source: "stored"}}
 	fixture.models.models = []llm.ModelInfo{{Provider: "openai", ID: "model", Effort: session.EffortMax, ContextWindow: 1000, Vision: true, Tools: true}}
 	fixture.subagents.infos = []appSubagent.Info{{SessionID: "child", Label: "worker", Mode: "one-shot", Busy: true, Last: agent.TurnResult{Outcome: session.OutcomeCompleted}}}
@@ -278,7 +278,7 @@ func TestModelCommand_ExecutesAllAsyncUseCases(t *testing.T) {
 		message := command()
 		if test.value == "/attach /tmp/image.png" {
 			attachment := message.(attachmentMessage)
-			if attachment.image.Name != "attached.png" || fixture.images.path != "/tmp/image.png" {
+			if attachment.image.ref.Name != "attached.png" || string(attachment.image.data) != "jpeg" || fixture.images.path != "/tmp/image.png" || len(fixture.images.committed) != 0 {
 				t.Fatalf("attachment = %+v path=%q", attachment, fixture.images.path)
 			}
 			continue
@@ -344,6 +344,9 @@ func TestApplyEvent_ProjectsAllDurablePresentationFacts(t *testing.T) {
 	image := &session.Image{Name: "image"}
 	events := []session.Event{
 		{Record: session.Record{Type: session.RecordUserMessage, Message: &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: "hello"}, {Type: session.ContentImage, Image: image}}}}},
+		{Record: session.Record{Type: session.RecordUserMessage, Message: &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "tool-jobs"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: "background job bash-1 finished"}}}}},
+		{Record: session.Record{Type: session.RecordUserMessage, Message: &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "agent-message"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: "Agent child sent a message: done"}}}}},
+		{Record: session.Record{Type: session.RecordUserMessage, Message: &session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "subagent-settled"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: "Background subagent child finished"}}}}},
 		{Record: session.Record{Type: session.RecordRequestHeader, Header: &session.RequestHeader{Provider: "openai", Model: "model", Effort: session.EffortMax}}},
 		{Record: session.Record{Type: session.RecordAssistantChunk, Chunk: &session.AssistantChunk{Kind: session.ChunkText, Text: "one"}}},
 		{Record: session.Record{Type: session.RecordAssistantChunk, Chunk: &session.AssistantChunk{Kind: session.ChunkText, Text: " two"}}},
@@ -353,17 +356,19 @@ func TestApplyEvent_ProjectsAllDurablePresentationFacts(t *testing.T) {
 		{Record: session.Record{Type: session.RecordApprovalAsked, Approval: &session.ApprovalData{Reason: "write"}}},
 		{Record: session.Record{Type: session.RecordToolResult, Result: &session.ToolResult{Output: "ok"}}},
 		{Record: session.Record{Type: session.RecordToolResult, Result: &session.ToolResult{Output: "bad", IsError: true}}},
+		{Record: session.Record{Type: session.RecordToolResult, Result: &session.ToolResult{Output: "<type>image</type>", Image: &session.Image{ID: "sha256:0123456789abcdef0123", Name: "shot.png", Width: 640, Height: 480}}}},
 		{Record: session.Record{Type: session.RecordRetry, Retry: &session.RetryData{Attempt: 2, DelayMS: 10, Failure: "server"}}},
 		{Record: session.Record{Type: session.RecordCompactionStart, Compaction: &session.CompactionData{ID: "one"}}},
 		{Record: session.Record{Type: session.RecordCompactionEnd, Compaction: &session.CompactionData{ID: "one"}}},
 		{Record: session.Record{Type: session.RecordCompactionEnd, Compaction: &session.CompactionData{ID: "two", Error: "failed"}}},
+		{Record: session.Record{Type: session.RecordCompactionPrune, Prune: &session.ToolResultPrune{Seq: 7, Output: "pruned"}}},
 		{Record: session.Record{Type: session.RecordTurnEnd, Outcome: session.OutcomeCompleted}},
 	}
 	for _, event := range events {
 		current.applyEvent(event, true)
 	}
 	joined := strings.Join(current.lines, "\n")
-	for _, expected := range []string{"you> hello [images=1]", "route> openai/model effort=max", "assistant> one two", "reasoning> think", "tool> read", "approval> write", "result> ok", "tool-error> bad", "retry> attempt=2", "compact> started", "compact> completed", "compact> failed", "turn> completed"} {
+	for _, expected := range []string{"you> hello [images=1]", "job> background job bash-1 finished", "agent> Agent child sent a message: done", "agent> Background subagent child finished", "route> openai/model effort=max", "assistant> one two", "reasoning> think", "tool> read", "approval> write", "result> ok", "tool-error> bad", "result> <type>image</type> [image shot.png 640x480 sha256:0123456789ab]", "retry> attempt=2", "compact> started", "compact> completed", "compact> failed", "compact> pruned tool result #7 to 6 bytes", "turn> completed"} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("projection missing %q in %s", expected, joined)
 		}
@@ -402,7 +407,7 @@ func TestLineBufferViewAndInputRestoration(t *testing.T) {
 	if current.View().Content == "" {
 		t.Fatal("normal view is empty")
 	}
-	current.images = []session.Image{{Name: "ready"}}
+	current.images = []pendingImage{{ref: session.Image{Name: "ready"}}}
 	if !strings.Contains(current.View().Content, "image(s) ready") {
 		t.Fatal("image prompt missing")
 	}

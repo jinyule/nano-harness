@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -21,6 +22,7 @@ const (
 	modeNormal inputMode = iota
 	modeApproval
 	modeAuth
+	modeQuestion
 )
 
 type model struct {
@@ -35,10 +37,18 @@ type model struct {
 	mode       inputMode
 	approval   *approvalEnvelope
 	auth       *authEnvelope
-	images     []session.Image
-	stream     string
-	streamText string
-	quitting   bool
+	question   *questionState
+	planActive bool
+	images     []pendingImage
+	// unavailable holds image IDs already reported as unreadable, so each
+	// appears once although every request reports it again.
+	unavailable map[string]bool
+	todos       []session.TodoItem
+	goal        session.GoalState
+	plan        []string
+	stream      string
+	streamText  string
+	quitting    bool
 }
 
 func newModel(ctx context.Context, app *App, initial []session.Event) model {
@@ -55,7 +65,7 @@ func newModel(ctx context.Context, app *App, initial []session.Event) model {
 	for _, event := range initial {
 		current.applyEvent(event, false)
 	}
-	current.refresh()
+	current.layout()
 	return current
 }
 
@@ -84,15 +94,8 @@ func (model model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 func (model model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
-		follow := model.viewport.AtBottom()
 		model.width, model.height = max(message.Width, 1), max(message.Height, 1)
-		model.viewport.SetWidth(max(message.Width-4, 1))
-		model.viewport.SetHeight(max(message.Height-4, 1))
-		model.input.SetWidth(max(message.Width-8, 1))
-		model.refresh()
-		if follow {
-			model.viewport.GotoBottom()
-		}
+		model.layout()
 		return model, nil
 	case transcriptMessage:
 		model.applyEvent(message.event, true)
@@ -104,6 +107,9 @@ func (model model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.input.SetValue("")
 		model.input.Placeholder = "y to allow once; n to reject"
 		model.input.EchoMode = textinput.EchoNormal
+		return model, waitUI(model.app.events, model.app.stop, model.ctx.Done())
+	case questionEnvelope:
+		model.beginQuestion(message)
 		return model, waitUI(model.app.events, model.app.stop, model.ctx.Done())
 	case authEnvelope:
 		model.mode = modeAuth
@@ -134,14 +140,49 @@ func (model model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.addLine("system> " + message.text)
 		}
 		return model, nil
+	case goalMessage:
+		switch {
+		case message.err != nil:
+			model.addLine("error> " + message.err.Error())
+		case message.failed:
+			model.addLine("error> " + strings.Join(message.lines, "\n"))
+		default:
+			for _, line := range message.lines {
+				model.addLine("goal> " + line)
+			}
+		}
+		return model, nil
+	case planMessage:
+		if message.err != nil {
+			model.addLine("error> " + message.err.Error())
+			return model, nil
+		}
+		model.addLine("system> " + message.text)
+		if message.message == nil {
+			return model, nil
+		}
+		return model, model.deliverCommand(*message.message, message.pending)
 	case attachmentMessage:
 		if message.err != nil {
 			model.addLine("error> " + message.err.Error())
 		} else {
 			model.images = append(model.images, message.image)
-			model.addLine(fmt.Sprintf("system> attached %s (%dx%d)", message.image.Name, message.image.Width, message.image.Height))
+			model.addLine(fmt.Sprintf("system> attached %s (%dx%d)", message.image.ref.Name, message.image.ref.Width, message.image.ref.Height))
 		}
 		return model, nil
+	case unavailableImageMessage:
+		if !model.unavailable[message.image.ID] {
+			if model.unavailable == nil {
+				model.unavailable = map[string]bool{}
+			}
+			model.unavailable[message.image.ID] = true
+			reason := "failed verification in"
+			if message.missing {
+				reason = "is missing from"
+			}
+			model.addLine(fmt.Sprintf("attachment> image %s (%.19s) %s the attachment store; the model sees a placeholder instead", message.image.Name, message.image.ID, reason))
+		}
+		return model, waitUI(model.app.events, model.app.stop, model.ctx.Done())
 	case turnMessage:
 		if message.result.Err != nil {
 			model.addLine("turn> " + string(message.result.Outcome) + ": " + message.result.Err.Error())
@@ -181,6 +222,9 @@ func (model model) cancelOrQuit() (tea.Model, tea.Cmd) {
 		model.auth = nil
 		model.restoreInput()
 		return model, nil
+	case modeQuestion:
+		model.cancelQuestion()
+		return model, nil
 	case modeNormal:
 	default:
 	}
@@ -205,6 +249,8 @@ func (model model) submit() (tea.Model, tea.Cmd) {
 		model.auth = nil
 		model.restoreInput()
 		return model, nil
+	case modeQuestion:
+		return model.answerQuestion(value)
 	case modeNormal:
 		// Normal input continues through command or message submission below.
 	}
@@ -215,27 +261,70 @@ func (model model) submit() (tea.Model, tea.Cmd) {
 	if strings.HasPrefix(value, "/") {
 		return model.command(value)
 	}
-	content := make([]session.ContentBlock, 0, len(model.images)+1)
-	content = append(content, session.ContentBlock{Type: session.ContentText, Text: value})
-	for index := range model.images {
-		image := model.images[index]
-		content = append(content, session.ContentBlock{Type: session.ContentImage, Image: &image})
-	}
+	return model.send(value)
+}
+
+// send submits value and every attached image as one user message.
+func (model model) send(value string) (tea.Model, tea.Cmd) {
+	content := append([]session.ContentBlock{{Type: session.ContentText, Text: value}}, imageBlocks(model.images)...)
+	pending := model.images
 	model.images = nil
 	message := session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: content}
-	command := func() tea.Msg {
-		results, err := model.app.agent.Submit(model.ctx, message)
-		if err != nil {
-			return turnMessage{result: agent.TurnResult{Outcome: session.OutcomeError, Err: err}}
-		}
-		select {
-		case result := <-results:
-			return turnMessage{result: result}
-		case <-model.ctx.Done():
-			return turnMessage{result: agent.TurnResult{Outcome: session.OutcomeCanceled, Err: model.ctx.Err()}}
+	return model, func() tea.Msg { return model.submitAndWait(message, pending) }
+}
+
+// imageBlocks references every pending attachment, in order.
+func imageBlocks(pending []pendingImage) []session.ContentBlock {
+	blocks := make([]session.ContentBlock, len(pending))
+	for index := range pending {
+		image := pending[index].ref
+		blocks[index] = session.ContentBlock{Type: session.ContentImage, Image: &image}
+	}
+	return blocks
+}
+
+// commitImages stores pending attachments before the message citing them
+// is submitted: the object is durable first, then the reference.
+func (model model) commitImages(pending []pendingImage) error {
+	for _, image := range pending {
+		if err := model.app.config.Images.Commit(model.ctx, image.ref, image.data); err != nil {
+			return fmt.Errorf("store attachment %s: %w", image.ref.Name, err)
 		}
 	}
-	return model, command
+	return nil
+}
+
+// submitAndWait stores pending attachments, queues a turn, and reports its
+// terminal result.
+func (model model) submitAndWait(message session.Message, pending []pendingImage) tea.Msg {
+	if err := model.commitImages(pending); err != nil {
+		return turnMessage{result: agent.TurnResult{Outcome: session.OutcomeError, Err: err}}
+	}
+	results, err := model.app.agent.Submit(model.ctx, message)
+	if err != nil {
+		return turnMessage{result: agent.TurnResult{Outcome: session.OutcomeError, Err: err}}
+	}
+	select {
+	case result := <-results:
+		return turnMessage{result: result}
+	case <-model.ctx.Done():
+		return turnMessage{result: agent.TurnResult{Outcome: session.OutcomeCanceled, Err: model.ctx.Err()}}
+	}
+}
+
+// deliverCommand stores pending attachments, then steers a message into the
+// active turn, or starts a turn with it when the agent is idle.
+func (model model) deliverCommand(message session.Message, pending []pendingImage) tea.Cmd {
+	return func() tea.Msg {
+		if err := model.commitImages(pending); err != nil {
+			return operationMessage{err: err}
+		}
+		err := model.app.agent.Steer(model.ctx, message)
+		if errors.Is(err, agent.ErrAgentIdle) {
+			return model.submitAndWait(message, nil)
+		}
+		return operationMessage{text: "steer queued", err: err}
+	}
 }
 
 func (model *model) restoreInput() {
@@ -251,19 +340,29 @@ func (model model) View() tea.View {
 	}
 	document, _, _ := model.app.config.Settings.Snapshot()
 	status := model.app.agent.Status()
-	header := headerStyle.MaxWidth(model.width).Render(fmt.Sprintf(" nano-harness  %s/%s  session=%s  busy=%t ", document.Route.Provider, document.Route.Model, status.SessionID, status.Busy))
+	mode := ""
+	if model.planActive {
+		mode = "mode=plan "
+	}
+	header := headerStyle.MaxWidth(model.width).Render(fmt.Sprintf(" nano-harness  %s/%s  session=%s  busy=%t %s%s", document.Route.Provider, document.Route.Model, status.SessionID, status.Busy, mode, goalStatus(model.goal)))
 	prompt := ""
 	switch model.mode {
 	case modeApproval:
 		prompt = warningStyle.Render(fmt.Sprintf("Approval required: %s (%s)", model.approval.question.Reason, model.approval.question.ToolName))
 	case modeAuth:
 		prompt = warningStyle.Render("Authentication: " + model.auth.prompt.Message)
+	case modeQuestion:
+		state := model.question
+		prompt = warningStyle.Render(fmt.Sprintf("Question %d/%d: %s", state.index+1, len(state.envelope.request.Questions), state.current().Text))
 	case modeNormal:
 		if len(model.images) > 0 {
 			prompt = mutedStyle.Render(fmt.Sprintf("%d image(s) ready", len(model.images)))
 		}
 	}
 	body := lipgloss.NewStyle().Padding(0, 2).Width(model.width).Render(model.viewport.View())
+	if len(model.plan) > 0 {
+		body += "\n" + strings.Join(model.plan, "\n")
+	}
 	footer := mutedStyle.Render(" /help · ctrl+c quit/cancel ")
 	content := header + "\n" + body + "\n" + ansi.Truncate(prompt, model.width, "…") + "\n" + model.input.View() + "\n" + ansi.Truncate(footer, model.width, "…")
 	view := tea.NewView(lipgloss.NewStyle().MaxWidth(model.width).MaxHeight(model.height).Render(content))

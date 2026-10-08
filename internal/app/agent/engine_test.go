@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/jinyule/nano-harness/internal/app/compaction"
 	"github.com/jinyule/nano-harness/internal/app/llm"
+	"github.com/jinyule/nano-harness/internal/app/plan"
 	"github.com/jinyule/nano-harness/internal/app/prompt"
 	"github.com/jinyule/nano-harness/internal/app/retry"
 	"github.com/jinyule/nano-harness/internal/app/settings"
@@ -45,7 +45,9 @@ type modelAction struct {
 	err        error
 	wait       <-chan struct{}
 	started    chan<- struct{}
-	panic      bool
+	// cancelled runs when ctx ends during wait, before Stream returns.
+	cancelled func()
+	panic     bool
 }
 
 type scriptedModel struct {
@@ -61,6 +63,10 @@ func (*scriptedModel) CredentialEnv() string { return "OPENAI_API_KEY" }
 func (*scriptedModel) Refresh(_ context.Context, credential llm.Credential) (llm.Credential, error) {
 	return credential, nil
 }
+func (*scriptedModel) Search(context.Context, llm.Credential, llm.SearchRequest) (llm.SearchResult, error) {
+	return llm.SearchResult{}, nil
+}
+
 func (model *scriptedModel) Stream(ctx context.Context, _ llm.Credential, request llm.Request, emit llm.Emit) (llm.Completion, error) {
 	model.mu.Lock()
 	model.seen = append(model.seen, request)
@@ -80,6 +86,9 @@ func (model *scriptedModel) Stream(ctx context.Context, _ llm.Credential, reques
 	if action.wait != nil {
 		select {
 		case <-ctx.Done():
+			if action.cancelled != nil {
+				action.cancelled()
+			}
 			return llm.Completion{}, ctx.Err()
 		case <-action.wait:
 		}
@@ -121,21 +130,27 @@ func (engineApprover) Decide(context.Context, appTool.ApprovalRequest) (session.
 	return session.ApprovalAllowedOnce, nil
 }
 
+// engineTool records invocations of a no-argument tool registered as name.
 type engineTool struct {
 	name   string
 	output string
 	err    error
-	seen   []appTool.Execution
+	seen   []appTool.Invocation
 }
 
-func (tool *engineTool) Definition() session.ToolDefinition {
-	return session.ToolDefinition{Name: tool.name, Description: "test tool", Parameters: json.RawMessage(`{"type":"object"}`)}
+type engineArguments struct {
+	Value *float64 `json:"value"`
 }
-func (*engineTool) Concurrency() appTool.Concurrency      { return appTool.ConcurrencyExclusive }
-func (*engineTool) ApprovalReason(json.RawMessage) string { return "" }
-func (tool *engineTool) Execute(_ context.Context, execution appTool.Execution) (string, error) {
-	tool.seen = append(tool.seen, execution)
-	return tool.output, tool.err
+
+func (tool *engineTool) define() *appTool.Tool {
+	return appTool.Define(appTool.Spec[engineArguments]{
+		Name: tool.name, Description: "test tool", Parameters: appTool.Parameters{appTool.Optional("value", appTool.Number(""))},
+		Guidance: appTool.StaticGuidance(1, "inspect guidance"),
+		Execute: func(_ context.Context, invocation appTool.Invocation, _ engineArguments) (appTool.Result, error) {
+			tool.seen = append(tool.seen, invocation)
+			return appTool.Text(tool.output), tool.err
+		},
+	})
 }
 
 type engineHarness struct {
@@ -147,6 +162,7 @@ type engineHarness struct {
 	retry         *retry.Service
 	compaction    *compaction.Service
 	prompt        *prompt.Assembler
+	plan          *plan.Service
 	settings      *settings.Service
 	settingsScope *plugin.Scope
 	toolScope     *plugin.Scope
@@ -163,7 +179,7 @@ func startEngineHarness(t *testing.T, maxSteps int, actions ...modelAction) *eng
 	if err := harness.settings.Start(context.Background(), harness.settingsScope); err != nil {
 		t.Fatal(err)
 	}
-	harness.llm, _ = llm.New(memoryCredentialStore{})
+	harness.llm, _ = llm.New(memoryCredentialStore{}, noImages{})
 	llmScope, providerScope := &plugin.Scope{}, &plugin.Scope{}
 	if err := harness.llm.Start(context.Background(), llmScope); err != nil {
 		t.Fatal(err)
@@ -191,8 +207,13 @@ func startEngineHarness(t *testing.T, maxSteps int, actions ...modelAction) *eng
 	if err := harness.prompt.Start(context.Background(), harness.promptScope); err != nil {
 		t.Fatal(err)
 	}
+	harness.plan = plan.New()
+	planScope := &plugin.Scope{}
+	if err := harness.plan.Start(context.Background(), planScope); err != nil {
+		t.Fatal(err)
+	}
 	var err error
-	harness.engine, err = NewEngine(harness.llm, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.settings, EngineConfig{MaxSteps: maxSteps})
+	harness.engine, err = NewEngine(harness.llm, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.plan, harness.settings, EngineConfig{MaxSteps: maxSteps})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +221,7 @@ func startEngineHarness(t *testing.T, maxSteps int, actions ...modelAction) *eng
 	if err := harness.engine.Start(context.Background(), engineScope); err != nil {
 		t.Fatal(err)
 	}
-	harness.scopes = []*plugin.Scope{engineScope, harness.promptScope, compactionScope, retryScope, harness.toolScope, providerScope, llmScope, harness.settingsScope}
+	harness.scopes = []*plugin.Scope{engineScope, harness.promptScope, compactionScope, retryScope, harness.toolScope, providerScope, llmScope, harness.settingsScope, planScope}
 	t.Cleanup(func() {
 		for _, scope := range harness.scopes {
 			_ = scope.Close(context.Background())
@@ -217,6 +238,8 @@ func assistantCompletion(text string, calls ...session.ToolCall) llm.Completion 
 	return llm.Completion{Message: session.Message{Role: session.RoleAssistant, Content: []session.ContentBlock{{Type: session.ContentText, Text: text}}}, Calls: calls, Usage: &session.TokenUsage{InputTokens: 3, OutputTokens: 2}}
 }
 
+func noMessages() []session.Message { return nil }
+
 func turnJournal() (*journal, *memoryLog) {
 	log := &memoryLog{header: session.Header{SessionID: "session", Cwd: "/workspace"}, path: "/session.jsonl"}
 	return newJournal(log), log
@@ -231,16 +254,19 @@ func TestEngine_ValidatesLifecycleAndDefaults(t *testing.T) {
 		t.Fatalf("double start error = %v", err)
 	}
 	for _, config := range []EngineConfig{{MaxSteps: -1}, {MaxSteps: 257}} {
-		if _, err := NewEngine(harness.llm, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.settings, config); !errors.Is(err, ErrInvalidConfig) {
+		if _, err := NewEngine(harness.llm, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.plan, harness.settings, config); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("invalid max steps error = %v", err)
 		}
 	}
-	if _, err := NewEngine(nil, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.settings, EngineConfig{}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := NewEngine(nil, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.plan, harness.settings, EngineConfig{}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("nil dependency error = %v", err)
+	}
+	if _, err := NewEngine(harness.llm, harness.tools, harness.retry, harness.compaction, harness.prompt, nil, harness.settings, EngineConfig{}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("nil plan mode error = %v", err)
 	}
 	closed := &plugin.Scope{}
 	_ = closed.Close(context.Background())
-	inactive, err := NewEngine(harness.llm, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.settings, EngineConfig{})
+	inactive, err := NewEngine(harness.llm, harness.tools, harness.retry, harness.compaction, harness.prompt, harness.plan, harness.settings, EngineConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +274,7 @@ func TestEngine_ValidatesLifecycleAndDefaults(t *testing.T) {
 		t.Fatalf("closed scope error = %v", err)
 	}
 	journal, _ := turnJournal()
-	result := inactive.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "hello")})
+	result := inactive.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "hello")})
 	if !errors.Is(result.Err, ErrNotRunning) || result.Outcome != session.OutcomeError {
 		t.Fatalf("inactive result = %+v", result)
 	}
@@ -260,7 +286,7 @@ func TestEngine_CompletesStreamingTurnWithDurableOrder(t *testing.T) {
 		completion: assistantCompletion("final"),
 	})
 	journal, log := turnJournal()
-	result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "hello"), persona: "tester", drain: func() []session.Message { return nil }})
+	result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "hello"), persona: "tester", drain: func() []session.Message { return nil }})
 	if result.SessionID != "session" || result.Turn != 1 || result.Outcome != session.OutcomeCompleted || result.Text != "final" || result.Err != nil {
 		t.Fatalf("result = %+v", result)
 	}
@@ -293,14 +319,14 @@ func TestEngine_ExecutesToolsSteersAndNextTurn(t *testing.T) {
 	)
 	candidate := &engineTool{name: "inspect", output: "tool output"}
 	providerScope := &plugin.Scope{}
-	if err := harness.tools.Register(candidate, providerScope); err != nil {
+	if err := harness.tools.Register(candidate.define(), providerScope); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = providerScope.Close(context.Background()) })
 	journal, log := turnJournal()
 	steer := agentMessage(session.RoleUser, "new direction")
 	drains := 0
-	result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "first"), tools: []string{"inspect"}, delegated: true, drain: func() []session.Message {
+	result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "first"), tools: []string{"inspect"}, delegated: true, drain: func() []session.Message {
 		drains++
 		if drains == 1 {
 			return []session.Message{steer}
@@ -309,6 +335,14 @@ func TestEngine_ExecutesToolsSteersAndNextTurn(t *testing.T) {
 	}})
 	if result.Outcome != session.OutcomeCompleted || result.Text != "after tool" || len(candidate.seen) != 1 || !candidate.seen[0].Delegated {
 		t.Fatalf("tool turn = %+v, seen = %#v", result, candidate.seen)
+	}
+	// Session-owned tools such as todo_write append to the caller's own journal at its call.
+	if seen := candidate.seen[0]; seen.Journal != appTool.Journal(journal) || seen.Turn != 1 || seen.Step != 1 || seen.CallID != "call-1" {
+		t.Fatalf("tool execution lost its session identity: %+v", seen)
+	}
+	// Tools see the route that requested them, including its image capability.
+	if route := candidate.seen[0].Route; route != (appTool.Route{Provider: "openai", Model: "gpt-5.6-luna", ImageInput: true}) {
+		t.Fatalf("tool execution route = %+v", route)
 	}
 	types := recordTypes(log.events)
 	for _, required := range []session.RecordType{session.RecordToolCall, session.RecordToolResult} {
@@ -319,7 +353,12 @@ func TestEngine_ExecutesToolsSteersAndNextTurn(t *testing.T) {
 	if countType(types, session.RecordStepStart) != 2 || countType(types, session.RecordUserMessage) != 2 {
 		t.Fatalf("tool/steer records = %#v", types)
 	}
-	second := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "later"), drain: func() []session.Message { return nil }})
+	for _, event := range log.events {
+		if header := event.Record.Header; header != nil && (!strings.HasSuffix(header.System, "\n\ninspect guidance") || len(header.Tools) != 1 || header.Tools[0].Name != "inspect") {
+			t.Fatalf("request header lacks tool guidance: %#v", header)
+		}
+	}
+	second := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "later"), drain: func() []session.Message { return nil }})
 	if second.Turn != 2 || second.Outcome != session.OutcomeCompleted || second.Text != "second turn" {
 		t.Fatalf("second turn = %+v", second)
 	}
@@ -330,11 +369,11 @@ func TestEngine_StopsAtStepLimitAndClosesOpenScopes(t *testing.T) {
 	harness := startEngineHarness(t, 1, modelAction{completion: assistantCompletion("again", call)})
 	candidate := &engineTool{name: "inspect", output: "ok"}
 	scope := &plugin.Scope{}
-	if err := harness.tools.Register(candidate, scope); err != nil {
+	if err := harness.tools.Register(candidate.define(), scope); err != nil {
 		t.Fatal(err)
 	}
 	journal, log := turnJournal()
-	result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "loop"), drain: func() []session.Message { return nil }})
+	result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "loop"), drain: func() []session.Message { return nil }})
 	if result.Outcome != session.OutcomeStepLimit || result.Err != nil || recordTypes(log.events)[len(log.events)-1] != session.RecordTurnEnd {
 		t.Fatalf("step limit result = %+v records=%#v", result, recordTypes(log.events))
 	}
@@ -354,7 +393,7 @@ func TestEngine_ClassifiesCancellationProviderFailureAndPanic(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			harness := startEngineHarness(t, 1, test.action)
 			journal, log := turnJournal()
-			result := harness.engine.runTurn(context.Background(), runInput{journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
+			result := harness.engine.runTurn(context.Background(), runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
 			if result.Outcome != test.outcome || result.Err == nil || !strings.Contains(result.Err.Error(), test.match) {
 				t.Fatalf("result = %+v", result)
 			}
@@ -369,14 +408,14 @@ func TestEngine_ClassifiesCancellationProviderFailureAndPanic(t *testing.T) {
 func TestEngine_ValidatesMessagesAndHelperCopies(t *testing.T) {
 	data := []byte("image")
 	digest := sha256.Sum256(data)
-	image := &session.Image{ID: "image-1", Name: "image.png", MediaType: "image/png", Data: base64.StdEncoding.EncodeToString(data), SHA256: fmt.Sprintf("%x", digest), Width: 1, Height: 1}
+	image := &session.Image{ID: session.ImageID(fmt.Sprintf("%x", digest)), Name: "image.png", MediaType: "image/png", Bytes: len(data), Width: 1, Height: 1}
 	message := session.Message{Role: session.RoleUser, Source: session.MessageSource{Kind: "user"}, Content: []session.ContentBlock{{Type: session.ContentImage, Image: image}}}
 	if !validUserMessage(message) {
 		t.Fatal("valid image-only message rejected")
 	}
 	copyMessage := cloneMessage(message)
-	copyMessage.Content[0].Image.Data = "changed"
-	if message.Content[0].Image.Data != base64.StdEncoding.EncodeToString(data) {
+	copyMessage.Content[0].Image.Name = "changed"
+	if message.Content[0].Image.Name != "image.png" {
 		t.Fatal("cloneMessage aliased image")
 	}
 	for _, invalid := range []session.Message{
@@ -418,4 +457,11 @@ func countType(types []session.RecordType, target session.RecordType) int {
 		}
 	}
 	return count
+}
+
+// noImages is an attachment store that holds no image.
+type noImages struct{}
+
+func (noImages) ReadImage(context.Context, session.Image) ([]byte, error) {
+	return nil, session.ErrAttachmentMissing
 }

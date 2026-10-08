@@ -1,9 +1,6 @@
 package session
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +44,22 @@ func (record Record) Validate() error {
 		return record.requireCompaction()
 	case RecordSubagentDescriptor:
 		return record.requireSubagent()
+	case RecordSubagentCatalog:
+		return record.requireCatalog()
+	case RecordTodoWrite:
+		return record.requireTodo()
+	case RecordWebSearchRequest:
+		return record.requireWebSearch()
+	case RecordSandboxMode:
+		return record.requireSandbox()
+	case RecordPlanMode:
+		return record.requirePlan()
+	case RecordGoalChange:
+		return record.requireGoal()
+	case RecordNoticeQueued:
+		return record.requireNotice()
+	case RecordCompactionPrune:
+		return record.requirePrune()
 	case RecordStepEnd:
 		return record.requireBare(true, true)
 	case RecordTurnEnd:
@@ -57,7 +70,7 @@ func (record Record) Validate() error {
 }
 
 func allowsZeroTurn(recordType RecordType) bool {
-	return recordType == RecordApprovalPolicy || recordType == RecordCompactionStart || recordType == RecordCompactionSummary || recordType == RecordCompactionEnd || recordType == RecordSubagentDescriptor
+	return recordType == RecordApprovalPolicy || recordType == RecordCompactionStart || recordType == RecordCompactionSummary || recordType == RecordCompactionEnd || recordType == RecordSubagentDescriptor || recordType == RecordSandboxMode || recordType == RecordPlanMode || recordType == RecordGoalChange || recordType == RecordNoticeQueued || recordType == RecordCompactionPrune
 }
 
 func invalid(format string, values ...any) error {
@@ -68,7 +81,7 @@ func (record Record) requireBare(step, usage bool) error {
 	if step != (record.Step > 0) {
 		return invalid("%s has invalid step", record.Type)
 	}
-	if record.Message != nil || record.Chunk != nil || record.Call != nil || record.Result != nil || record.Header != nil || record.Retry != nil || record.Approval != nil || record.Compaction != nil || record.Subagent != nil || record.Outcome != "" || !usage && record.Usage != nil {
+	if record.Message != nil || record.Chunk != nil || record.Call != nil || record.Result != nil || record.Header != nil || record.Retry != nil || record.Approval != nil || record.Compaction != nil || record.Subagent != nil || record.Catalog != nil || record.Todo != nil || record.Search != nil || record.Plan != nil || record.Sandbox != nil || record.Goal != nil || record.Prune != nil || record.Outcome != "" || !usage && record.Usage != nil {
 		return invalid("%s has unrelated fields", record.Type)
 	}
 	return validateUsage(record.Usage)
@@ -83,15 +96,26 @@ func (record Record) requireMessage(role MessageRole) error {
 }
 
 func (record Record) hasExtras(keep string) bool {
-	return keep != "message" && record.Message != nil || keep != "chunk" && record.Chunk != nil || keep != "call" && record.Call != nil || keep != "result" && record.Result != nil || keep != "header" && record.Header != nil || keep != "usage" && record.Usage != nil || keep != "retry" && record.Retry != nil || keep != "approval" && record.Approval != nil || keep != "compaction" && record.Compaction != nil || keep != "subagent" && record.Subagent != nil || keep != "outcome" && record.Outcome != ""
+	return keep != "message" && record.Message != nil || keep != "chunk" && record.Chunk != nil || keep != "call" && record.Call != nil || keep != "result" && record.Result != nil || keep != "header" && record.Header != nil || keep != "usage" && record.Usage != nil || keep != "retry" && record.Retry != nil || keep != "approval" && record.Approval != nil || keep != "compaction" && record.Compaction != nil || keep != "subagent" && record.Subagent != nil || keep != "catalog" && record.Catalog != nil || keep != "todo" && record.Todo != nil || keep != "search" && record.Search != nil || keep != "sandbox" && record.Sandbox != nil || keep != "plan" && record.Plan != nil || keep != "goal" && record.Goal != nil || keep != "prune" && record.Prune != nil || keep != "outcome" && record.Outcome != ""
 }
 
-func validateMessage(message Message, requireContent bool) error {
-	if len(message.Content) > MaxContentBlocks || requireContent && len(message.Content) == 0 {
+// validateMessage checks a message; user messages must have content and alone may carry goal round attribution.
+func validateMessage(message Message, user bool) error {
+	if len(message.Content) > MaxContentBlocks || user && len(message.Content) == 0 {
 		return invalid("message content count is invalid")
 	}
 	if message.Source.Kind == "" || len(message.Source.Kind) > 64 || len(message.Source.Plugin) > 128 {
 		return invalid("message source is invalid")
+	}
+	if err := validateGoalSource(message.Source, user); err != nil {
+		return err
+	}
+	if message.Source.NoticeID != "" && (!user || validateIdentifier("notice ID", message.Source.NoticeID, 128) != nil) {
+		return invalid("notice ID is invalid")
+	}
+	relayed := message.Source.Kind == SourceAgentMessage || message.Source.Kind == SourceSubagentSettled
+	if relayed != (message.Source.SenderSessionID != "") || relayed && (!user || validateIdentifier("sender session ID", message.Source.SenderSessionID, 64) != nil) {
+		return invalid("message sender is invalid")
 	}
 	for index, block := range message.Content {
 		if err := validateContent(block); err != nil {
@@ -119,8 +143,8 @@ func validateContent(block ContentBlock) error {
 }
 
 func validateImage(image Image) error {
-	if err := validateIdentifier("image ID", image.ID, 128); err != nil {
-		return err
+	if _, ok := ImageDigest(image.ID); !ok {
+		return errors.New("image ID must be sha256:<64 lowercase hex digits>")
 	}
 	if image.Name == "" || len(image.Name) > 255 || strings.ContainsAny(image.Name, "\r\n") {
 		return errors.New("image name is invalid")
@@ -128,16 +152,8 @@ func validateImage(image Image) error {
 	if image.MediaType != "image/jpeg" && image.MediaType != "image/png" {
 		return errors.New("image media type is unsupported")
 	}
-	if image.Width < 1 || image.Width > 4096 || image.Height < 1 || image.Height > 4096 || len(image.SHA256) != 64 {
-		return errors.New("image dimensions or digest are invalid")
-	}
-	decoded, err := base64.StdEncoding.DecodeString(image.Data)
-	if err != nil || len(decoded) == 0 || len(decoded) > MaxImageBytes {
-		return errors.New("image data is invalid")
-	}
-	digest := sha256.Sum256(decoded)
-	if !strings.EqualFold(image.SHA256, hex.EncodeToString(digest[:])) {
-		return errors.New("image digest does not match data")
+	if image.Bytes < 1 || image.Bytes > MaxImageBytes || image.Width < 1 || image.Width > 4096 || image.Height < 1 || image.Height > 4096 {
+		return errors.New("image size or dimensions are invalid")
 	}
 	return nil
 }
@@ -227,7 +243,11 @@ func (record Record) requireCall() error {
 	if err := validateIdentifier("tool name", record.Call.Name, 64); err != nil {
 		return err
 	}
-	if len(record.Call.Arguments) == 0 || len(record.Call.Arguments) > MaxArgumentsBytes || !json.Valid(record.Call.Arguments) {
+	if record.Call.ArgumentsOmitted && string(record.Call.Arguments) != "{}" {
+		return invalid("omitted tool arguments must be an empty object")
+	}
+	encoded, err := json.Marshal(record.Call.Arguments)
+	if len(record.Call.Arguments) == 0 || len(record.Call.Arguments) > MaxArgumentsBytes || err != nil || len(encoded) > MaxArgumentsBytes {
 		return invalid("tool arguments are invalid")
 	}
 	var object map[string]json.RawMessage
@@ -247,6 +267,28 @@ func (record Record) requireResult() error {
 	if len(record.Result.Output) > MaxTextBytes {
 		return invalid("tool output exceeds %d bytes", MaxTextBytes)
 	}
+	if image := record.Result.Image; image != nil {
+		if record.Result.IsError {
+			return invalid("tool error result carries an image")
+		}
+		if err := validateImage(*image); err != nil {
+			return invalid("tool result image: %v", err)
+		}
+	}
+	if failure := record.Result.Error; failure != nil {
+		if !record.Result.IsError {
+			return invalid("successful tool result carries an error classification")
+		}
+		if err := failure.Validate(); err != nil {
+			return err
+		}
+	}
+	if meta := record.Result.Meta; meta != nil {
+		if record.Result.IsError {
+			return invalid("tool error result carries metadata")
+		}
+		return meta.Validate()
+	}
 	return nil
 }
 
@@ -261,7 +303,7 @@ func (record Record) requireApproval() error {
 			return invalid("approval/asked fields are invalid")
 		}
 	case RecordApprovalDecided:
-		if record.Step == 0 || validateIdentifier("approval ID", data.ID, 128) != nil || !validApprovalOutcome(data.Outcome) || data.ToolName != "" || data.Reason != "" || data.Policy != "" {
+		if record.Step == 0 || validateIdentifier("approval ID", data.ID, 128) != nil || !validApprovalOutcome(data.Outcome) || data.ToolName != "" || data.CallID != "" || data.Reason != "" || data.Policy != "" {
 			return invalid("approval/decided fields are invalid")
 		}
 	case RecordApprovalPolicy:
@@ -271,7 +313,7 @@ func (record Record) requireApproval() error {
 	case RecordTurnStart, RecordUserMessage, RecordStepStart, RecordRequestHeader,
 		RecordAssistantChunk, RecordAssistantMessage, RecordToolCall, RecordToolResult,
 		RecordRetry, RecordRetryStarted, RecordCompactionStart, RecordCompactionSummary,
-		RecordCompactionEnd, RecordSubagentDescriptor, RecordStepEnd, RecordTurnEnd:
+		RecordCompactionEnd, RecordCompactionPrune, RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordWebSearchRequest, RecordSandboxMode, RecordPlanMode, RecordGoalChange, RecordNoticeQueued, RecordStepEnd, RecordTurnEnd:
 		// Validate dispatches only approval record types to this shape-specific helper.
 	}
 	return nil
@@ -337,7 +379,7 @@ func (record Record) requireCompaction() error {
 	case RecordTurnStart, RecordUserMessage, RecordStepStart, RecordRequestHeader,
 		RecordAssistantChunk, RecordAssistantMessage, RecordToolCall, RecordApprovalAsked,
 		RecordApprovalDecided, RecordApprovalPolicy, RecordToolResult, RecordRetry,
-		RecordRetryStarted, RecordSubagentDescriptor, RecordStepEnd, RecordTurnEnd:
+		RecordRetryStarted, RecordCompactionPrune, RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordWebSearchRequest, RecordSandboxMode, RecordPlanMode, RecordGoalChange, RecordNoticeQueued, RecordStepEnd, RecordTurnEnd:
 		// Validate dispatches only compaction record types to this shape-specific helper.
 	}
 	return nil
@@ -348,7 +390,7 @@ func (record Record) requireSubagent() error {
 		return invalid("subagent/descriptor shape is invalid")
 	}
 	data := record.Subagent
-	if data.Version != 1 || validateIdentifier("subagent provider", data.Provider, 64) != nil || data.Mode != "one-shot" && data.Mode != "continuable" || data.Label == "" || len(data.Label) > 128 || len(data.Persona) > 4096 || len(data.Tools) > 32 {
+	if data.Version != SubagentDescriptorVersion || data.Provider != SubagentSpawn && data.Provider != SubagentFork || data.Provider == SubagentSpawn && data.Inherited != 0 || !validSubagentMode(data.Mode) || !validSubagentLabel(data.Label) || !validSubagentRoute(data.Route) || len(data.Persona) > 4096 || len(data.Tools) > 32 {
 		return invalid("subagent descriptor fields are invalid")
 	}
 	for _, tool := range data.Tools {
@@ -359,12 +401,36 @@ func (record Record) requireSubagent() error {
 	return nil
 }
 
+func (record Record) requireCatalog() error {
+	if record.Step == 0 || record.Catalog == nil || record.hasExtras("catalog") {
+		return invalid("subagent/catalog shape is invalid")
+	}
+	data := record.Catalog
+	if validateIdentifier("subagent session ID", data.SessionID, 64) != nil || !validSubagentMode(data.Mode) || !validSubagentLabel(data.Label) {
+		return invalid("subagent catalog fields are invalid")
+	}
+	return nil
+}
+
+func validSubagentMode(mode string) bool {
+	return mode == SubagentOneShot || mode == SubagentContinuable
+}
+
+func validSubagentRoute(route SubagentRoute) bool {
+	return validateIdentifier("subagent route provider", route.Provider, 64) == nil && validateIdentifier("subagent route model", route.Model, 256) == nil && (route.Effort == "" || ValidEffort(route.Effort))
+}
+
+func validSubagentLabel(label string) bool {
+	// Leave room for the job notification envelope within one text block.
+	return len(label) <= MaxSubagentLabelBytes
+}
+
 func (record Record) requireTurnEnd() error {
 	if record.Step != 0 || record.hasExtras("outcome") {
 		return invalid("turn/end has unrelated fields")
 	}
 	switch record.Outcome {
-	case OutcomeCompleted, OutcomeCanceled, OutcomeError, OutcomeStepLimit, OutcomeInterrupted:
+	case OutcomeCompleted, OutcomeMaxTokens, OutcomeCanceled, OutcomeError, OutcomeStepLimit, OutcomeInterrupted:
 		return nil
 	default:
 		return invalid("invalid turn outcome %q", record.Outcome)

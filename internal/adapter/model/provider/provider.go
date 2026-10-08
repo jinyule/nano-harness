@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,7 +39,7 @@ type snapshot struct {
 
 type settingsSource interface {
 	Snapshot() (appsettings.Document, uint64, error)
-	Watch(func(appsettings.Document)) (func(), error)
+	Watch(func(appsettings.Document)) (func(context.Context) error, error)
 }
 
 // Provider owns one provider catalog, account flow, and wire implementation.
@@ -49,6 +50,11 @@ type Provider struct {
 	client   *http.Client
 	auth     authConfig
 	current  atomic.Pointer[snapshot]
+
+	// installMu orders catalog installs against stop, so a settings callback
+	// that outlives cleanup cannot republish the catalog.
+	installMu sync.Mutex
+	stopped   bool
 }
 
 // New constructs one of the installed providers.
@@ -84,11 +90,21 @@ func (provider *Provider) Start(_ context.Context, scope *plugin.Scope) error {
 	if err != nil {
 		return err
 	}
-	return scope.Defer(func(context.Context) error {
-		dispose()
+	// Stop withdraws the watch and waits for its running callbacks, then
+	// withdraws the catalog; installs after that are ignored.
+	stop := func(ctx context.Context) error {
+		err := dispose(ctx)
+		provider.installMu.Lock()
+		provider.stopped = true
 		provider.current.Store(nil)
-		return nil
-	})
+		provider.installMu.Unlock()
+		return err
+	}
+	if err := scope.Defer(stop); err != nil {
+		_ = stop(context.Background()) // undo the watch and catalog published above
+		return err
+	}
+	return nil
 }
 
 func (provider *Provider) install(document appsettings.Document) {
@@ -100,7 +116,12 @@ func (provider *Provider) install(document appsettings.Document) {
 			Effort: model.Effort, ContextWindow: model.ContextWindow, Vision: model.Vision, Tools: model.Tools,
 		}
 	}
-	provider.current.Store(&snapshot{baseURL: strings.TrimRight(configured.BaseURL, "/"), apiKeyEnv: configured.APIKeyEnv, models: models})
+	installed := &snapshot{baseURL: strings.TrimRight(configured.BaseURL, "/"), apiKeyEnv: configured.APIKeyEnv, models: models}
+	provider.installMu.Lock()
+	defer provider.installMu.Unlock()
+	if !provider.stopped {
+		provider.current.Store(installed)
+	}
 }
 
 // Models returns a detached current provider catalog.
@@ -198,21 +219,30 @@ func (prepared *prepared) Stream(ctx context.Context, credential llm.Credential,
 	if request.MaxTokens < 0 || !prepared.info.Vision && surfaceHasImage(request.Surface) || !prepared.info.Tools && len(request.Tools) != 0 {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorInvalid, Provider: prepared.owner.id}
 	}
+	info := prepared.info
+	if request.Effort != nil {
+		info.Effort = *request.Effort
+	}
 	switch prepared.owner.id {
 	case "openai":
-		return prepared.owner.streamResponses(ctx, prepared.snapshot, prepared.info, credential, request, emit)
+		return prepared.owner.streamResponses(ctx, prepared.snapshot, info, credential, request, emit)
 	case "anthropic":
-		return prepared.owner.streamAnthropic(ctx, prepared.snapshot, prepared.info, credential, request, emit)
+		return prepared.owner.streamAnthropic(ctx, prepared.snapshot, info, credential, request, emit)
 	case "openrouter":
-		return prepared.owner.streamOpenRouter(ctx, prepared.snapshot, prepared.info, credential, request, emit)
+		return prepared.owner.streamOpenRouter(ctx, prepared.snapshot, info, credential, request, emit)
 	default:
 		return llm.Completion{}, llm.ErrUnknownProvider
 	}
 }
 
+// surfaceHasImage reports any user or tool-result image, so a model without
+// vision is refused before the network call.
 func surfaceHasImage(surface []session.SurfaceNode) bool {
 	for _, node := range surface {
 		if node.Message != nil && slices.ContainsFunc(node.Message.Content, func(block session.ContentBlock) bool { return block.Type == session.ContentImage }) {
+			return true
+		}
+		if node.Result != nil && node.Result.Image != nil {
 			return true
 		}
 	}

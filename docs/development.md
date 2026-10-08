@@ -5,9 +5,34 @@
 - `go.mod` 声明最低兼容版本 Go 1.26。
 - `.go-version` / `.tool-versions` 固定主开发和 CI 工具链 Go 1.27.0。
 - golangci-lint 固定为 v2.12.2，GoReleaser 固定为 v2.17.1；工具升级使用独立依赖 PR。
+- 运行与测试需要 ripgrep 15.0.0 或更新版本，CI 固定 15.2.0，见 [ripgrep](#ripgrep)。
+- Linux 上的 confined bash 与其真实 sandbox 测试需要可用的 bubblewrap，见 [Linux sandbox](#linux-sandbox)。
 - 文本统一 UTF-8、LF、末尾一个换行；`.editorconfig` 和 `.gitattributes` 同时约束编辑器与 Git checkout。
 
 提高 Go 最低版本必须说明所需语言/标准库能力、兼容影响和回滚路径，并更新 CI matrix、文档和 release 配置。
+
+### ripgrep
+
+`glob` 和 `grep` 调用 PATH 中的 `rg`，契约见 [ADR-0007](decisions/0007-upstream-base-tool-definitions.md)。运行、测试和 `make tui-e2e` 都需要 ripgrep 15.0.0 或更新版本，推荐使用 CI 固定的 15.2.0。15.0.0 是上游参考随 `@vscode/ripgrep` 1.18.0 打包的版本，搜索行为以它为基准。发布制品不包含 ripgrep。
+
+- 启动时找不到 `rg` 会在组装阶段失败：`ripgrep is unavailable: rg was not found on PATH; install ripgrep 15.0.0 or newer`。
+- `rg --version` 低于 15.0.0 或无法解析时，search 插件启动失败，不注册降级工具。
+- CI 通过 [`scripts/install-ripgrep.sh`](../scripts/install-ripgrep.sh) 从官方 GitHub release 下载固定版本，校验 SHA-256 后再加入 PATH。
+
+Dependabot 不追踪 ripgrep。升级时提交专门的变更：
+
+1. 从 <https://github.com/BurntSushi/ripgrep/releases> 选择正式版本，读取各目标归档对应的 `.sha256` 文件。
+2. 下载归档并在本机计算 SHA-256，确认与发布文件一致后，更新脚本中的 `version` 和 Linux x86_64、macOS arm64/x86_64 三个校验值。
+3. 用新版本运行 `make check` 和 `make tui-e2e`，并让完整 CI 通过。
+4. 提高最低版本时，同时修改 `internal/adapter/tool/search` 的 `minimumVersion`、本节、ADR-0007 与 README。
+
+### Linux sandbox
+
+Linux 的 read-only/workspace-write bash 只通过 PATH 中的 `bwrap` 执行，profile 由[安全规则](security.md#approvalshell-与进程)拥有。本仓没有实现 Landlock 后端；不可用错误逐字沿用上游文案，其中的 Landlock 建议在本仓不适用。找不到 `bwrap` 时命令以 `SANDBOX_UNAVAILABLE` 失败；`bwrap` 存在但无法建立 namespace 或挂载时，以同一分类附带 `Runner failure: bwrap: ...` 失败，均不降级为 host 执行。
+
+Ubuntu 23.10 起默认开启 `kernel.apparmor_restrict_unprivileged_userns`，未受 AppArmor profile 约束的进程创建 user namespace 后会失去 capability，非 setuid 的 `bwrap` 因此无法挂载。Ubuntu 文档给出的最小处理是为该可执行文件加载一个 `flags=(unconfined)` 且只增加 `userns,` 规则的 profile，形状与 Ubuntu 自带的 `chrome` profile 相同；全局关闭这项 sysctl 也可行，但会放开所有程序。
+
+CI 的 `test`、`coverage` 和 release 源门禁运行 [`scripts/setup-linux-sandbox.sh`](../scripts/setup-linux-sandbox.sh)：从 Ubuntu 仓库安装 `bubblewrap`（版本随 runner 镜像的发行版仓库，日志记录实际版本），在上述 sysctl 为 1 时加载 `nano-harness-bwrap` profile，再用 runner 的 workspace-write 挂载参数执行 `true` 作为探针。随后测试以 `NANO_HARNESS_REQUIRE_SANDBOX=1` 运行，后端不可用时失败而不是 skip，见[测试策略](testing.md#真实-os-sandbox)。
 
 ## 本地工作流
 
@@ -26,12 +51,27 @@ make check          # 提交前门禁
 make ci             # 漏洞与发布配置在内的完整门禁
 make agent-notes    # Agent Note 格式与 CI 变更携带检查
 make skills         # 本地 skills frontmatter、元数据与链接门禁
+make mutation       # 默认清单的全部定向回归，包括 file/fetch
 make change-scope BASE_REF=origin/main # 精确查看 outgoing change
 make build          # 真实二进制入口 smoke
 make clean
 ```
 
-Git hook 只做快速检查：pre-commit 处理 staged whitespace/gofmt，pre-push 运行 `make quick`。hook 不替代交付前的一次 `make check`，其中包含逐产品文件 coverage 和定向 mutation。漏洞、跨平台和 release dry-run 按变更面运行，完整矩阵由 CI 执行。
+Git hook 只做快速检查：pre-commit 处理 staged whitespace/gofmt，pre-push 运行 `make quick`。hook 不替代交付前的一次 `make check`，其中包含逐产品文件 coverage 和[定向 mutation](testing.md#定向-mutation-与断言有效性)。漏洞、跨平台和 release dry-run 按变更面运行，完整矩阵由 CI 执行。
+
+### 本机数据目录
+
+`nano-harness tui` 默认把私有数据放在 `<用户配置目录>/nano-harness` 下，均可用 flag 改变，路径在加载时解析为绝对路径：
+
+| flag | 默认 | 内容 |
+|---|---|---|
+| `--session-root` | `sessions` | JSONL 会话 |
+| `--spill-root` | `spill` | 超出内联预算的完整工具输出，30 天后启动时清理 |
+| `--attachment-root` | `attachments` | `/attach` 与 `read_image` 的规范化图片，按内容寻址，从不自动删除 |
+| `--credentials` | `credentials.yaml` | provider 账户 |
+| `--settings` | `settings.yaml` | 可热重载设置 |
+
+这些位置都不能放进 workspace，规则见[安全规则](security.md#凭据oauth-与日志)。调试或测试时为这些 flag 指定临时目录，可以避免触碰真实会话与附件。会话只保存图片引用，复制会话复现问题时需要同时复制附件根，规则见 [ADR-0017](decisions/0017-content-addressed-image-attachments.md)。
 
 ## 包与文件
 
@@ -101,9 +141,9 @@ Git hook 只做快速检查：pre-commit 处理 staged whitespace/gofmt，pre-pu
 
 `make quality BASE_REF=<verified-base>` 使用固定的 golangci-lint v2.12.2 `gocyclo` 和独立 dupl `v0.0.0-20260401084720-c99c5cf5c202` 生成 `.cache/quality/` 报告。独立 dupl 采用与 lint 相同的依赖版本、MIT 许可证，无第三方 Go module 依赖，不进入产品依赖；它比较全部产品源码，避免 lint 的包内分析漏掉跨包重复。首次运行需要 Go module 下载网络和 Python 3。source tests、testdata 和 internal/tools 不进入指标；复杂度按当前构建平台分析，重复检测包含其他平台文件。
 
-当前报告阈值为圈复杂度 10、重复片段 100 个语法节点。它们是定位线索，不是通过线。基线为 57 条复杂度诊断、9 条重复位置诊断（位置循环对应三个重复组，不是九对函数）；以本次 Agent Note 的工具与平台记录为准。CRAP 在 100% coverage 下等于圈复杂度，因此不增加一个同义硬指标。
+当前报告阈值为圈复杂度 10、重复片段 100 个语法节点。它们是定位线索，不是通过线。已测基线、工具与平台记录见[工程证据 Note](../.agents/notes/implemented/2026-10-04-engineering-evidence-gates.md#verification)，不作为当前工作树的诊断计数。CRAP 在 100% coverage 下等于圈复杂度，因此不增加一个同义硬指标。
 
-PR 审查新增或修改的高复杂度函数与跨包重复：说明不变量、owner、变化原因及自然拆分点；保留必要的边界和失败分支。相同形状不证明同一职责，不为指标创建 PluginBase、无意义 wrapper、跨 adapter 依赖或宽泛 nolint。已存在的插件启停、provider 注册和私有文件写入重复保留独立 owner，具体取舍见实施 Note。
+PR 审查新增或修改的高复杂度函数与跨包重复：说明不变量、owner、变化原因及自然拆分点；保留必要的边界和失败分支。相同形状不证明同一职责，不为指标创建 PluginBase、无意义 wrapper、跨 adapter 依赖或宽泛 nolint。已存在的插件启停、provider 注册和私有文件写入重复保留独立 owner，具体取舍见[工程证据 Note](../.agents/notes/implemented/2026-10-04-engineering-evidence-gates.md#consequences)。
 
 `BASE_REF` 必须为已核实的基线，报告记录 merge-base 到当前工作树的变更文件和未跟踪文件；完整语料始终参与检测，新代码与旧代码也能匹配。指标报告不使用 `git status` 代替 PR diff，也不因干净 checkout 而跳过已提交变化。分析器配置、解析或工具失败会使命令失败；发现复杂度/重复候选只写报告。`make quality-tests` 用真实 Go fixture 证明复杂度和跨包重复可被发现。
 

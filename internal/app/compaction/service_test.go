@@ -3,6 +3,8 @@ package compaction
 import (
 	"context"
 	"errors"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +33,9 @@ type compactionPrepared struct {
 	results []llm.Completion
 	errors  []error
 	calls   int
+	seen    []llm.Request
+	// hold, when set, runs before each stream returns and can fail it.
+	hold func(context.Context) error
 }
 
 func (*compactionPrepared) Info() llm.ModelInfo {
@@ -40,12 +45,22 @@ func (*compactionPrepared) CredentialEnv() string { return "OPENAI_API_KEY" }
 func (*compactionPrepared) Refresh(_ context.Context, credential llm.Credential) (llm.Credential, error) {
 	return credential, nil
 }
-func (prepared *compactionPrepared) Stream(_ context.Context, _ llm.Credential, request llm.Request, emit llm.Emit) (llm.Completion, error) {
+func (*compactionPrepared) Search(context.Context, llm.Credential, llm.SearchRequest) (llm.SearchResult, error) {
+	return llm.SearchResult{}, nil
+}
+
+func (prepared *compactionPrepared) Stream(ctx context.Context, _ llm.Credential, request llm.Request, emit llm.Emit) (llm.Completion, error) {
 	if request.Purpose != "compaction" || request.MaxTokens == 0 || emit == nil {
 		return llm.Completion{}, errors.New("bad compaction request")
 	}
+	if prepared.hold != nil {
+		if err := prepared.hold(ctx); err != nil {
+			return llm.Completion{}, err
+		}
+	}
 	index := prepared.calls
 	prepared.calls++
+	prepared.seen = append(prepared.seen, request)
 	_ = emit(session.AssistantChunk{Kind: session.ChunkText, Text: "summary"})
 	if index < len(prepared.errors) && prepared.errors[index] != nil {
 		return llm.Completion{}, prepared.errors[index]
@@ -59,13 +74,16 @@ func (prepared *compactionPrepared) Stream(_ context.Context, _ llm.Credential, 
 type compactionProvider struct {
 	prepared *compactionPrepared
 	err      error
+	// models records every model ID prepared.
+	models []string
 }
 
 func (*compactionProvider) ID() string { return "openai" }
 func (*compactionProvider) Models() []llm.ModelInfo {
 	return []llm.ModelInfo{{Provider: "openai", ID: "gpt-5.6-luna"}}
 }
-func (provider *compactionProvider) Prepare(string) (llm.PreparedModel, error) {
+func (provider *compactionProvider) Prepare(model string) (llm.PreparedModel, error) {
+	provider.models = append(provider.models, model)
 	return provider.prepared, provider.err
 }
 func (*compactionProvider) AuthMethods() []llm.AuthMethod { return nil }
@@ -92,6 +110,50 @@ func (journal *compactionJournal) Append(_ context.Context, record session.Recor
 	return session.Event{Sequence: uint64(position), Record: record}, nil
 }
 
+// gatedJournal rejects an append under an ended context, like the JSONL log,
+// except one of type holdFor, which runs hold and then commits. It records
+// appends made on another goroutine.
+type gatedJournal struct {
+	events  []session.Event
+	holdFor session.RecordType
+	hold    func(context.Context)
+
+	mu      sync.Mutex
+	records []session.Record
+}
+
+func (journal *gatedJournal) Events(context.Context) ([]session.Event, error) {
+	return journal.events, nil
+}
+
+func (journal *gatedJournal) Append(ctx context.Context, record session.Record) (session.Event, error) {
+	if journal.hold != nil && record.Type == journal.holdFor {
+		journal.hold(ctx)
+	} else if err := ctx.Err(); err != nil {
+		return session.Event{}, err
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	journal.records = append(journal.records, record)
+	return session.Event{Sequence: uint64(len(journal.records)), Record: record}, nil
+}
+
+func (journal *gatedJournal) types() []session.RecordType {
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	kinds := make([]session.RecordType, len(journal.records))
+	for index, record := range journal.records {
+		kinds[index] = record.Type
+	}
+	return kinds
+}
+
+func (journal *gatedJournal) last() *session.CompactionData {
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	return journal.records[len(journal.records)-1].Compaction
+}
+
 func assistantSummary(text string) session.Message {
 	content := []session.ContentBlock(nil)
 	if text != "" {
@@ -112,6 +174,7 @@ func visibleEvents(count int) []session.Event {
 
 type compactionHarness struct {
 	service       *Service
+	settings      *settings.Service
 	prepared      *compactionPrepared
 	provider      *compactionProvider
 	serviceScope  *plugin.Scope
@@ -127,7 +190,7 @@ func newCompactionHarness(t *testing.T) *compactionHarness {
 	if err := configuration.Start(context.Background(), settingsScope); err != nil {
 		t.Fatal(err)
 	}
-	runtime, _ := llm.New(&compactionStore{credential: llm.Credential{Kind: llm.CredentialAPIKey, APIKey: "key"}})
+	runtime, _ := llm.New(&compactionStore{credential: llm.Credential{Kind: llm.CredentialAPIKey, APIKey: "key"}}, noImages{})
 	llmScope := &plugin.Scope{}
 	if err := runtime.Start(context.Background(), llmScope); err != nil {
 		t.Fatal(err)
@@ -143,7 +206,7 @@ func newCompactionHarness(t *testing.T) *compactionHarness {
 	if err := service.Start(context.Background(), serviceScope); err != nil {
 		t.Fatal(err)
 	}
-	harness := &compactionHarness{service: service, prepared: prepared, provider: provider, serviceScope: serviceScope, providerScope: providerScope, llmScope: llmScope, settingsScope: settingsScope}
+	harness := &compactionHarness{service: service, settings: configuration, prepared: prepared, provider: provider, serviceScope: serviceScope, providerScope: providerScope, llmScope: llmScope, settingsScope: settingsScope}
 	t.Cleanup(func() {
 		_ = serviceScope.Close(context.Background())
 		_ = providerScope.Close(context.Background())
@@ -320,6 +383,10 @@ func TestFailureClassificationEstimationSelectionAndWait(t *testing.T) {
 	if estimateSurface(surface) <= 1024 {
 		t.Fatal("surface estimate omitted nodes")
 	}
+	withImage := []session.SurfaceNode{{Result: &session.ToolResult{CallID: "call", Output: "12345678", Image: &session.Image{}}}}
+	if got := estimateSurface(withImage); got != 2+1024 {
+		t.Fatalf("result image estimate = %d", got)
+	}
 	if prefix, _ := selectPrefix(surface[:2], 1, true); prefix != nil {
 		t.Fatal("short surface selected")
 	}
@@ -342,5 +409,103 @@ func TestFailureClassificationEstimationSelectionAndWait(t *testing.T) {
 	}
 	if err := wait(context.Background(), time.Nanosecond); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// noImages is an attachment store that holds no image.
+type noImages struct{}
+
+func (noImages) ReadImage(context.Context, session.Image) ([]byte, error) {
+	return nil, session.ErrAttachmentMissing
+}
+
+func TestService_CleanupClosesInFlightCompaction(t *testing.T) {
+	harness := newCompactionHarness(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	harness.prepared.hold = func(ctx context.Context) error {
+		close(entered)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+			return nil
+		}
+	}
+	journal := &gatedJournal{events: visibleEvents(4)}
+	type outcome struct {
+		compacted bool
+		err       error
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		compacted, err := harness.service.Maybe(context.Background(), Request{Journal: journal, Turn: 1, Force: true})
+		result <- outcome{compacted, err}
+	}()
+	<-entered
+	// Close runs while the summary request is open; only cleanup's
+	// cancellation ends it.
+	if err := harness.serviceScope.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	want := []session.RecordType{session.RecordCompactionStart, session.RecordCompactionEnd}
+	if got := journal.types(); !slices.Equal(got, want) {
+		t.Fatalf("cleanup returned with the compaction open: %v", got)
+	}
+	if end := journal.last(); end.Error != "cancelled" {
+		t.Fatalf("closing record = %+v", end)
+	}
+	if got := <-result; got.compacted || !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("in-flight compaction = %t, %v", got.compacted, got.err)
+	}
+}
+
+func TestService_CleanupWaitsForCompactionCommit(t *testing.T) {
+	harness := newCompactionHarness(t)
+	entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	// The summary append observes cancellation but, like a write already
+	// past its last check, still commits once released.
+	journal := &gatedJournal{events: visibleEvents(4), holdFor: session.RecordCompactionSummary, hold: func(ctx context.Context) {
+		close(entered)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+	}}
+	type outcome struct {
+		compacted bool
+		err       error
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		compacted, err := harness.service.Maybe(context.Background(), Request{Journal: journal, Turn: 1, Force: true})
+		result <- outcome{compacted, err}
+	}()
+	<-entered
+	closed := make(chan error, 1)
+	go func() { closed <- harness.serviceScope.Close(context.Background()) }()
+	select {
+	case <-cancelled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cleanup did not cancel the in-flight compaction")
+	}
+	if _, err := harness.service.Maybe(t.Context(), Request{Journal: &gatedJournal{events: visibleEvents(4)}, Force: true}); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("compaction during cleanup = %v", err)
+	}
+	select {
+	case err := <-closed:
+		t.Fatalf("cleanup returned with a compaction in flight: %v", err)
+	default:
+	}
+	close(release)
+	// A committed summary always closes its transaction, even cancelled.
+	if got := <-result; !got.compacted || got.err != nil {
+		t.Fatalf("in-flight compaction = %t, %v", got.compacted, got.err)
+	}
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	want := []session.RecordType{session.RecordCompactionStart, session.RecordCompactionSummary, session.RecordCompactionEnd}
+	if got := journal.types(); !slices.Equal(got, want) {
+		t.Fatalf("records = %v", got)
 	}
 }

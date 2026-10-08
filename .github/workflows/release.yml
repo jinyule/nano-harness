@@ -53,7 +53,15 @@ jobs:
             exit 1
           }
           [[ -f LICENSE ]] || { echo "LICENSE is required before publication" >&2; exit 1; }
+      - name: Install pinned ripgrep
+        run: |
+          scripts/install-ripgrep.sh "$RUNNER_TEMP/ripgrep"
+          echo "$RUNNER_TEMP/ripgrep" >> "$GITHUB_PATH"
+      - name: Install and enable the Linux sandbox backend
+        run: scripts/setup-linux-sandbox.sh
       - name: Run source gates
+        env:
+          NANO_HARNESS_REQUIRE_SANDBOX: "1"
         run: make quick coverage mutation build
       - name: Build release candidate
         if: inputs.publish

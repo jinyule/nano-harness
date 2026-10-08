@@ -1,0 +1,15 @@
+{"type":"session","version":2,"header":{"session_id":"fixture","composition_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","created_at_unix_ms":1,"cwd":"/synthetic/workspace"}}
+{"seq":1,"record":{"type":"turn/start","turn":1}}
+{"seq":2,"record":{"type":"user/message","turn":1,"message":{"role":"user","content":[{"type":"text","text":"run it"}],"source":{"kind":"test"}}}}
+{"seq":3,"record":{"type":"step/start","turn":1,"step":1}}
+{"seq":4,"record":{"type":"request/header","turn":1,"step":1,"header":{"provider":"openai","model":"model","system":""}}}
+{"seq":5,"record":{"type":"assistant/message","turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"waiting"}],"source":{"kind":"provider"}}}}
+{"seq":6,"record":{"type":"notice/queued","message":{"role":"user","content":[{"type":"text","text":"background job bash-1 (bash: make) finished [status: completed, exit code: 0]. Read its output with job_output."}],"source":{"kind":"tool-jobs","notice_id":"notice-1"}}}}
+{"seq":7,"record":{"type":"step/end","turn":1,"step":1}}
+{"seq":8,"record":{"type":"user/message","turn":1,"message":{"role":"user","content":[{"type":"text","text":"background job bash-1 (bash: make) finished [status: completed, exit code: 0]. Read its output with job_output."}],"source":{"kind":"tool-jobs","notice_id":"notice-1"}}}}
+{"seq":9,"record":{"type":"step/start","turn":1,"step":2}}
+{"seq":10,"record":{"type":"request/header","turn":1,"step":2,"header":{"provider":"openai","model":"model","system":""}}}
+{"seq":11,"record":{"type":"assistant/message","turn":1,"step":2,"message":{"role":"assistant","content":[{"type":"text","text":"noted"}],"source":{"kind":"provider"}}}}
+{"seq":12,"record":{"type":"step/end","turn":1,"step":2}}
+{"seq":13,"record":{"type":"turn/end","turn":1,"outcome":"completed"}}
+{"seq":14,"record":{"type":"notice/queued","message":{"role":"user","content":[{"type":"text","text":"background job bash-2 (bash: test) finished [status: failed, workspace sandbox is unavailable]. Read its output with job_output."}],"source":{"kind":"tool-jobs","notice_id":"notice-2"}}}}

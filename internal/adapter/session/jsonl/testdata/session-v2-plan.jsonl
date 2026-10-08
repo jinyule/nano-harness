@@ -1,0 +1,24 @@
+{"type":"session","version":2,"header":{"session_id":"fixture","composition_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","created_at_unix_ms":1,"cwd":"/synthetic/workspace"}}
+{"seq":1,"record":{"type":"turn/start","turn":1}}
+{"seq":2,"record":{"type":"user/message","turn":1,"message":{"role":"user","content":[{"type":"text","text":"hello"}],"source":{"kind":"test"}}}}
+{"seq":3,"record":{"type":"step/start","turn":1,"step":1}}
+{"seq":4,"record":{"type":"request/header","turn":1,"step":1,"header":{"provider":"openai","model":"model","system":""}}}
+{"seq":5,"record":{"type":"assistant/message","turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"source":{"kind":"provider"}}}}
+{"seq":6,"record":{"type":"step/end","turn":1,"step":1}}
+{"seq":7,"record":{"type":"turn/end","turn":1,"outcome":"completed"}}
+{"seq":8,"record":{"type":"plan/mode","plan":{"active":true}}}
+{"seq":9,"record":{"type":"turn/start","turn":2}}
+{"seq":10,"record":{"type":"user/message","turn":2,"message":{"role":"user","content":[{"type":"text","text":"design the change"}],"source":{"kind":"test"}}}}
+{"seq":11,"record":{"type":"user/message","turn":2,"message":{"role":"user","content":[{"type":"text","text":"The user switched this session to plan mode."}],"source":{"kind":"plan-mode"}}}}
+{"seq":12,"record":{"type":"step/start","turn":2,"step":1}}
+{"seq":13,"record":{"type":"request/header","turn":2,"step":1,"header":{"provider":"openai","model":"model","system":"plan policy"}}}
+{"seq":14,"record":{"type":"assistant/message","turn":2,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"plan ready"}],"source":{"kind":"provider"}}}}
+{"seq":15,"record":{"type":"tool/call","turn":2,"step":1,"call":{"id":"call-exit","name":"exit_plan_mode","arguments":{"plan":"# Plan\n\n- step"}}}}
+{"seq":16,"record":{"type":"tool/result","turn":2,"step":1,"result":{"call_id":"call-exit","output":"Plan approved — plan mode exited; carry out the plan starting with your next step.","is_error":false}}}
+{"seq":17,"record":{"type":"step/end","turn":2,"step":1}}
+{"seq":18,"record":{"type":"plan/mode","turn":2,"plan":{"active":false}}}
+{"seq":19,"record":{"type":"step/start","turn":2,"step":2}}
+{"seq":20,"record":{"type":"request/header","turn":2,"step":2,"header":{"provider":"openai","model":"model","system":""}}}
+{"seq":21,"record":{"type":"assistant/message","turn":2,"step":2,"message":{"role":"assistant","content":[{"type":"text","text":"done"}],"source":{"kind":"provider"}}}}
+{"seq":22,"record":{"type":"step/end","turn":2,"step":2}}
+{"seq":23,"record":{"type":"turn/end","turn":2,"outcome":"completed"}}

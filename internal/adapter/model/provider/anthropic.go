@@ -26,8 +26,10 @@ type anthropicBlock struct {
 	Name      string           `json:"name,omitempty"`
 	Input     json.RawMessage  `json:"input,omitempty"`
 	ToolUseID string           `json:"tool_use_id,omitempty"`
-	Content   string           `json:"content,omitempty"`
-	IsError   bool             `json:"is_error,omitempty"`
+	// Content is a tool result's string, or text and image blocks when the
+	// result carries an image.
+	Content any  `json:"content,omitempty"`
+	IsError bool `json:"is_error,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -60,6 +62,16 @@ func (provider *Provider) streamAnthropic(ctx context.Context, current *snapshot
 	if err != nil {
 		return llm.Completion{}, err
 	}
+	headers, err := anthropicHeaders(credential)
+	if err != nil {
+		return llm.Completion{}, err
+	}
+	return provider.streamRequest(ctx, current.baseURL+"/v1/messages", payload, headers, func(body io.Reader) (llm.Completion, error) {
+		return provider.consumeAnthropic(body, emit)
+	})
+}
+
+func anthropicHeaders(credential llm.Credential) (map[string]string, error) {
 	headers := map[string]string{"anthropic-version": "2023-06-01"}
 	switch credential.Kind {
 	case llm.CredentialAPIKey:
@@ -68,14 +80,16 @@ func (provider *Provider) streamAnthropic(ctx context.Context, current *snapshot
 		headers["Authorization"] = "Bearer " + credential.AccessToken
 		headers["anthropic-beta"] = "oauth-2025-04-20"
 	default:
-		return llm.Completion{}, llm.ErrNoCredential
+		return nil, llm.ErrNoCredential
 	}
-	return provider.streamRequest(ctx, current.baseURL+"/v1/messages", payload, headers, func(body io.Reader) (llm.Completion, error) {
-		return provider.consumeAnthropic(body, emit)
-	})
+	return headers, nil
 }
 
 func (provider *Provider) anthropicRequest(model llm.ModelInfo, request llm.Request) (anthropicRequest, error) {
+	images, err := encodeImages(provider.id, request)
+	if err != nil {
+		return anthropicRequest{}, err
+	}
 	messages := make([]anthropicMessage, 0, len(request.Surface))
 	appendBlocks := func(role string, blocks ...anthropicBlock) {
 		if len(messages) > 0 && messages[len(messages)-1].Role == role {
@@ -96,14 +110,14 @@ func (provider *Provider) anthropicRequest(model llm.ModelInfo, request llm.Requ
 					if node.Message.Role != session.RoleUser || block.Image == nil {
 						return anthropicRequest{}, &llm.Error{Code: llm.ErrorInvalid, Provider: provider.id, Cause: errors.New("only user messages may contain images")}
 					}
-					blocks = append(blocks, anthropicBlock{Type: "image", Source: &anthropicSource{Type: "base64", MediaType: block.Image.MediaType, Data: block.Image.Data}})
+					blocks = append(blocks, anthropicBlock{Type: "image", Source: &anthropicSource{Type: "base64", MediaType: block.Image.MediaType, Data: images[block.Image.ID]}})
 				}
 			}
 			appendBlocks(string(node.Message.Role), blocks...)
 		case node.Call != nil:
 			appendBlocks("assistant", anthropicBlock{Type: "tool_use", ID: node.Call.ID, Name: node.Call.Name, Input: node.Call.Arguments})
 		case node.Result != nil:
-			appendBlocks("user", anthropicBlock{Type: "tool_result", ToolUseID: node.Result.CallID, Content: node.Result.Output, IsError: node.Result.IsError})
+			appendBlocks("user", anthropicBlock{Type: "tool_result", ToolUseID: node.Result.CallID, Content: anthropicResultContent(node.Result, images), IsError: node.Result.IsError})
 		}
 	}
 	tools := make([]anthropicTool, len(request.Tools))
@@ -119,6 +133,21 @@ func (provider *Provider) anthropicRequest(model llm.ModelInfo, request llm.Requ
 		payload.OutputConfig = &anthropicOutputConfig{Effort: model.Effort}
 	}
 	return payload, nil
+}
+
+// anthropicResultContent places a tool-result image inside tool_result, after
+// its text, as upstream's Messages adapter does.
+func anthropicResultContent(result *session.ToolResult, images encodedImages) any {
+	if result.Image == nil {
+		if result.Output == "" {
+			return nil
+		}
+		return result.Output
+	}
+	return []anthropicBlock{
+		{Type: "text", Text: resultText(result)},
+		{Type: "image", Source: &anthropicSource{Type: "base64", MediaType: result.Image.MediaType, Data: images[result.Image.ID]}},
+	}
 }
 
 type anthropicEvent struct {
@@ -202,10 +231,9 @@ func (provider *Provider) consumeAnthropic(body io.Reader, emit llm.Emit) (llm.C
 				if call == nil {
 					return &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("tool delta arrived before tool start")}
 				}
-				if len(call.Arguments)+len(event.Delta.PartialJSON) > session.MaxArgumentsBytes {
-					return &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("tool arguments exceed size limit")}
+				if !call.AppendArguments(event.Delta.PartialJSON) {
+					return nil
 				}
-				call.Arguments = append(call.Arguments, event.Delta.PartialJSON...)
 				return emit(session.AssistantChunk{Kind: session.ChunkTool, Index: event.Index, Arguments: event.Delta.PartialJSON})
 			}
 		case "message_delta":
@@ -224,6 +252,9 @@ func (provider *Provider) consumeAnthropic(body io.Reader, emit llm.Emit) (llm.C
 	if !state.completed {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("stream ended before message_stop")}
 	}
+	if state.stop == llm.StopMaxTokens {
+		clear(state.calls)
+	}
 	indexes := make([]int, 0, len(state.calls))
 	for index := range state.calls {
 		indexes = append(indexes, index)
@@ -235,12 +266,12 @@ func (provider *Provider) consumeAnthropic(body io.Reader, emit llm.Emit) (llm.C
 		if len(call.Arguments) == 0 {
 			call.Arguments = json.RawMessage(`{}`)
 		}
-		if err := validToolCall(call); err != nil {
+		if err := validToolCall(&call); err != nil {
 			return llm.Completion{}, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
 		}
 		calls = append(calls, call)
 	}
-	if state.text.Len() == 0 && len(calls) == 0 {
+	if state.text.Len() == 0 && len(calls) == 0 && state.stop != llm.StopMaxTokens {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorEmptyResponse, Provider: provider.id}
 	}
 	return llm.Completion{Message: assistantMessage(state.text.String()), Calls: calls, Usage: &state.usage, Stop: state.stop}, nil

@@ -67,7 +67,6 @@ type Store struct {
 	path string
 
 	mu      sync.RWMutex
-	writeMu sync.Mutex
 	started bool
 	active  bool
 	lookup  func(string) (string, bool)
@@ -138,7 +137,10 @@ func (store *Store) Resolve(ctx context.Context, provider, environment string) (
 	return llm.Credential{}, fmt.Errorf("%w: %s", llm.ErrNoCredential, provider)
 }
 
-// Modify holds both an in-process and cross-process lock around read-decide-write.
+// Modify serializes read-decide-write with an exclusive cross-process lock.
+// Cancellation observed before mutate starts prevents mutation and persistence.
+// Once mutate starts, a valid successful result is persisted despite later
+// cancellation so an OAuth refresh does not lose its newly rotated grant.
 func (store *Store) Modify(ctx context.Context, provider string, mutate func(*llm.Credential) (*llm.Credential, error)) (llm.Credential, error) {
 	if !validProvider(provider) || mutate == nil {
 		return llm.Credential{}, ErrInvalidConfig
@@ -146,8 +148,6 @@ func (store *Store) Modify(ctx context.Context, provider string, mutate func(*ll
 	if err := store.ensureActive(); err != nil {
 		return llm.Credential{}, err
 	}
-	store.writeMu.Lock()
-	defer store.writeMu.Unlock()
 	if err := credentialMkdirAll(filepath.Dir(store.path), 0o700); err != nil {
 		return llm.Credential{}, fmt.Errorf("create credential directory: %w", err)
 	}
@@ -155,6 +155,9 @@ func (store *Store) Modify(ctx context.Context, provider string, mutate func(*ll
 	err := withLock(ctx, store.path+".lock", func() error {
 		doc, err := store.readDocument()
 		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		var current *llm.Credential
@@ -310,6 +313,9 @@ func withLock(ctx context.Context, path string, operation func() error) error {
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		file, err := credentialOpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
 			if closeErr := file.Close(); closeErr != nil {
@@ -317,6 +323,9 @@ func withLock(ctx context.Context, path string, operation func() error) error {
 				return closeErr
 			}
 			defer func() { _ = credentialRemove(path) }()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			return operation()
 		}
 		if !errors.Is(err, os.ErrExist) {
@@ -326,6 +335,9 @@ func withLock(ctx context.Context, path string, operation func() error) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			return errors.New("credential writer lock timed out")
 		case <-ticker.C:
 		}

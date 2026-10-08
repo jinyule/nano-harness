@@ -10,14 +10,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/jinyule/nano-harness/internal/adapter/tui"
+	webfetch "github.com/jinyule/nano-harness/internal/adapter/web/fetch"
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/version"
@@ -30,22 +33,28 @@ var exitProcess = os.Exit
 var (
 	currentWorkingDirectory = os.Getwd
 	userConfigDirectory     = os.UserConfigDir
+	userHomeDirectory       = os.UserHomeDir
 	readRandom              = rand.Read
 	inspectPath             = os.Lstat
 	absolutePath            = filepath.Abs
 	evaluateLinks           = filepath.EvalSymlinks
+	identifyPath            = os.Stat
 	newTerminal             = tui.New
 )
 
 type applicationConfig struct {
-	workspaceRoot  string
-	sessionRoot    string
-	settingsPath   string
-	credentialPath string
-	sessionID      string
-	codexHome      string
-	maxSteps       int
-	create         bool
+	workspaceRoot   string
+	sessionRoot     string
+	spillRoot       string
+	attachmentRoot  string
+	settingsPath    string
+	credentialPath  string
+	skillsDir       string
+	agentsSkillsDir string
+	sessionID       string
+	codexHome       string
+	maxSteps        int
+	create          bool
 }
 
 type dependencies struct {
@@ -54,6 +63,8 @@ type dependencies struct {
 	openAIAuthURL     string
 	anthropicAuthURL  string
 	openRouterAuthURL string
+	webResolver       webfetch.Resolver // nil selects the system resolver
+	webDial           webfetch.DialFunc // nil selects a direct dialer
 	newRuntime        func(...plugin.Plugin) (*plugin.Runtime, error)
 	startRuntime      func(context.Context, *plugin.Runtime) error
 	runTerminal       func(context.Context, *tui.App, io.Reader, io.Writer) error
@@ -154,6 +165,11 @@ func parseTUIConfig(args []string, stderr io.Writer) (applicationConfig, error) 
 		return applicationConfig{}, err
 	}
 	applicationRoot := filepath.Join(configRoot, "nano-harness")
+	homeRoot, err := userHomeDirectory()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "resolve home directory: %v\n", err)
+		return applicationConfig{}, err
+	}
 	sessionID, err := newSessionID()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "generate session ID: %v\n", err)
@@ -161,16 +177,24 @@ func parseTUIConfig(args []string, stderr io.Writer) (applicationConfig, error) 
 	}
 	config := applicationConfig{
 		workspaceRoot: workspaceRoot, sessionRoot: filepath.Join(applicationRoot, "sessions"),
-		settingsPath:   filepath.Join(applicationRoot, "settings.yaml"),
-		credentialPath: filepath.Join(applicationRoot, "credentials.yaml"),
-		sessionID:      sessionID, maxSteps: 32,
+		spillRoot:       filepath.Join(applicationRoot, "spill"),
+		attachmentRoot:  filepath.Join(applicationRoot, "attachments"),
+		settingsPath:    filepath.Join(applicationRoot, "settings.yaml"),
+		credentialPath:  filepath.Join(applicationRoot, "credentials.yaml"),
+		skillsDir:       filepath.Join(applicationRoot, "skills"),
+		agentsSkillsDir: filepath.Join(homeRoot, ".agents", "skills"),
+		sessionID:       sessionID, maxSteps: 32,
 	}
 	flags := flag.NewFlagSet("tui", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&config.workspaceRoot, "root", config.workspaceRoot, "workspace root available to coding tools")
 	flags.StringVar(&config.sessionRoot, "session-root", config.sessionRoot, "private directory for JSONL sessions")
+	flags.StringVar(&config.spillRoot, "spill-root", config.spillRoot, "private directory for complete tool output that did not fit inline")
+	flags.StringVar(&config.attachmentRoot, "attachment-root", config.attachmentRoot, "private content-addressed store for image attachments; never pruned")
 	flags.StringVar(&config.settingsPath, "settings", config.settingsPath, "hot-reloadable owner-only settings YAML")
 	flags.StringVar(&config.credentialPath, "credentials", config.credentialPath, "owner-only provider account YAML")
+	flags.StringVar(&config.skillsDir, "skills-dir", config.skillsDir, "user skill directory scanned after the project skill directories")
+	flags.StringVar(&config.agentsSkillsDir, "agents-skills-dir", config.agentsSkillsDir, "skill directory shared with other agent tools, scanned last")
 	flags.StringVar(&config.sessionID, "session", config.sessionID, "session ID to create or resume")
 	flags.StringVar(&config.codexHome, "codex-home", "", "Codex home used only by explicit codex-import login")
 	flags.IntVar(&config.maxSteps, "max-steps", config.maxSteps, "maximum model steps per turn (1-256)")
@@ -182,7 +206,12 @@ func parseTUIConfig(args []string, stderr io.Writer) (applicationConfig, error) 
 		_, _ = fmt.Fprintln(stderr, err)
 		return applicationConfig{}, err
 	}
-	return normalizeConfig(config)
+	normalized, err := normalizeConfig(config)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return applicationConfig{}, err
+	}
+	return normalized, nil
 }
 
 func normalizeConfig(config applicationConfig) (applicationConfig, error) {
@@ -191,8 +220,14 @@ func normalizeConfig(config applicationConfig) (applicationConfig, error) {
 	}
 	for name, value := range map[string]*string{
 		"workspace": &config.workspaceRoot, "session root": &config.sessionRoot,
+		"spill root": &config.spillRoot, "attachment root": &config.attachmentRoot,
 		"settings": &config.settingsPath, "credentials": &config.credentialPath,
+		"skills": &config.skillsDir, "agents skills": &config.agentsSkillsDir,
 	} {
+		// An empty path would silently resolve to the working directory.
+		if *value == "" {
+			return applicationConfig{}, fmt.Errorf("%s path is required", name)
+		}
 		absolute, err := absolutePath(*value)
 		if err != nil {
 			return applicationConfig{}, fmt.Errorf("resolve %s path: %w", name, err)
@@ -204,6 +239,22 @@ func normalizeConfig(config applicationConfig) (applicationConfig, error) {
 		return applicationConfig{}, fmt.Errorf("resolve workspace links: %w", err)
 	}
 	config.workspaceRoot = resolved
+	var conflicts []error
+	for _, private := range []privatePath{
+		{name: "session root", flag: "--session-root", path: config.sessionRoot, directory: true},
+		{name: "spill root", flag: "--spill-root", path: config.spillRoot, directory: true},
+		{name: "attachment root", flag: "--attachment-root", path: config.attachmentRoot, directory: true},
+		{name: "credentials", flag: "--credentials", path: config.credentialPath},
+		{name: "settings", flag: "--settings", path: config.settingsPath},
+	} {
+		if err := separatePrivatePath(config.workspaceRoot, private); err != nil {
+			conflicts = append(conflicts, err)
+		}
+	}
+	// Every conflict is reported at once: a home workspace holds all defaults.
+	if err := errors.Join(conflicts...); err != nil {
+		return applicationConfig{}, err
+	}
 	path := filepath.Join(config.sessionRoot, config.sessionID+".jsonl")
 	info, err := inspectPath(path)
 	switch {
@@ -217,6 +268,100 @@ func normalizeConfig(config applicationConfig) (applicationConfig, error) {
 		config.create = false
 	}
 	return config, nil
+}
+
+// privatePath is a harness-owned location that file tools, search, and
+// sandboxed bash must never reach through the workspace.
+type privatePath struct {
+	name, flag, path string
+	// directory marks a store root; otherwise path is a single file.
+	directory bool
+}
+
+// separatePrivatePath refuses a private location the resolved workspace
+// would expose: credentials, settings, transcripts, spilled output, and
+// stored images must stay out of read/glob/grep results and beyond the
+// reach of write, edit, and sandboxed bash. A store directory and the
+// workspace may not contain each other, so tools neither see its entries
+// nor write beside them. A file only has to lie outside the workspace; a
+// workspace inside the file's directory exposes nothing. Both spellings
+// are judged: the path as given may not pass through the workspace, since
+// an approved command could retarget a link there and redirect later
+// writes into it; and its resolved location may not lie inside. The path
+// may not exist yet, so links are resolved on its longest existing prefix,
+// including a final link when the path exists.
+func separatePrivatePath(workspaceRoot string, private privatePath) error {
+	resolved, err := resolveExisting(private.path)
+	if err != nil {
+		return fmt.Errorf("resolve %s links: %w", private.name, err)
+	}
+	overlaps, err := within(workspaceRoot, private.path)
+	if err == nil && !overlaps {
+		overlaps, err = within(workspaceRoot, resolved)
+	}
+	if err == nil && !overlaps && private.directory {
+		overlaps, err = within(resolved, workspaceRoot)
+	}
+	if err != nil {
+		return fmt.Errorf("identify %s location: %w", private.name, err)
+	}
+	if overlaps {
+		return fmt.Errorf("%s %s must lie outside the workspace %s; choose another %s", private.name, private.path, workspaceRoot, private.flag)
+	}
+	return nil
+}
+
+// within reports whether target is directory or lies below it. Spellings
+// are compared first; then every existing ancestor of target, target
+// included, is compared with directory by file identity, because a case- or
+// normalization-insensitive file system such as macOS's default resolves
+// differently spelled names to the same directory. A missing ancestor
+// cannot be an existing directory, and a missing directory contains no
+// existing path, so neither needs a spelling rule of its own.
+func within(directory, target string) (bool, error) {
+	if contains(directory, target) {
+		return true, nil
+	}
+	directoryInfo, err := identifyPath(directory)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for current := target; ; current = filepath.Dir(current) {
+		info, err := identifyPath(current)
+		switch {
+		case err == nil && os.SameFile(info, directoryInfo):
+			return true, nil
+		case err != nil && !errors.Is(err, fs.ErrNotExist):
+			return false, err
+		case current == filepath.Dir(current):
+			return false, nil
+		}
+	}
+}
+
+// resolveExisting resolves links on the longest existing prefix of an
+// absolute path and appends the missing remainder unchanged.
+func resolveExisting(path string) (string, error) {
+	missing := ""
+	for current := path; ; current = filepath.Dir(current) {
+		resolved, err := evaluateLinks(current)
+		switch {
+		case err == nil:
+			return filepath.Join(resolved, missing), nil
+		case !errors.Is(err, fs.ErrNotExist) || current == filepath.Dir(current):
+			return "", err
+		}
+		missing = filepath.Join(filepath.Base(current), missing)
+	}
+}
+
+// contains reports whether target is directory or lies below it.
+func contains(directory, target string) bool {
+	relative, err := filepath.Rel(directory, target)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func newSessionID() (string, error) {
@@ -234,7 +379,7 @@ func composeTUI(config applicationConfig, deps dependencies) (*composition, erro
 	}
 	terminal, err := newTerminal(tui.Config{
 		Root: app.root, Registry: app.registry, LLM: app.models, Settings: app.settings,
-		Approval: app.approval, Images: app.images, Subagents: app.subagents,
+		Approval: app.approval, Questions: app.questions, Images: app.images, Subagents: app.subagents, Goals: app.goals,
 	})
 	if err != nil {
 		return nil, err
@@ -251,8 +396,12 @@ func composeTUI(config applicationConfig, deps dependencies) (*composition, erro
 	return &composition{runtime: runtime, terminal: terminal, root: app.root}, nil
 }
 
+// compositionID binds sessions to the harness, workspace, the semantics of
+// each tool provider, and the session format. Tool renames or definition changes
+// require a provider-token bump; other compatibility changes follow the owning
+// ADR's version policy. See docs/architecture.md, "事件、持久化与 replay".
 func compositionID(config applicationConfig) string {
-	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00workspace-tools-v1\x00subagent-tools-v1\x00session-v2"
+	identity := "nano-harness-v2\x00" + config.workspaceRoot + "\x00tool-runtime-v3\x00fs-tools-v5\x00search-tools-v4\x00shell-tools-v5\x00job-tools-v2\x00subagent-tools-v5\x00todo-tools-v1\x00web-tools-v3\x00question-tools-v2\x00plan-tools-v2\x00skill-tools-v1\x00goal-tools-v3\x00spill-v1\x00attachments-v1\x00tool-result-prune-v1\x00sandbox-policy-v2\x00session-v2"
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
 }

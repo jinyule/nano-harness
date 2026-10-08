@@ -505,17 +505,17 @@ func TestWriteHeaderFailures(t *testing.T) {
 	header := coresession.Header{SessionID: "session", CompositionID: testCompositionID, CreatedAtUnixMS: 1, Cwd: "."}
 	original := marshalJSON
 	marshalJSON = func(any) ([]byte, error) { return nil, errors.New("marshal") }
-	if _, err := writeHeader(base, header); err == nil {
+	if _, err := writeHeader(base, header, nil); err == nil {
 		t.Fatal("header marshal failure missing")
 	}
 	marshalJSON = original
-	if _, err := writeHeader(&faultFile{File: base, writeN: 1}, header); err == nil {
+	if _, err := writeHeader(&faultFile{File: base, writeN: 1}, header, nil); err == nil {
 		t.Fatal("header short write missing")
 	}
-	if _, err := writeHeader(&faultFile{File: base, writeErr: errors.New("write")}, header); err == nil {
+	if _, err := writeHeader(&faultFile{File: base, writeErr: errors.New("write")}, header, nil); err == nil {
 		t.Fatal("header write failure missing")
 	}
-	if _, err := writeHeader(&faultFile{File: base, syncErr: errors.New("sync")}, header); err == nil {
+	if _, err := writeHeader(&faultFile{File: base, syncErr: errors.New("sync")}, header, nil); err == nil {
 		t.Fatal("header sync failure missing")
 	}
 }
@@ -535,11 +535,11 @@ func TestOpenAndInspectFailurePaths(t *testing.T) {
 		t.Fatalf("existing lock=%v", err)
 	}
 	header := coresession.Header{SessionID: "session", CompositionID: testCompositionID, CreatedAtUnixMS: 1, Cwd: "."}
-	if _, _, _, _, err := openSession(filepath.Join(t.TempDir(), "missing"), header, false); !errors.Is(err, ErrSessionNotFound) {
+	if _, _, _, _, err := openSession(filepath.Join(t.TempDir(), "missing"), header, false, nil); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("missing open=%v", err)
 	}
 	openDiskFile = func(string, int, os.FileMode) (durableFile, error) { return nil, errors.New("open") }
-	if _, _, _, _, err := openSession("x", header, false); err == nil {
+	if _, _, _, _, err := openSession("x", header, false, nil); err == nil {
 		t.Fatal("open error missing")
 	}
 	openDiskFile = originalOpenDisk
@@ -551,30 +551,30 @@ func TestOpenAndInspectFailurePaths(t *testing.T) {
 	}
 	other := header
 	other.SessionID = "other"
-	if _, err := writeHeader(file, other); err != nil {
+	if _, err := writeHeader(file, other, nil); err != nil {
 		t.Fatal(err)
 	}
 	_ = file.Close()
-	if _, _, _, _, err := openSession(path, header, false); !errors.Is(err, ErrCorruptSession) {
+	if _, _, _, _, err := openSession(path, header, false, nil); !errors.Is(err, ErrCorruptSession) {
 		t.Fatalf("header mismatch=%v", err)
 	}
 	corruptPath := filepath.Join(t.TempDir(), "corrupt.jsonl")
 	if err := os.WriteFile(corruptPath, []byte("bad\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, err := openSession(corruptPath, header, false); !errors.Is(err, ErrCorruptSession) {
+	if _, _, _, _, err := openSession(corruptPath, header, false, nil); !errors.Is(err, ErrCorruptSession) {
 		t.Fatalf("corrupt open=%v", err)
 	}
 
 	base := temporaryFile(t)
-	if _, err := writeHeader(base, header); err != nil {
+	if _, err := writeHeader(base, header, nil); err != nil {
 		t.Fatal(err)
 	}
 	_, _ = base.Seek(0, io.SeekStart)
 	openDiskFile = func(string, int, os.FileMode) (durableFile, error) {
 		return &faultFile{File: base, seekErr: errors.New("seek"), seekFailAt: 2}, nil
 	}
-	if _, _, _, _, err := openSession("x", header, false); err == nil {
+	if _, _, _, _, err := openSession("x", header, false, nil); err == nil {
 		t.Fatal("seek-end error missing")
 	}
 	openDiskFile = originalOpenDisk
@@ -638,7 +638,7 @@ func TestManagerOpenListStopAndRepairFailurePaths(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := writeHeader(file, header); err != nil {
+		if _, err := writeHeader(file, header, nil); err != nil {
 			t.Fatal(err)
 		}
 		_ = file.Close()
@@ -702,7 +702,7 @@ func TestOpenSessionCreateAndReadOrderFailures(t *testing.T) {
 	header := coresession.Header{SessionID: "session", CompositionID: testCompositionID, CreatedAtUnixMS: 1, Cwd: "."}
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	marshalJSON = func(any) ([]byte, error) { return nil, errors.New("marshal") }
-	if _, _, _, _, err := openSession(path, header, true); err == nil {
+	if _, _, _, _, err := openSession(path, header, true, nil); err == nil {
 		t.Fatal("create header error missing")
 	}
 	marshalJSON = originalMarshal
@@ -714,7 +714,7 @@ func TestOpenSessionCreateAndReadOrderFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writeHeader(file, header); err != nil {
+	if _, err := writeHeader(file, header, nil); err != nil {
 		t.Fatal(err)
 	}
 	event := coresession.Event{Sequence: 1, Record: coresession.Record{Type: coresession.RecordTurnStart, Turn: 2}}

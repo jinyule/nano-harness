@@ -78,11 +78,28 @@ func (provider *Provider) streamOpenRouter(ctx context.Context, current *snapsho
 }
 
 func (provider *Provider) chatRequest(model llm.ModelInfo, request llm.Request) (chatRequest, error) {
+	images, err := encodeImages(provider.id, request)
+	if err != nil {
+		return chatRequest{}, err
+	}
 	messages := make([]chatMessage, 0, len(request.Surface)+1)
 	if request.System != "" {
 		messages = append(messages, chatMessage{Role: "system", Content: request.System})
 	}
+	// Chat Completions tool messages carry text only. Images from a run of
+	// consecutive results follow the run in one user message, as upstream's
+	// adapter sends them.
+	var resultImages []chatPart
+	flushImages := func() {
+		if len(resultImages) > 0 {
+			messages = append(messages, chatMessage{Role: "user", Content: append([]chatPart{{Type: "text", Text: toolImagesText}}, resultImages...)})
+			resultImages = nil
+		}
+	}
 	for _, node := range request.Surface {
+		if node.Result == nil {
+			flushImages()
+		}
 		switch {
 		case node.Message != nil:
 			parts := make([]chatPart, 0, len(node.Message.Content))
@@ -96,7 +113,7 @@ func (provider *Provider) chatRequest(model llm.ModelInfo, request llm.Request) 
 						return chatRequest{}, &llm.Error{Code: llm.ErrorInvalid, Provider: provider.id, Cause: errors.New("only user messages may contain images")}
 					}
 					hasImage = true
-					parts = append(parts, chatPart{Type: "image_url", ImageURL: &chatImageURL{URL: "data:" + block.Image.MediaType + ";base64," + block.Image.Data}})
+					parts = append(parts, chatPart{Type: "image_url", ImageURL: &chatImageURL{URL: images.dataURL(block.Image)}})
 				}
 			}
 			var content any = session.Text(*node.Message)
@@ -112,9 +129,13 @@ func (provider *Provider) chatRequest(model llm.ModelInfo, request llm.Request) 
 				messages = append(messages, chatMessage{Role: "assistant", ToolCalls: []chatToolCall{call}})
 			}
 		case node.Result != nil:
-			messages = append(messages, chatMessage{Role: "tool", Content: node.Result.Output, ToolCallID: node.Result.CallID})
+			messages = append(messages, chatMessage{Role: "tool", Content: resultText(node.Result), ToolCallID: node.Result.CallID})
+			if node.Result.Image != nil {
+				resultImages = append(resultImages, chatPart{Type: "image_url", ImageURL: &chatImageURL{URL: images.dataURL(node.Result.Image)}})
+			}
 		}
 	}
+	flushImages()
 	tools := make([]chatTool, len(request.Tools))
 	for index, tool := range request.Tools {
 		tools[index].Type = "function"
@@ -217,22 +238,27 @@ func (provider *Provider) consumeChat(body io.Reader, emit llm.Emit) (llm.Comple
 				if delta.Function.Name != "" {
 					call.Name = delta.Function.Name
 				}
-				if len(call.Arguments)+len(delta.Function.Arguments) > session.MaxArgumentsBytes {
-					return &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("tool arguments exceed size limit")}
+				if !call.AppendArguments(delta.Function.Arguments) {
+					continue
 				}
-				call.Arguments = append(call.Arguments, delta.Function.Arguments...)
 				if err := emit(session.AssistantChunk{Kind: session.ChunkTool, Index: delta.Index, CallID: delta.ID, Name: delta.Function.Name, Arguments: delta.Function.Arguments}); err != nil {
 					return err
 				}
 			}
 			if choice.FinishReason != "" {
 				state.stop = choice.FinishReason
+				if state.stop == "length" {
+					state.stop = llm.StopMaxTokens
+				}
 			}
 		}
 		return nil
 	})
 	if err != nil {
 		return llm.Completion{}, err
+	}
+	if state.stop == llm.StopMaxTokens {
+		clear(state.calls)
 	}
 	indexes := make([]int, 0, len(state.calls))
 	for index := range state.calls {
@@ -245,7 +271,7 @@ func (provider *Provider) consumeChat(body io.Reader, emit llm.Emit) (llm.Comple
 		if len(call.Arguments) == 0 {
 			call.Arguments = json.RawMessage(`{}`)
 		}
-		if err := validToolCall(call); err != nil {
+		if err := validToolCall(&call); err != nil {
 			return llm.Completion{}, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
 		}
 		calls = append(calls, call)
@@ -253,7 +279,7 @@ func (provider *Provider) consumeChat(body io.Reader, emit llm.Emit) (llm.Comple
 	if state.stop == "" {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("stream ended without finish reason")}
 	}
-	if state.text.Len() == 0 && len(calls) == 0 {
+	if state.text.Len() == 0 && len(calls) == 0 && state.stop != llm.StopMaxTokens {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorEmptyResponse, Provider: provider.id}
 	}
 	return llm.Completion{Message: assistantMessage(state.text.String()), Calls: calls, Usage: state.usage, Stop: state.stop}, nil

@@ -93,7 +93,7 @@ func jwt(payload map[string]any) string {
 func imageBlock() session.ContentBlock {
 	data := []byte("image")
 	digest := sha256.Sum256(data)
-	return session.ContentBlock{Type: session.ContentImage, Image: &session.Image{ID: "img", Name: "x.jpg", MediaType: "image/jpeg", Data: base64.StdEncoding.EncodeToString(data), SHA256: hex.EncodeToString(digest[:]), Width: 1, Height: 1}}
+	return session.ContentBlock{Type: session.ContentImage, Image: &session.Image{ID: session.ImageID(hex.EncodeToString(digest[:])), Name: "x.jpg", MediaType: "image/jpeg", Bytes: len(data), Width: 1, Height: 1}}
 }
 
 func providerRequest() llm.Request {
@@ -102,7 +102,13 @@ func providerRequest() llm.Request {
 		{Message: &session.Message{Role: session.RoleAssistant, Source: session.MessageSource{Kind: "provider"}, Content: []session.ContentBlock{{Type: session.ContentText, Text: "calling"}}}},
 		{Call: &session.ToolCall{ID: "old", Name: "tool", Arguments: json.RawMessage(`{}`)}},
 		{Result: &session.ToolResult{CallID: "old", Output: "done"}},
-	}, Tools: []session.ToolDefinition{{Name: "tool", Description: "does work", Parameters: json.RawMessage(`{"type":"object"}`)}}}
+	}, Tools: []session.ToolDefinition{{Name: "tool", Description: "does work", Parameters: json.RawMessage(`{"type":"object"}`)}}, Images: imageBytes()}
+}
+
+// imageBytes holds the stored bytes behind imageBlock, as the LLM runtime
+// attaches them; their base64 is "aW1hZ2U=".
+func imageBytes() map[string][]byte {
+	return map[string][]byte{imageBlock().Image.ID: []byte("image")}
 }
 
 func protocolServer(t *testing.T) *httptest.Server {
@@ -161,7 +167,7 @@ func TestProviderProtocolsAndLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &providerStore{credential: llm.Credential{Kind: llm.CredentialAPIKey, APIKey: "key"}}
-	runtime, _ := llm.New(store)
+	runtime, _ := llm.New(store, noImages{})
 	runtimeScope := &plugin.Scope{}
 	if err := runtime.Start(context.Background(), runtimeScope); err != nil {
 		t.Fatal(err)
@@ -199,6 +205,18 @@ func TestProviderProtocolsAndLifecycle(t *testing.T) {
 		completion, err := prepared.Stream(context.Background(), llm.Credential{Kind: llm.CredentialAPIKey, APIKey: "key"}, providerRequest(), func(chunk session.AssistantChunk) error { chunks = append(chunks, chunk); return nil })
 		if err != nil || session.Text(completion.Message) != "hello" || len(completion.Calls) != 1 || len(chunks) == 0 {
 			t.Fatalf("%s completion=%#v chunks=%#v err=%v", id, completion, chunks, err)
+		}
+		// A request effort replaces the catalog effort: the loopback server
+		// accepts only "max", so an override to "" is sent and refused.
+		pinned, omitted := providerRequest(), providerRequest()
+		maximum, none := session.EffortMax, session.Effort("")
+		pinned.Effort, omitted.Effort = &maximum, &none
+		if _, err := prepared.Stream(context.Background(), llm.Credential{Kind: llm.CredentialAPIKey, APIKey: "key"}, pinned, func(session.AssistantChunk) error { return nil }); err != nil {
+			t.Fatalf("%s pinned effort=%v", id, err)
+		}
+		var refused *llm.Error
+		if _, err := prepared.Stream(context.Background(), llm.Credential{Kind: llm.CredentialAPIKey, APIKey: "key"}, omitted, func(session.AssistantChunk) error { return nil }); !errors.As(err, &refused) || refused.HTTPStatus != http.StatusBadRequest {
+			t.Fatalf("%s omitted effort override=%v", id, err)
 		}
 		if id != "openrouter" {
 			oauth := llm.Credential{Kind: llm.CredentialOAuth, AccessToken: "access", RefreshToken: "refresh", AccountID: "account"}
@@ -426,7 +444,7 @@ func TestWireAndConfigFailureHelpers(t *testing.T) {
 	if session.Text(assistantMessage("x")) != "x" || len(assistantMessage("").Content) != 0 {
 		t.Fatal("assistant message")
 	}
-	if err := validToolCall(session.ToolCall{ID: "c", Name: "t", Arguments: json.RawMessage(`{}`)}); err != nil {
+	if err := validToolCall(&session.ToolCall{ID: "c", Name: "t", Arguments: json.RawMessage(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
 	originalRandom := randomRead
@@ -435,4 +453,11 @@ func TestWireAndConfigFailureHelpers(t *testing.T) {
 	if _, err := randomURLToken(4); err == nil {
 		t.Fatal("random error")
 	}
+}
+
+// noImages is an attachment store that holds no image.
+type noImages struct{}
+
+func (noImages) ReadImage(context.Context, session.Image) ([]byte, error) {
+	return nil, session.ErrAttachmentMissing
 }

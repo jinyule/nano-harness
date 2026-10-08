@@ -111,6 +111,8 @@ func (provider *Provider) Load(ctx context.Context) (appsettings.Document, error
 }
 
 // Persist replaces the document atomically under a cross-process lock.
+// Cancellation observed before the locked write starts prevents replacement;
+// once started, the atomic write finishes without further cancellation checks.
 func (provider *Provider) Persist(ctx context.Context, document appsettings.Document) error {
 	if err := document.Validate(); err != nil {
 		return err
@@ -211,6 +213,9 @@ func withLock(ctx context.Context, path string, operation func() error) error {
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		lock, err := settingsOpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
 			if closeErr := lock.Close(); closeErr != nil {
@@ -218,6 +223,9 @@ func withLock(ctx context.Context, path string, operation func() error) error {
 				return closeErr
 			}
 			defer func() { _ = settingsRemove(path) }()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			return operation()
 		}
 		if !errors.Is(err, os.ErrExist) {
@@ -227,6 +235,9 @@ func withLock(ctx context.Context, path string, operation func() error) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			return errors.New("settings writer lock timed out")
 		case <-ticker.C:
 		}

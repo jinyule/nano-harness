@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
+	"github.com/jinyule/nano-harness/internal/core/text"
 )
 
 var (
@@ -201,18 +203,60 @@ type Request struct {
 	Surface   []session.SurfaceNode
 	Tools     []session.ToolDefinition
 	MaxTokens int
+	// Effort, when set, is the exact effort to send ("" omits it) in place
+	// of the prepared model's catalog effort, so the request carries the
+	// effort its request header froze. Nil keeps the catalog effort.
+	Effort *session.Effort
+	// Images holds the verified bytes of every image the surface references,
+	// keyed by image ID. Call.Stream fills it after the request image budget
+	// is applied; providers encode only these bytes.
+	Images map[string][]byte
 }
+
+// StopMaxTokens identifies output truncated by the provider's token limit.
+const StopMaxTokens = "max_tokens"
 
 // Completion is the final provider response assembled from its stream.
 type Completion struct {
 	Message session.Message
 	Calls   []session.ToolCall
 	Usage   *session.TokenUsage
-	Stop    string
+	// Stop uses StopMaxTokens for output limits; other reasons are provider-specific.
+	Stop string
 }
 
 // Emit receives provider-neutral chunks in provider order.
 type Emit func(session.AssistantChunk) error
+
+// ErrSearchAudit identifies failure to durably record an auxiliary search intent.
+var ErrSearchAudit = errors.New("web search request audit failed")
+
+// SearchRequest asks one prepared model to run a provider-side web search.
+// MaxResults is a positive upper bound the provider may forward as a
+// result-count hint; the consumer still enforces it on the returned sources.
+type SearchRequest struct {
+	Query      string
+	MaxResults int
+	TimeoutMS  int64
+	// RecordRequest must durably commit the secret-free intent before dispatch.
+	RecordRequest func(context.Context, session.WebSearchRequest) error
+}
+
+// SearchSource is one citeable result. URL is always present; the other fields
+// are empty when the provider does not report them.
+type SearchSource struct {
+	URL         string
+	Title       string
+	Snippet     string
+	PublishedAt string
+}
+
+// SearchResult is the provider-neutral outcome of one server-side search:
+// optional provider-generated answer text and deduplicated sources in provider order.
+type SearchResult struct {
+	Content string
+	Sources []SearchSource
+}
 
 // PreparedModel captures all provider settings before credential I/O.
 type PreparedModel interface {
@@ -220,6 +264,7 @@ type PreparedModel interface {
 	CredentialEnv() string
 	Refresh(context.Context, Credential) (Credential, error)
 	Stream(context.Context, Credential, Request, Emit) (Completion, error)
+	Search(context.Context, Credential, SearchRequest) (SearchResult, error)
 }
 
 // Provider owns model catalog, wire implementation, and authentication flows.
@@ -236,6 +281,7 @@ type Call struct {
 	provider   string
 	prepared   PreparedModel
 	credential Credential
+	images     ImageReader
 }
 
 // Info returns the frozen model metadata for this call.
@@ -246,13 +292,33 @@ func (call *Call) Stream(ctx context.Context, request Request, emit Emit) (Compl
 	if emit == nil {
 		return Completion{}, ErrInvalidConfig
 	}
-	return call.prepared.Stream(ctx, call.credential, cloneRequest(request), emit)
+	request = cloneRequest(request)
+	request.Surface = fitImages(request.Surface)
+	// A model without vision is refused by its provider before the network;
+	// reading images it cannot receive would only cost I/O.
+	if call.prepared.Info().Vision {
+		surface, images, err := resolveImages(ctx, call.images, request.Surface)
+		if err != nil {
+			return Completion{}, err
+		}
+		request.Surface, request.Images = surface, images
+	}
+	return call.prepared.Stream(ctx, call.credential, request, emit)
+}
+
+// Search runs one provider-side web search through the frozen provider snapshot.
+func (call *Call) Search(ctx context.Context, request SearchRequest) (SearchResult, error) {
+	if text.TrimSpace(request.Query) == "" || request.MaxResults < 1 {
+		return SearchResult{}, ErrInvalidConfig
+	}
+	return call.prepared.Search(ctx, call.credential, request)
 }
 
 // Runtime is the provider registry and authorization coordinator.
 type Runtime struct {
-	store CredentialStore
-	now   func() time.Time
+	store  CredentialStore
+	images ImageReader
+	now    func() time.Time
 
 	mu        sync.RWMutex
 	started   bool
@@ -260,12 +326,13 @@ type Runtime struct {
 	providers map[string]Provider
 }
 
-// New constructs an empty runtime over one account store.
-func New(store CredentialStore) (*Runtime, error) {
-	if store == nil {
+// New constructs an empty runtime over one account store and the image
+// store that holds the bytes behind session image references.
+func New(store CredentialStore, images ImageReader) (*Runtime, error) {
+	if store == nil || images == nil {
 		return nil, ErrInvalidConfig
 	}
-	return &Runtime{store: store, now: time.Now, providers: map[string]Provider{}}, nil
+	return &Runtime{store: store, images: images, now: time.Now, providers: map[string]Provider{}}, nil
 }
 
 // ID returns the stable LLM-runtime plugin identity.
@@ -362,7 +429,7 @@ func (runtime *Runtime) PrepareCall(ctx context.Context, providerID, modelID str
 			return nil, err
 		}
 	}
-	return &Call{provider: providerID, prepared: prepared, credential: credential}, nil
+	return &Call{provider: providerID, prepared: prepared, credential: credential, images: runtime.images}, nil
 }
 
 // Login runs one provider-owned interaction and atomically replaces its record.
@@ -478,9 +545,14 @@ func cloneRequest(request Request) Request {
 		}
 		if node.Result != nil {
 			result := *node.Result
+			if result.Image != nil {
+				image := *result.Image
+				result.Image = &image
+			}
 			node.Result = &result
 		}
 	}
+	request.Images = maps.Clone(request.Images)
 	request.Tools = slices.Clone(request.Tools)
 	for index := range request.Tools {
 		request.Tools[index].Parameters = slices.Clone(request.Tools[index].Parameters)

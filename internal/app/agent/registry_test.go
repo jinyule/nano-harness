@@ -7,12 +7,16 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
 	"github.com/jinyule/nano-harness/internal/app/transcript"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
+
+// testRoute is a valid inherited route for delegated agents.
+var testRoute = session.SubagentRoute{Provider: "openai", Model: "gpt-5.6-luna", Effort: session.EffortMax}
 
 type memoryRepository struct {
 	mu      sync.Mutex
@@ -43,7 +47,7 @@ func (repository *memoryRepository) OpenSession(_ context.Context, options trans
 		} else {
 			log = &memoryLog{header: session.Header{
 				SessionID: options.SessionID, Cwd: options.Cwd, ParentSessionID: options.ParentSessionID, DelegationDepth: options.DelegationDepth,
-			}, path: "/sessions/" + options.SessionID + ".jsonl"}
+			}, path: "/sessions/" + options.SessionID + ".jsonl", events: slices.Clone(options.Seed)}
 		}
 		repository.logs[options.SessionID] = log
 		return log, nil
@@ -195,14 +199,35 @@ func TestRegistry_CreatesRootDelegatedAndRestoredAgents(t *testing.T) {
 	}
 
 	child, err := registry.Create(context.Background(), CreateRequest{
-		SessionID: "child", ParentID: "root", Label: "research", Mode: "one-shot", Persona: "focus", Tools: []string{"read_file"}, Depth: 1, Create: true,
+		SessionID: "child", ParentID: "root", Label: "research", Mode: "one-shot", Provider: session.SubagentSpawn, Route: testRoute, Persona: "focus", Tools: []string{"read"}, Depth: 1, Create: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	childEvents, _ := child.Events(context.Background())
-	if len(childEvents) != 2 || childEvents[0].Record.Subagent.Mode != "one-shot" || childEvents[1].Record.Approval.Policy != session.ApprovalNever {
+	descriptor := childEvents[0].Record.Subagent
+	if len(childEvents) != 2 || descriptor.Version != 3 || descriptor.Route != testRoute || descriptor.Provider != session.SubagentSpawn || descriptor.Mode != "one-shot" || descriptor.Inherited != 0 || childEvents[1].Record.Approval.Policy != session.ApprovalNever {
 		t.Fatalf("child events = %#v", childEvents)
+	}
+
+	// A fork starts from the parent prefix; its descriptor counts the copy.
+	seed := []session.Event{
+		{Sequence: 1, Record: session.Record{Type: session.RecordApprovalPolicy, Approval: &session.ApprovalData{Policy: session.ApprovalAsk}}},
+		{Sequence: 2, Record: session.Record{Type: session.RecordTurnStart, Turn: 1}},
+	}
+	forked, err := registry.Create(context.Background(), CreateRequest{SessionID: "forked", ParentID: "root", Label: "fork", Mode: "continuable", Provider: session.SubagentFork, Route: testRoute, Seed: seed, Depth: 1, Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forkedEvents, _ := forked.Events(context.Background())
+	if len(forkedEvents) != 4 || forkedEvents[2].Record.Subagent.Inherited != 2 || forkedEvents[2].Record.Subagent.Provider != session.SubagentFork || policy.restored["forked"][3].Record.Approval.Policy != session.ApprovalNever {
+		t.Fatalf("forked events = %#v", forkedEvents)
+	}
+	if opened := repository.options[len(repository.options)-1]; len(opened.Seed) != 2 {
+		t.Fatalf("fork open options = %#v", opened)
+	}
+	if err := registry.Close(context.Background(), "forked"); err != nil {
+		t.Fatal(err)
 	}
 	if err := registry.SetPolicy(context.Background(), "child", session.ApprovalAsk); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("delegated policy error = %v", err)
@@ -231,7 +256,7 @@ func TestRegistry_CreatesRootDelegatedAndRestoredAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := restored.Status()
-	if status.ParentID != "root" || status.Depth != 1 || status.Mode != "one-shot" || status.Label != "research" {
+	if status.ParentID != "root" || status.Depth != 1 || status.Mode != "one-shot" || status.Label != "research" || restored.route != testRoute {
 		t.Fatalf("restored status = %+v", status)
 	}
 	if err := registry.Close(context.Background(), "child"); err != nil {
@@ -257,6 +282,9 @@ func TestRegistry_GeneratesIDsAndRejectsInvalidRequests(t *testing.T) {
 		{SessionID: "deep", ParentID: "root", Depth: 17, Create: true},
 		{SessionID: "parent-zero", ParentID: "root", Depth: 0, Create: true},
 		{SessionID: "depth-no-parent", Depth: 1, Create: true},
+		{SessionID: "root-provider", Provider: session.SubagentSpawn, Create: true},
+		{SessionID: "root-route", Route: testRoute, Create: true},
+		{SessionID: "root-seed", Seed: []session.Event{{Sequence: 1}}, Create: true},
 	} {
 		if _, err := registry.Create(context.Background(), request); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("request %+v error = %v", request, err)
@@ -395,4 +423,53 @@ func TestRegistry_ContainsScopePublicationRacesAndIDEntropyFailure(t *testing.T)
 		delete(registry.agents, "raced")
 		registry.mu.Unlock()
 	})
+}
+
+// TestRegistry_StopCancelsEveryAgentBeforeWaiting pins that shutdown stops
+// all agents together: each turn refuses to finish until every turn has
+// been cancelled, which deadlocks if agents are closed one at a time.
+func TestRegistry_StopCancelsEveryAgentBeforeWaiting(t *testing.T) {
+	var cancelled sync.WaitGroup
+	cancelled.Add(2)
+	barrier := func() {
+		cancelled.Done()
+		cancelled.Wait()
+	}
+	started := make(chan struct{}, 2)
+	never := make(chan struct{})
+	harness := startEngineHarness(t, 1,
+		modelAction{started: started, wait: never, cancelled: barrier},
+		modelAction{started: started, wait: never, cancelled: barrier},
+	)
+	registry, scope := startRegistry(t, harness, newMemoryRepository(), newMemoryPolicy())
+	results := make([]<-chan TurnResult, 0, 2)
+	for _, id := range []string{"root", "other"} {
+		agent, err := registry.Create(context.Background(), CreateRequest{SessionID: id, Create: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := agent.Submit(context.Background(), agentMessage(session.RoleUser, "work"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		results = append(results, result)
+		<-started
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stopped := make(chan error, 1)
+	go func() { stopped <- scope.Close(ctx) }()
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("registry stop waited on one agent before cancelling the others")
+	}
+	for _, result := range results {
+		if turn := <-result; turn.Outcome != session.OutcomeCanceled {
+			t.Fatalf("turn = %+v", turn)
+		}
+	}
 }

@@ -16,6 +16,7 @@ type responsesContent struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	ImageURL string `json:"image_url,omitempty"`
+	Detail   string `json:"detail,omitempty"`
 }
 
 type responsesInput struct {
@@ -25,7 +26,9 @@ type responsesInput struct {
 	CallID    string             `json:"call_id,omitempty"`
 	Name      string             `json:"name,omitempty"`
 	Arguments string             `json:"arguments,omitempty"`
-	Output    string             `json:"output,omitempty"`
+	// Output is a string, or input_text/input_image items for a tool
+	// result that carries an image.
+	Output any `json:"output,omitempty"`
 }
 
 type responsesTool struct {
@@ -57,29 +60,41 @@ func (provider *Provider) streamResponses(ctx context.Context, current *snapshot
 	if err != nil {
 		return llm.Completion{}, err
 	}
-	endpoint := current.baseURL + "/v1/responses"
-	headers := map[string]string{}
-	switch credential.Kind {
-	case llm.CredentialAPIKey:
-		headers["Authorization"] = "Bearer " + credential.APIKey
-	case llm.CredentialOAuth:
-		if credential.AccountID == "" {
-			return llm.Completion{}, &llm.Error{Code: llm.ErrorUnauthorized, Provider: provider.id, Cause: errors.New("ChatGPT account ID is missing")}
-		}
-		endpoint = provider.auth.chatGPTBaseURL + "/backend-api/codex/responses"
-		headers["Authorization"] = "Bearer " + credential.AccessToken
-		headers["ChatGPT-Account-Id"] = credential.AccountID
-		headers["Originator"] = "codex_cli_rs"
-		headers["OpenAI-Beta"] = "responses=experimental"
-	default:
-		return llm.Completion{}, llm.ErrNoCredential
+	endpoint, headers, err := provider.responsesTarget(current, credential)
+	if err != nil {
+		return llm.Completion{}, err
 	}
 	return provider.streamRequest(ctx, endpoint, payload, headers, func(body io.Reader) (llm.Completion, error) {
 		return provider.consumeResponses(body, emit)
 	})
 }
 
+// responsesTarget selects the public Responses API for API keys and the Codex
+// Responses boundary for ChatGPT OAuth grants.
+func (provider *Provider) responsesTarget(current *snapshot, credential llm.Credential) (string, map[string]string, error) {
+	switch credential.Kind {
+	case llm.CredentialAPIKey:
+		return current.baseURL + "/v1/responses", map[string]string{"Authorization": "Bearer " + credential.APIKey}, nil
+	case llm.CredentialOAuth:
+		if credential.AccountID == "" {
+			return "", nil, &llm.Error{Code: llm.ErrorUnauthorized, Provider: provider.id, Cause: errors.New("ChatGPT account ID is missing")}
+		}
+		return provider.auth.chatGPTBaseURL + "/backend-api/codex/responses", map[string]string{
+			"Authorization":      "Bearer " + credential.AccessToken,
+			"ChatGPT-Account-Id": credential.AccountID,
+			"Originator":         "codex_cli_rs",
+			"OpenAI-Beta":        "responses=experimental",
+		}, nil
+	default:
+		return "", nil, llm.ErrNoCredential
+	}
+}
+
 func (provider *Provider) responsesRequest(model llm.ModelInfo, request llm.Request) (responsesRequest, error) {
+	images, err := encodeImages(provider.id, request)
+	if err != nil {
+		return responsesRequest{}, err
+	}
 	input := make([]responsesInput, 0, len(request.Surface))
 	for _, node := range request.Surface {
 		switch {
@@ -97,7 +112,7 @@ func (provider *Provider) responsesRequest(model llm.ModelInfo, request llm.Requ
 					if node.Message.Role != session.RoleUser || block.Image == nil {
 						return responsesRequest{}, &llm.Error{Code: llm.ErrorInvalid, Provider: provider.id, Cause: errors.New("only user messages may contain images")}
 					}
-					content = append(content, responsesContent{Type: "input_image", ImageURL: "data:" + block.Image.MediaType + ";base64," + block.Image.Data})
+					content = append(content, responsesContent{Type: "input_image", ImageURL: images.dataURL(block.Image)})
 				}
 			}
 			if len(content) == 0 {
@@ -107,7 +122,7 @@ func (provider *Provider) responsesRequest(model llm.ModelInfo, request llm.Requ
 		case node.Call != nil:
 			input = append(input, responsesInput{Type: "function_call", CallID: node.Call.ID, Name: node.Call.Name, Arguments: string(node.Call.Arguments)})
 		case node.Result != nil:
-			input = append(input, responsesInput{Type: "function_call_output", CallID: node.Result.CallID, Output: node.Result.Output})
+			input = append(input, responsesInput{Type: "function_call_output", CallID: node.Result.CallID, Output: responsesOutput(node.Result, images)})
 		}
 	}
 	tools := make([]responsesTool, len(request.Tools))
@@ -127,14 +142,33 @@ func (provider *Provider) responsesRequest(model llm.ModelInfo, request llm.Requ
 	return payload, nil
 }
 
+// responsesOutput sends a tool-result image natively in function_call_output,
+// as upstream's Responses adapter does for both endpoints.
+func responsesOutput(result *session.ToolResult, images encodedImages) any {
+	if result.Image == nil {
+		if result.Output == "" {
+			return nil
+		}
+		return result.Output
+	}
+	items := make([]responsesContent, 0, 2)
+	if result.Output != "" {
+		items = append(items, responsesContent{Type: "input_text", Text: result.Output})
+	}
+	return append(items, responsesContent{Type: "input_image", ImageURL: images.dataURL(result.Image), Detail: "auto"})
+}
+
 type responsesEvent struct {
 	Type        string `json:"type"`
 	Delta       string `json:"delta"`
 	OutputIndex int    `json:"output_index"`
 	Response    struct {
-		Status string `json:"status"`
-		Error  any    `json:"error"`
-		Usage  struct {
+		Status            string `json:"status"`
+		Error             any    `json:"error"`
+		IncompleteDetails struct {
+			Reason string `json:"reason"`
+		} `json:"incomplete_details"`
+		Usage struct {
 			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
 			InputDetails struct {
@@ -156,10 +190,11 @@ type responsesAccumulator struct {
 	calls     map[int]*session.ToolCall
 	completed bool
 	usage     *session.TokenUsage
+	stop      string
 }
 
 func (provider *Provider) consumeResponses(body io.Reader, emit llm.Emit) (llm.Completion, error) {
-	state := responsesAccumulator{calls: map[int]*session.ToolCall{}}
+	state := responsesAccumulator{calls: map[int]*session.ToolCall{}, stop: "completed"}
 	err := scanSSE(body, provider.id, func(data []byte) error {
 		var event responsesEvent
 		if err := json.Unmarshal(data, &event); err != nil {
@@ -193,10 +228,9 @@ func (provider *Provider) consumeResponses(body io.Reader, emit llm.Emit) (llm.C
 				call = &session.ToolCall{}
 				state.calls[event.OutputIndex] = call
 			}
-			if len(call.Arguments)+len(event.Delta) > session.MaxArgumentsBytes {
-				return &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("tool arguments exceed size limit")}
+			if !call.AppendArguments(event.Delta) {
+				return nil
 			}
-			call.Arguments = append(call.Arguments, event.Delta...)
 			return emit(session.AssistantChunk{Kind: session.ChunkTool, Index: event.OutputIndex, Arguments: event.Delta})
 		case "response.output_item.done":
 			if event.Item.Type == "function_call" {
@@ -213,13 +247,19 @@ func (provider *Provider) consumeResponses(body io.Reader, emit llm.Emit) (llm.C
 					call.Arguments = json.RawMessage(event.Item.Arguments)
 				}
 			}
-		case "response.completed":
+		case "response.completed", "response.incomplete":
+			if event.Type == "response.incomplete" {
+				if event.Response.Status != "incomplete" || event.Response.IncompleteDetails.Reason != "max_output_tokens" || event.Response.Error != nil {
+					return &llm.Error{Code: llm.ErrorInvalid, Provider: provider.id, Cause: errors.New("response incomplete without an output token limit")}
+				}
+				state.stop = llm.StopMaxTokens
+			}
 			state.completed = true
 			state.usage = &session.TokenUsage{
 				InputTokens: event.Response.Usage.InputTokens, OutputTokens: event.Response.Usage.OutputTokens,
 				CacheReadTokens: event.Response.Usage.InputDetails.CachedTokens,
 			}
-		case "response.failed", "response.incomplete", "error":
+		case "response.failed", "error":
 			return &llm.Error{Code: llm.ErrorInvalid, Provider: provider.id, Cause: fmt.Errorf("provider event %s", event.Type)}
 		}
 		return nil
@@ -230,19 +270,22 @@ func (provider *Provider) consumeResponses(body io.Reader, emit llm.Emit) (llm.C
 	if !state.completed {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New("stream ended before response.completed")}
 	}
+	if state.stop == llm.StopMaxTokens {
+		clear(state.calls)
+	}
 	calls := make([]session.ToolCall, 0, len(state.calls))
 	for index := 0; index <= maxIndex(state.calls); index++ {
 		if call := state.calls[index]; call != nil {
-			if err := validToolCall(*call); err != nil {
+			if err := validToolCall(call); err != nil {
 				return llm.Completion{}, &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: err}
 			}
 			calls = append(calls, *call)
 		}
 	}
-	if state.text.Len() == 0 && len(calls) == 0 {
+	if state.text.Len() == 0 && len(calls) == 0 && state.stop != llm.StopMaxTokens {
 		return llm.Completion{}, &llm.Error{Code: llm.ErrorEmptyResponse, Provider: provider.id}
 	}
-	return llm.Completion{Message: assistantMessage(state.text.String()), Calls: calls, Usage: state.usage, Stop: "completed"}, nil
+	return llm.Completion{Message: assistantMessage(state.text.String()), Calls: calls, Usage: state.usage, Stop: state.stop}, nil
 }
 
 func maxIndex(values map[int]*session.ToolCall) int {

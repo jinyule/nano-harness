@@ -68,7 +68,15 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
           cache: true
+      - name: Install pinned ripgrep
+        run: |
+          scripts/install-ripgrep.sh "$RUNNER_TEMP/ripgrep"
+          echo "$RUNNER_TEMP/ripgrep" >> "$GITHUB_PATH"
+      - name: Install and enable the Linux sandbox backend
+        run: scripts/setup-linux-sandbox.sh
       - name: Test with the selected toolchain only
+        env:
+          NANO_HARNESS_REQUIRE_SANDBOX: "1"
         run: go test -race -count=1 ./...
 
   coverage:
@@ -82,7 +90,15 @@ jobs:
         with:
           go-version-file: .go-version
           cache: true
+      - name: Install pinned ripgrep
+        run: |
+          scripts/install-ripgrep.sh "$RUNNER_TEMP/ripgrep"
+          echo "$RUNNER_TEMP/ripgrep" >> "$GITHUB_PATH"
+      - name: Install and enable the Linux sandbox backend
+        run: scripts/setup-linux-sandbox.sh
       - name: Enforce product coverage floor
+        env:
+          NANO_HARNESS_REQUIRE_SANDBOX: "1"
         run: make coverage
 
   mutation:
@@ -96,6 +112,10 @@ jobs:
         with:
           go-version-file: .go-version
           cache: true
+      - name: Install pinned ripgrep
+        run: |
+          scripts/install-ripgrep.sh "$RUNNER_TEMP/ripgrep"
+          echo "$RUNNER_TEMP/ripgrep" >> "$GITHUB_PATH"
       - run: make mutation
       - uses: actions/upload-artifact@v7
         if: always()

@@ -19,19 +19,22 @@ func Surface(events []Event) ([]SurfaceNode, error) {
 			call.Arguments = slices.Clone(call.Arguments)
 			nodes = append(nodes, SurfaceNode{Sequence: event.Sequence, Call: &call})
 		case RecordToolResult:
-			result := *record.Result
-			nodes = append(nodes, SurfaceNode{Sequence: event.Sequence, Result: &result})
+			nodes = append(nodes, SurfaceNode{Sequence: event.Sequence, Result: cloneResult(record.Result)})
 		case RecordCompactionSummary:
 			var err error
 			nodes, err = replaceWithSummary(nodes, event)
 			if err != nil {
 				return nil, err
 			}
+		case RecordCompactionPrune:
+			if err := applyPrune(nodes, event); err != nil {
+				return nil, err
+			}
 		case RecordTurnStart, RecordStepStart, RecordRequestHeader, RecordAssistantChunk,
 			RecordApprovalAsked, RecordApprovalDecided, RecordApprovalPolicy, RecordRetry,
 			RecordRetryStarted, RecordCompactionStart, RecordCompactionEnd,
-			RecordSubagentDescriptor, RecordStepEnd, RecordTurnEnd:
-			// Metadata and lifecycle facts do not directly contribute a model-visible node.
+			RecordSubagentDescriptor, RecordSubagentCatalog, RecordTodoWrite, RecordWebSearchRequest, RecordSandboxMode, RecordPlanMode, RecordGoalChange, RecordNoticeQueued, RecordStepEnd, RecordTurnEnd:
+			// Metadata, UI state, and lifecycle facts do not directly contribute a model-visible node.
 		}
 	}
 	return cloneSurface(nodes), nil
@@ -98,12 +101,30 @@ func cloneSurface(nodes []SurfaceNode) []SurfaceNode {
 			call.Arguments = slices.Clone(call.Arguments)
 			cloned[index].Call = &call
 		}
-		if node.Result != nil {
-			result := *node.Result
-			cloned[index].Result = &result
-		}
+		cloned[index].Result = cloneResult(node.Result)
 	}
 	return cloned
+}
+
+// cloneResult detaches a tool result, including its image, error, and metadata.
+func cloneResult(result *ToolResult) *ToolResult {
+	if result == nil {
+		return nil
+	}
+	copyResult := *result
+	if result.Image != nil {
+		image := *result.Image
+		copyResult.Image = &image
+	}
+	if result.Error != nil {
+		failure := *result.Error
+		copyResult.Error = &failure
+	}
+	if result.Meta != nil {
+		meta := result.Meta.clone(func(text string) string { return text })
+		copyResult.Meta = &meta
+	}
+	return &copyResult
 }
 
 // CloneEvent detaches all mutable slices and pointers in one event.
@@ -119,10 +140,7 @@ func CloneEvent(event Event) Event {
 		call.Arguments = slices.Clone(call.Arguments)
 		cloned.Record.Call = &call
 	}
-	if event.Record.Result != nil {
-		result := *event.Record.Result
-		cloned.Record.Result = &result
-	}
+	cloned.Record.Result = cloneResult(event.Record.Result)
 	if event.Record.Header != nil {
 		header := *event.Record.Header
 		header.Tools = slices.Clone(header.Tools)
@@ -153,6 +171,35 @@ func CloneEvent(event Event) Event {
 		descriptor := *event.Record.Subagent
 		descriptor.Tools = slices.Clone(descriptor.Tools)
 		cloned.Record.Subagent = &descriptor
+	}
+	if event.Record.Catalog != nil {
+		catalog := *event.Record.Catalog
+		cloned.Record.Catalog = &catalog
+	}
+	if event.Record.Todo != nil {
+		todo := *event.Record.Todo
+		todo.Items = slices.Clone(todo.Items)
+		cloned.Record.Todo = &todo
+	}
+	if event.Record.Sandbox != nil {
+		mode := *event.Record.Sandbox
+		cloned.Record.Sandbox = &mode
+	}
+	if event.Record.Plan != nil {
+		mode := *event.Record.Plan
+		cloned.Record.Plan = &mode
+	}
+	if event.Record.Search != nil {
+		search := *event.Record.Search
+		cloned.Record.Search = &search
+	}
+	if event.Record.Goal != nil {
+		change := cloneGoalChange(*event.Record.Goal)
+		cloned.Record.Goal = &change
+	}
+	if event.Record.Prune != nil {
+		prune := *event.Record.Prune
+		cloned.Record.Prune = &prune
 	}
 	return cloned
 }

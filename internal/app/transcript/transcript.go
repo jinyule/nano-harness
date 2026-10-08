@@ -8,12 +8,15 @@ import (
 )
 
 // OpenOptions selects create or resume and immutable delegation metadata.
+// Seed is a closed event prefix, numbered from 1, that a created session
+// starts with, such as a forked child's copy of its parent's completed turns.
 type OpenOptions struct {
 	SessionID       string
 	Create          bool
 	Cwd             string
 	ParentSessionID string
 	DelegationDepth int
+	Seed            []session.Event
 }
 
 // Log is one exclusively written durable event stream.

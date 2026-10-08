@@ -1,10 +1,14 @@
-// Package compaction replaces old model-visible nodes while preserving the raw log.
+// Package compaction reduces the model surface while preserving the raw log.
+// Under pressure it first prunes oversized tool results without a model
+// call, as upstream's tool-result pruner does, and summarizes the oldest
+// prefix only when the pruned surface is still above the threshold.
 package compaction
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,8 +23,9 @@ var (
 	// ErrInvalidRequest identifies an invalid compaction dependency or operation.
 	ErrInvalidRequest = errors.New("invalid compaction request")
 	// ErrNotRunning indicates the compaction service has not started or has stopped.
-	ErrNotRunning  = errors.New("compaction service is not running")
-	compactionWait = wait
+	ErrNotRunning       = errors.New("compaction service is not running")
+	errSummaryTruncated = errors.New("summary truncated at the output token cap (incomplete checkpoint)")
+	compactionWait      = wait
 )
 
 // Journal supplies a durable snapshot and append boundary.
@@ -29,11 +34,20 @@ type Journal interface {
 	Append(context.Context, session.Record) (session.Event, error)
 }
 
-// Request selects proactive or forced compaction.
+// Request selects proactive or forced compaction. Force skips the pressure
+// check and always summarizes, for context-window recovery and manual
+// requests; Manual also skips the model-free pruning pass, as upstream's
+// manual compaction does.
 type Request struct {
 	Journal Journal
 	Turn    uint64
 	Force   bool
+	Manual  bool
+	// Route is a delegated agent's inherited route: its model's context
+	// window sets the thresholds and it carries the summary request,
+	// including its effort. The zero value uses the hot settings route and
+	// that model's catalog effort.
+	Route session.SubagentRoute
 }
 
 // Service owns compaction model calls and hot policy reads.
@@ -41,10 +55,12 @@ type Service struct {
 	llm      *llm.Runtime
 	settings *settings.Service
 
-	mu      sync.RWMutex
+	mu      sync.Mutex
 	started bool
 	active  bool
 	nextID  atomic.Uint64
+	// calls cancels and joins each Maybe in flight.
+	calls *plugin.Calls
 }
 
 // New constructs an inactive service.
@@ -52,13 +68,18 @@ func New(runtime *llm.Runtime, configuration *settings.Service) (*Service, error
 	if runtime == nil || configuration == nil {
 		return nil, ErrInvalidRequest
 	}
-	return &Service{llm: runtime, settings: configuration}, nil
+	service := &Service{llm: runtime, settings: configuration}
+	service.calls = plugin.NewCalls(&service.mu)
+	return service, nil
 }
 
 // ID returns the stable plugin identity.
 func (*Service) ID() string { return "compaction" }
 
-// Start activates compaction until scope cleanup.
+// Start activates compaction until scope cleanup. Cleanup rejects new
+// requests, cancels each one in flight, including its summary request, and
+// returns only after each has returned; an open compaction transaction is
+// closed first, so nothing is appended once cleanup returns.
 func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -68,7 +89,11 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	if err := scope.Defer(func(context.Context) error {
 		service.mu.Lock()
 		service.active = false
+		service.calls.Cancel(nil)
 		service.mu.Unlock()
+		// The wait is bounded by the provider's and journal's cancellation
+		// latency plus the uncancellable append that closes a transaction.
+		service.calls.Wait()
 		return nil
 	}); err != nil {
 		return err
@@ -77,28 +102,36 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	return nil
 }
 
-// Maybe summarizes the oldest visible prefix when pressure crosses the hot threshold.
+// Maybe reduces the surface when pressure crosses the request route's
+// threshold or the request is forced. It first records a compaction/prune
+// for every visible tool result over the pruning budget; a pressure request
+// that the pruned surface relieves stops there, and otherwise the oldest
+// prefix is summarized. It reports whether the surface changed, also when it
+// returns an error: prunes recorded before a failure stay in the log, and a
+// summary committed before its closing record failed already replaces the
+// prefix. Once compaction/start is committed the transaction is always
+// closed: a failure, including cancellation, records an error
+// compaction/end, and a committed summary records its end even if the
+// context is cancelled meanwhile.
 func (service *Service) Maybe(ctx context.Context, request Request) (bool, error) {
 	if request.Journal == nil {
 		return false, ErrInvalidRequest
 	}
-	service.mu.RLock()
-	active := service.active
-	service.mu.RUnlock()
-	if !active {
-		return false, ErrNotRunning
+	ctx, done, err := service.begin(ctx)
+	if err != nil {
+		return false, err
 	}
+	defer done()
 	document, _, err := service.settings.Snapshot()
 	if err != nil {
 		return false, err
 	}
-	configured := document.Providers[document.Route.Provider]
-	var model settings.Model
-	for _, candidate := range configured.Models {
-		if candidate.ID == document.Route.Model {
-			model = candidate
-			break
-		}
+	route := request.Route
+	model := findModel(document, document.Route.Provider, document.Route.Model)
+	if route == (session.SubagentRoute{}) {
+		route = session.SubagentRoute{Provider: document.Route.Provider, Model: document.Route.Model, Effort: model.Effort}
+	} else {
+		model = findModel(document, route.Provider, route.Model)
 	}
 	events, err := request.Journal.Events(ctx)
 	if err != nil {
@@ -108,29 +141,37 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 	if err != nil {
 		return false, err
 	}
-	total := estimateSurface(surface)
 	threshold := int(float64(model.ContextWindow) * document.Compaction.ThresholdRatio)
-	if !request.Force && total < threshold {
+	if !request.Force && (model.ContextWindow == 0 || estimateSurface(surface) < threshold) {
 		return false, nil
+	}
+	pruned := false
+	if !request.Manual {
+		if pruned, err = prune(ctx, request, surface); err != nil {
+			return pruned, err
+		}
+		if pruned && !request.Force && estimateSurface(surface) < threshold {
+			return true, nil
+		}
 	}
 	shadowed, count := selectPrefix(surface, int(float64(model.ContextWindow)*document.Compaction.RetainRatio), request.Force)
 	if len(shadowed) == 0 {
-		return false, nil
+		return pruned, nil
 	}
 	id := fmt.Sprintf("compact-%d", service.nextID.Add(1))
 	if _, err := request.Journal.Append(ctx, session.Record{Type: session.RecordCompactionStart, Turn: request.Turn, Compaction: &session.CompactionData{ID: id}}); err != nil {
-		return false, err
+		return pruned, err
 	}
-	call, err := service.llm.PrepareCall(ctx, document.Route.Provider, document.Route.Model)
+	call, err := service.llm.PrepareCall(ctx, route.Provider, route.Model)
 	if err != nil {
-		return false, service.finishError(ctx, request, id, err)
+		return pruned, service.finishError(ctx, request, id, err)
 	}
 	modelInfo := call.Info()
 	var completion llm.Completion
 	for attempt := 0; ; attempt++ {
 		completion, err = call.Stream(ctx, llm.Request{
 			Purpose: "compaction", System: compactionPrompt,
-			Surface: shadowed, MaxTokens: document.Compaction.MaxTokens,
+			Surface: shadowed, MaxTokens: document.Compaction.MaxTokens, Effort: &route.Effort,
 		}, func(session.AssistantChunk) error { return nil })
 		if err == nil || attempt >= document.Compaction.Retries {
 			break
@@ -141,28 +182,83 @@ func (service *Service) Maybe(ctx context.Context, request Request) (bool, error
 		}
 	}
 	if err != nil {
-		return false, service.finishError(ctx, request, id, err)
+		return pruned, service.finishError(ctx, request, id, err)
+	}
+	if completion.Stop == llm.StopMaxTokens {
+		return pruned, service.finishError(ctx, request, id, fmt.Errorf("compaction %s: %w", id, errSummaryTruncated))
 	}
 	text := session.Text(completion.Message)
 	if text == "" || len(completion.Calls) != 0 {
-		return false, service.finishError(ctx, request, id, errors.New("summary response was empty or attempted a tool"))
+		return pruned, service.finishError(ctx, request, id, errors.New("summary response was empty or attempted a tool"))
 	}
 	sequences := make([]uint64, len(shadowed))
 	for index, node := range shadowed {
 		sequences[index] = node.Sequence
 	}
+	// An earlier summary sits in front of the older messages it retained but
+	// carries a later sequence; the record lists sequences in order.
+	slices.Sort(sequences)
 	data := &session.CompactionData{
 		ID: id, ShadowedSeqs: sequences, ShadowedTokenCount: count,
 		Summary:  []session.ContentBlock{{Type: session.ContentText, Text: text}},
-		Provider: modelInfo.Provider, Model: modelInfo.ID, Effort: modelInfo.Effort,
+		Provider: modelInfo.Provider, Model: modelInfo.ID, Effort: route.Effort,
 	}
 	if _, err := request.Journal.Append(ctx, session.Record{Type: session.RecordCompactionSummary, Turn: request.Turn, Compaction: data}); err != nil {
-		return false, service.finishError(ctx, request, id, err)
+		return pruned, service.finishError(ctx, request, id, err)
 	}
-	if _, err := request.Journal.Append(ctx, session.Record{Type: session.RecordCompactionEnd, Turn: request.Turn, Compaction: &session.CompactionData{ID: id}}); err != nil {
-		return false, err
+	// The committed summary already replaces the prefix; resume repair
+	// closes the transaction if the closing record cannot be written.
+	if _, err := request.Journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordCompactionEnd, Turn: request.Turn, Compaction: &session.CompactionData{ID: id}}); err != nil {
+		return true, err
 	}
 	return true, nil
+}
+
+// findModel returns the settings catalog entry of provider/model, or the
+// zero model, whose window disables pressure-triggered compaction, when the
+// catalog no longer lists it.
+func findModel(document settings.Document, provider, model string) settings.Model {
+	for _, candidate := range document.Providers[provider].Models {
+		if candidate.ID == model {
+			return candidate
+		}
+	}
+	return settings.Model{}
+}
+
+// begin admits one request while the service runs and returns its context,
+// which cleanup cancels; done must run once the request returns.
+func (service *Service) begin(ctx context.Context) (context.Context, func(), error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if !service.active {
+		return nil, nil, ErrNotRunning
+	}
+	call, done := service.calls.Admit(ctx)
+	return call, done, nil
+}
+
+// prune records the bounded replacement of every visible tool result over
+// the pruning budget and applies it to surface in place, so the caller can
+// remeasure the surface the log now folds to.
+func prune(ctx context.Context, request Request, surface []session.SurfaceNode) (bool, error) {
+	pruned := false
+	for _, node := range surface {
+		if node.Result == nil {
+			continue
+		}
+		output, ok := session.PruneToolOutput(node.Result.Output)
+		if !ok {
+			continue
+		}
+		record := session.Record{Type: session.RecordCompactionPrune, Turn: request.Turn, Prune: &session.ToolResultPrune{Seq: node.Sequence, Output: output}}
+		if _, err := request.Journal.Append(ctx, record); err != nil {
+			return pruned, fmt.Errorf("prune tool result %d: %w", node.Sequence, err)
+		}
+		node.Result.Output = output
+		pruned = true
+	}
+	return pruned, nil
 }
 
 func (service *Service) finishError(ctx context.Context, request Request, id string, cause error) error {
@@ -172,6 +268,9 @@ func (service *Service) finishError(ctx context.Context, request Request, id str
 }
 
 func safeFailure(err error) string {
+	if errors.Is(err, errSummaryTruncated) {
+		return llm.StopMaxTokens
+	}
 	var failure *llm.Error
 	if errors.As(err, &failure) {
 		return string(failure.Code)
@@ -201,6 +300,9 @@ func estimateSurface(surface []session.SurfaceNode) int {
 			total += max(1, (len(node.Call.Name)+len(node.Call.Arguments))/4)
 		case node.Result != nil:
 			total += max(1, len(node.Result.Output)/4)
+			if node.Result.Image != nil {
+				total += 1024
+			}
 		}
 	}
 	return total

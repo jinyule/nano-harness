@@ -27,9 +27,38 @@ func TestAssemblerLifecycleAndSections(t *testing.T) {
 	if assembler.Start(context.Background(), &plugin.Scope{}) == nil {
 		t.Fatal("double start")
 	}
-	prompt, err := assembler.Build(Input{Workspace: "/work", Provider: "openai", Model: "model", Persona: "reviewer", Delegated: true, Tools: []session.ToolDefinition{{Name: "z"}, {Name: "a"}}})
-	if err != nil || !strings.Contains(prompt, "Delegation:") || !strings.Contains(prompt, "reviewer") || !strings.Contains(prompt, "a, z") || !strings.Contains(prompt, "workspace-relative paths") {
+	prompt, err := assembler.Build(Input{
+		Workspace: "/work", Provider: "openai", Model: "model", Persona: "reviewer",
+		Tools: []session.ToolDefinition{{Name: "z"}, {Name: "a"}}, Guidance: []string{"first guidance", "second guidance"},
+	})
+	// Delegation scope is runtime context, never a child-only system section.
+	if err != nil || strings.Contains(prompt, "Delegation:") || !strings.Contains(prompt, "reviewer") {
 		t.Fatalf("prompt=%q err=%v", prompt, err)
+	}
+	for _, policy := range []string{
+		"In read-only and workspace-write modes",
+		"danger-full-access permits host file paths",
+		"read, grep, and read_image may also read absolute paths in this workspace's spill partition",
+		"Exact historical spill files named in committed tool results remain readable after a spill-root change",
+		"glob, write, edit, and bash workdir remain confined to the workspace",
+		"Every write, edit, and bash call still requires local approval, including danger-full-access",
+	} {
+		if !strings.Contains(prompt, policy) {
+			t.Errorf("Safety section lacks %q", policy)
+		}
+	}
+	if !strings.HasSuffix(prompt, "Available tools: a, z. Follow each JSON schema exactly and use tool results as the only authority for side effects.\n\nfirst guidance\n\nsecond guidance") {
+		t.Fatalf("tool sections out of order: %q", prompt)
+	}
+	planned, err := assembler.Build(Input{
+		Workspace: "/work", Provider: "openai", Model: "model", Persona: "reviewer", PlanPolicy: "plan policy\n",
+		Tools: []session.ToolDefinition{{Name: "a"}}, Guidance: []string{"guidance"},
+	})
+	if err != nil || !strings.HasSuffix(planned, "Assigned role:\nreviewer\n\nplan policy\n\n\nAvailable tools: a. Follow each JSON schema exactly and use tool results as the only authority for side effects.\n\nguidance") {
+		t.Fatalf("plan policy is not between the role and the tool sections: %q, %v", planned, err)
+	}
+	if strings.Contains(prompt, "plan policy") {
+		t.Fatal("plan policy leaked into a request outside plan mode")
 	}
 	if _, err := assembler.Build(Input{Workspace: ""}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("invalid=%v", err)

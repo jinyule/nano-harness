@@ -28,18 +28,25 @@
     "test": "^TestSessionV2_(FrozenContract|RejectsChangedContract)$"
   },
   {
-    "id": "workspace-size",
-    "file": "internal/adapter/tool/workspace/files.go",
-    "before": "info.Size() > maxReadBytes",
-    "after": "info.Size() > maxReadBytes*2",
-    "test": "^TestReadTool_RejectsInvalidUnsafeAndUnreadableInput$"
+    "id": "read-byte-cap",
+    "file": "internal/adapter/tool/file/read.go",
+    "before": "builder.outputBytes+size > readMaxBytes",
+    "after": "builder.outputBytes+size > readMaxBytes*2",
+    "test": "^TestReadWindow_EnforcesLineRuneAndByteCaps$"
   },
   {
     "id": "workspace-escape",
     "file": "internal/adapter/tool/workspace/workspace.go",
-    "before": "clean == \"..\" || strings.HasPrefix(clean, \"..\"+string(filepath.Separator))",
-    "after": "clean == \"..\"",
-    "test": "^TestArgumentAndPathHelpers_RejectAmbiguityAndEscape$"
+    "before": "relative != \"..\" && !strings.HasPrefix(relative, \"..\"+string(filepath.Separator))",
+    "after": "relative != \"..\"",
+    "test": "^TestRoot_PathMatrix$"
+  },
+  {
+    "id": "workspace-symlink",
+    "file": "internal/adapter/tool/workspace/workspace.go",
+    "before": "if info.Mode()&fs.ModeSymlink != 0 {",
+    "after": "if false && info.Mode()&fs.ModeSymlink != 0 {",
+    "test": "^TestRoot_PathMatrix$"
   },
   {
     "id": "retry-after-commit",
@@ -47,5 +54,1629 @@
     "before": "emitted || !retryable || retryNumber >= policy.MaxRetries",
     "after": "!emitted || !retryable || retryNumber >= policy.MaxRetries",
     "test": "^TestServiceRetriesAndStops$"
+  },
+  {
+    "id": "web-fetch-public-address",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "if !publicAddress(address) {",
+    "after": "if false && !publicAddress(address) {",
+    "test": "^TestFetch_(AddressPolicyMatrix|RejectsNAT64TranslatedLiterals)$"
+  },
+  {
+    "id": "web-fetch-literal-policy",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "addresses = []netip.Addr{literal.Unmap()}",
+    "after": "return []netip.Addr{literal.Unmap()}, nil",
+    "test": "^TestFetch_RejectsNAT64TranslatedLiterals$"
+  },
+  {
+    "id": "web-fetch-nat64-translation",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "ok && !publicAddress(embedded)",
+    "after": "false && ok && !publicAddress(embedded)",
+    "test": "^TestFetch_(AddressPolicyMatrix|RejectsNAT64TranslatedLiterals)$"
+  },
+  {
+    "id": "web-fetch-redirect-origin",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "if !sameOrigin(current, next) {",
+    "after": "if false && !sameOrigin(current, next) {",
+    "test": "^TestFetch_RefusesUnsafeRedirects$"
+  },
+  {
+    "id": "job-owner-fence",
+    "file": "internal/app/job/service.go",
+    "before": "if current := service.records[index]; current.owner == owner {",
+    "after": "if current := service.records[index]; current.owner == owner || true {",
+    "test": "^TestService_FencesOwnersAndUnknownJobs$"
+  },
+  {
+    "id": "job-foreground-reservation",
+    "file": "internal/app/job/service.go",
+    "before": "foreground: spec.Foreground",
+    "after": "foreground: false",
+    "test": "^TestService_ForegroundSettlementBeforeWaitDoesNotNotify$"
+  },
+  {
+    "id": "job-foreground-handoff-notice",
+    "file": "internal/app/job/service.go",
+    "before": "!current.foreground && !awaited",
+    "after": "!awaited",
+    "test": "^TestService_ForegroundNoticeTransfersAtRead$"
+  },
+  {
+    "id": "job-notice-fits-text-block",
+    "file": "internal/app/job/service.go",
+    "before": "if len(text) > session.MaxTextBytes {",
+    "after": "if false {",
+    "test": "^TestNotice_FitsOneTextBlock$"
+  },
+  {
+    "id": "job-notice-rune-boundary",
+    "file": "internal/app/job/service.go",
+    "before": "for !utf8.RuneStart(detail[cut]) {",
+    "after": "for !utf8.RuneStart(detail[0]) {",
+    "test": "^TestNotice_FitsOneTextBlock$"
+  },
+  {
+    "id": "job-notice-failure-visible",
+    "file": "internal/app/job/service.go",
+    "before": "current.detail = joinDetail(current.detail, \"completion notice not delivered: \"+err.Error())",
+    "after": "_ = err",
+    "test": "^TestService_UndeliveredNoticeIsVisibleInDetail$"
+  },
+  {
+    "id": "shell-runner-failure-exit-code",
+    "file": "internal/adapter/tool/shell/bash.go",
+    "before": "if result.ExitCode > 0 {",
+    "after": "if false {",
+    "test": "^TestBash_RunnerFailureHasInfrastructureExplanation$"
+  },
+  {
+    "id": "process-unavailable-upstream-text",
+    "file": "internal/platform/process/runner.go",
+    "before": "return result, fmt.Errorf(\"%w Runner failure: %s\", sandboxUnavailableError{request.Mode}, line)",
+    "after": "return result, fmt.Errorf(\"%w: %s\", sandboxUnavailableError{request.Mode}, strings.TrimSpace(line))",
+    "test": "^TestRunnerRun_RunnerFailureOutranksDenial$"
+  },
+  {
+    "id": "process-drain-follows-grace",
+    "file": "internal/platform/process/runner.go",
+    "before": "command.WaitDelay = request.TerminationGrace",
+    "after": "command.WaitDelay = zeroGraceDrain",
+    "test": "^TestRunnerRun_DrainsDescendantOutputForTheGrace$"
+  },
+  {
+    "id": "job-empty-kill-reason-joins",
+    "file": "internal/app/job/service.go",
+    "before": "if current.status == StatusKilled && current.killReason != nil {",
+    "after": "if current.status == StatusKilled && current.killReason != nil && *current.killReason != \"\" {",
+    "test": "^TestService_ExplicitEmptyKillReasonReplacesPriorIntent$"
+  },
+  {
+    "id": "job-empty-detail-rendered",
+    "file": "internal/app/job/job.go",
+    "before": "if view.Detail == \"\" && !view.emptyDetail {",
+    "after": "if view.Detail == \"\" {",
+    "test": "^TestService_ExplicitEmptyKillReasonReplacesPriorIntent$"
+  },
+  {
+    "id": "job-output-loss-before-value",
+    "file": "internal/adapter/tool/job/output.go",
+    "before": "text = separated + boundedText(read.Result, room, truncated)",
+    "after": "text = withNewline(boundedText(read.Result, room, truncated)) + text",
+    "test": "^TestJobOutput_LossNoticePrecedesValueResult$"
+  },
+  {
+    "id": "job-output-loss-reserved",
+    "file": "internal/adapter/tool/job/output.go",
+    "before": "\t\tstreamLimit -= len(loss) + 1",
+    "after": "\t\tstreamLimit -= 0",
+    "test": "^TestJobOutput_LossNoticePrecedesValueResult$"
+  },
+  {
+    "id": "bash-handoff-read-status",
+    "file": "internal/adapter/tool/shell/bash.go",
+    "before": "if read.Job.Status == appJob.StatusRunning || read.Job.Status == appJob.StatusStopping {",
+    "after": "if true {",
+    "test": "^TestBash_ForegroundHandoffUsesReadStatus$"
+  },
+  {
+    "id": "shell-fallback-cancellation",
+    "file": "internal/adapter/tool/shell/provider.go",
+    "before": "for _, cancel := range provider.fallbacks {\n\t\t\tcancel()\n\t\t}",
+    "after": "for range provider.fallbacks {}",
+    "test": "^TestProvider_ShutdownCancelsAndJoinsFallbackBeforeRemovingTemporary$"
+  },
+  {
+    "id": "question-delegated",
+    "file": "internal/app/question/question.go",
+    "before": "if request.Delegated {",
+    "after": "if false && request.Delegated {",
+    "test": "^TestService_AskFailsClosed$"
+  },
+  {
+    "id": "plan-mode-boundary",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": "record.Turn != state.turn || state.step != 0 || record.Plan.Active == state.plan",
+    "after": "record.Turn != state.turn || record.Plan.Active == state.plan",
+    "test": "^TestValidateOrder_PlanModeOnlyAtStepBoundaries$"
+  },
+  {
+    "id": "write-unread-overwrite",
+    "file": "internal/adapter/tool/file/write.go",
+    "before": "case !prior.present && exists:",
+    "after": "case false:",
+    "test": "^TestObservation_WriteCreatesFreelyButOverwritesOnlyWhatWasRead$"
+  },
+  {
+    "id": "spill-planted-link",
+    "file": "internal/adapter/tool/workspace/workspace.go",
+    "before": "if !within(directory, resolved) {",
+    "after": "if false && !within(directory, resolved) {",
+    "test": "^TestRoot_ReadableMatrix$"
+  },
+  {
+    "id": "subagent-direct-parent",
+    "file": "internal/app/subagent/service.go",
+    "before": "if parentID != senderID {",
+    "after": "if parentID != senderID && false {",
+    "test": "^TestService_RejectsMessagesOutsideDirectLineage$"
+  },
+  {
+    "id": "subagent-descendant-interrupt",
+    "file": "internal/app/subagent/service.go",
+    "before": "return fail(CodeUnauthorized, \"subagent %q is not a live descendant of agent %q\", targetID, callerID)",
+    "after": "break",
+    "test": "^TestService_InterruptReachesDescendantsAndParentWaitsForChildren$"
+  },
+  {
+    "id": "goal-direct-human",
+    "file": "internal/app/goal/goal.go",
+    "before": "authority.Human = authority.Human || !delegated && source.Kind == HumanSource",
+    "after": "authority.Human = authority.Human || source.Kind == HumanSource",
+    "test": "^TestService_AuthorityReadsOnlyTheCallersTurn$"
+  },
+  {
+    "id": "goal-round-revision",
+    "file": "internal/core/session/goal.go",
+    "before": "source.GoalID != current.ID || source.GoalRevision != current.Revision ||",
+    "after": "source.GoalID != current.ID ||",
+    "test": "^TestProjectGoal_RejectsIllegalHistories$"
+  },
+  {
+    "id": "read-image-route-gate",
+    "file": "internal/adapter/tool/file/image.go",
+    "before": "if !route.ImageInput {",
+    "after": "if false && !route.ImageInput {",
+    "test": "^TestReadImage_RefusesBeforeReadingFiles$"
+  },
+  {
+    "id": "provider-result-image-vision",
+    "file": "internal/adapter/model/provider/provider.go",
+    "before": "if node.Result != nil && node.Result.Image != nil {",
+    "after": "if false && node.Result != nil && node.Result.Image != nil {",
+    "test": "^TestStream_RefusesToolResultImagesForTextModelsBeforeNetwork$"
+  },
+  {
+    "id": "spill-session-planted-link",
+    "file": "internal/adapter/spill/store.go",
+    "before": "if err := preparePrivate(dir, lstatPath); err != nil {",
+    "after": "if err := makeDirs(dir, 0o700); err != nil {",
+    "test": "^TestStore_RejectsUnsafeSessionDirectories$"
+  },
+  {
+    "id": "question-cancelled-answer",
+    "file": "internal/app/question/question.go",
+    "before": "answers, err := registered.broker.Ask(ctx, cloneRequest(request))\n\tif ctx.Err() != nil {",
+    "after": "answers, err := registered.broker.Ask(ctx, cloneRequest(request))\n\tif err != nil && ctx.Err() != nil {",
+    "test": "^TestService_CancellationWinsOverBrokerAnswers$"
+  },
+  {
+    "id": "plan-exit-cancellation",
+    "file": "internal/app/plan/plan.go",
+    "before": "if err := ctx.Err(); err != nil {",
+    "after": "if err := ctx.Err(); false && err != nil {",
+    "test": "^TestService_CancelledExitKeepsPlanMode$"
+  },
+  {
+    "id": "plan-cleanup-cancels-calls",
+    "file": "internal/app/plan/plan.go",
+    "before": "service.calls.Cancel(nil)",
+    "after": "// cleanup no longer cancels in-flight calls",
+    "test": "^TestService_CleanupWaitsForInFlightCalls$"
+  },
+  {
+    "id": "approval-cleanup-cancels-calls",
+    "file": "internal/app/approval/service.go",
+    "before": "service.calls.Cancel(errStopped)",
+    "after": "// cleanup no longer cancels in-flight calls",
+    "test": "^TestService_CleanupWaitsForInFlightPolicyChange$"
+  },
+  {
+    "id": "approval-shutdown-cancels-decision",
+    "file": "internal/app/approval/service.go",
+    "before": "if !service.active {\n\t\toutcome, source = session.ApprovalCancelled, \"cancellation\"\n\t}",
+    "after": "if false {\n\t\toutcome, source = session.ApprovalCancelled, \"cancellation\"\n\t}",
+    "test": "^TestService_CleanupSettlesPendingDecisions$"
+  },
+  {
+    "id": "retry-cleanup-cancels-waits",
+    "file": "internal/app/retry/service.go",
+    "before": "service.waits.Cancel(nil)",
+    "after": "// cleanup no longer cancels in-flight calls",
+    "test": "^TestService_CleanupWaitsForRetryRecords$"
+  },
+  {
+    "id": "compaction-cleanup-cancels-calls",
+    "file": "internal/app/compaction/service.go",
+    "before": "service.calls.Cancel(nil)",
+    "after": "// cleanup no longer cancels in-flight calls",
+    "test": "^TestService_CleanupWaitsForCompactionCommit$"
+  },
+  {
+    "id": "compaction-summary-closes-transaction",
+    "file": "internal/app/compaction/service.go",
+    "before": "request.Journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordCompactionEnd, Turn: request.Turn, Compaction: &session.CompactionData{ID: id}})",
+    "after": "request.Journal.Append(ctx, session.Record{Type: session.RecordCompactionEnd, Turn: request.Turn, Compaction: &session.CompactionData{ID: id}})",
+    "test": "^TestService_CleanupWaitsForCompactionCommit$"
+  },
+  {
+    "id": "todo-call-kind",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": "if call == nil || call.Name != \"todo_write\" || call.ArgumentsOmitted {",
+    "after": "if call == nil || call.ArgumentsOmitted {",
+    "test": "^TestSessionV2Todo_RejectsChangedContract$"
+  },
+  {
+    "id": "approval-decision-call-reference",
+    "file": "internal/core/session/validate.go",
+    "before": "!validApprovalOutcome(data.Outcome) || data.ToolName != \"\" || data.CallID != \"\" || data.Reason",
+    "after": "!validApprovalOutcome(data.Outcome) || data.ToolName != \"\" || data.Reason",
+    "test": "^TestRecordValidateRejectsEveryInvalidShape$"
+  },
+  {
+    "id": "goal-opening-failure-stop",
+    "file": "internal/app/goal/driver.go",
+    "before": "if result.Err != nil {",
+    "after": "if false {",
+    "test": "^TestDriver_FailedOpeningDoesNotRequeueTheRound$"
+  },
+  {
+    "id": "agent-output-limit-stop",
+    "file": "internal/app/agent/engine.go",
+    "before": "if completion.Stop == llm.StopMaxTokens {",
+    "after": "if false {",
+    "test": "^TestEngine_OutputLimitStopsBeforeToolsAndNotices$"
+  },
+  {
+    "id": "goal-output-limit-disarm",
+    "file": "internal/app/goal/goal.go",
+    "before": " || record.Outcome == session.OutcomeMaxTokens",
+    "after": "",
+    "test": "^TestService_SettlePausesCancelledRoundsAndDisarmsOtherStops$"
+  },
+  {
+    "id": "goal-settlement-revision",
+    "file": "internal/app/goal/goal.go",
+    "before": "if service.armed[sessionID] == ref {",
+    "after": "if service.armed[sessionID].ID != \"\" {",
+    "test": "^TestService_SettlePreservesLaterHumanAuthorization$"
+  },
+  {
+    "id": "attachment-digest-check",
+    "file": "internal/adapter/attachment/store.go",
+    "before": "if len(data) != ref.Bytes || session.ImageID(hex.EncodeToString(digest[:])) != ref.ID {",
+    "after": "if len(data) != ref.Bytes || session.ImageID(hex.EncodeToString(digest[:])) == \"\" {",
+    "test": "^TestStore_ReadVerifiesTheObject$"
+  },
+  {
+    "id": "attachment-flatten-before-scale",
+    "file": "internal/adapter/attachment/normalize.go",
+    "before": "\t\tcurrent = resize(current, width, height)\n\t}\n\toutput, err := encodeImage(current, 88)",
+    "after": "\t\tcurrent = resize(decoded, width, height)\n\t}\n\toutput, err := encodeImage(current, 88)",
+    "test": "^TestStore_TransparentImagesStayWhiteWhenScaled$"
+  },
+  {
+    "id": "attachment-conversion-limit",
+    "file": "internal/adapter/attachment/store.go",
+    "before": "conversions: make(chan struct{}, maxConversions),",
+    "after": "conversions: make(chan struct{}, maxConversions+1),",
+    "test": "^TestStore_LimitsConcurrentConversions$"
+  },
+  {
+    "id": "ecmascript-bom-blank",
+    "file": "internal/core/text/space.go",
+    "before": "'\\u00a0', '\\ufeff', '\\n'",
+    "after": "'\\u00a0', '\\n'",
+    "test": "^TestTrimSpace_ECMAScriptWhiteSpaceAndLineTerminators$"
+  },
+  {
+    "id": "search-stderr-budget",
+    "file": "internal/adapter/tool/search/ripgrep.go",
+    "before": "stderrMaxBytes = 65_536",
+    "after": "stderrMaxBytes = 64_000",
+    "test": "^TestSearch_Retains65536ByteDiagnosticTail$"
+  },
+  {
+    "id": "error-result-spill",
+    "file": "internal/app/tool/runtime.go",
+    "before": "if !validated.keepInline && result.Image == nil {",
+    "after": "if !result.IsError && !validated.keepInline && result.Image == nil {",
+    "test": "^TestRuntime_SpillsErrorsBeforeDurableTruncation$"
+  },
+  {
+    "id": "historical-spill-exact-locator",
+    "file": "internal/adapter/tool/workspace/history.go",
+    "before": "event.Record.Type == session.RecordToolResult && mentionsSpill(event.Record.Result.Output, path)",
+    "after": "event.Record.Type == session.RecordToolResult",
+    "test": "^TestRoot_HistoricalSpillAllowDenyMatrix$"
+  },
+  {
+    "id": "historical-spill-workspace-partition",
+    "file": "internal/adapter/tool/workspace/history.go",
+    "before": "filepath.Base(filepath.Dir(dir)) == fmt.Sprintf(\"workspace-%x\", sum[:8])",
+    "after": "(filepath.Base(filepath.Dir(dir)) == fmt.Sprintf(\"workspace-%x\", sum[:8]) || strings.HasPrefix(filepath.Base(filepath.Dir(dir)), \"workspace-\"))",
+    "test": "^TestRoot_HistoricalSpillAllowDenyMatrix$"
+  },
+  {
+    "id": "historical-spill-link-denial",
+    "file": "internal/adapter/tool/workspace/history.go",
+    "before": "info, err := lstatPath(current)",
+    "after": "info, err := statPath(current)",
+    "test": "^TestRoot_HistoricalSpillRejectsUnsafeFilesAndDirectories$"
+  },
+  {
+    "id": "grep-null-record",
+    "file": "internal/adapter/tool/search/grep.go",
+    "before": "default:\n\t\t\treturn nil, malformed(\"a record is not an object\")",
+    "after": "default:\n\t\t\tcontinue",
+    "test": "^TestGrep_ParsesFramingBeforeMatchData$"
+  },
+  {
+    "id": "settings-lock-canceled-entry",
+    "file": "internal/adapter/settings/file/file.go",
+    "before": "for {\n\t\tif err := ctx.Err(); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tlock, err := settingsOpenFile",
+    "after": "for {\n\t\tlock, err := settingsOpenFile",
+    "test": "^TestProvider_PersistCanceledBeforeLock$"
+  },
+  {
+    "id": "settings-lock-acquired-cancellation",
+    "file": "internal/adapter/settings/file/file.go",
+    "before": "defer func() { _ = settingsRemove(path) }()\n\t\t\tif err := ctx.Err(); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\treturn operation()",
+    "after": "defer func() { _ = settingsRemove(path) }()\n\t\t\treturn operation()",
+    "test": "^TestProvider_PersistCanceledDuringLockAcquisition$"
+  },
+  {
+    "id": "settings-lock-cancellation-priority",
+    "file": "internal/adapter/settings/file/file.go",
+    "before": "case <-deadline.C:\n\t\t\tif err := ctx.Err(); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\treturn errors.New(\"settings writer lock timed out\")",
+    "after": "case <-deadline.C:\n\t\t\treturn errors.New(\"settings writer lock timed out\")",
+    "test": "^TestWithLock_CancellationWinsExpiredWait$"
+  },
+  {
+    "id": "tool-concurrency-cap",
+    "file": "internal/app/tool/runtime.go",
+    "before": "const maxConcurrentCalls = 10",
+    "after": "const maxConcurrentCalls = 64",
+    "test": "^TestRuntime_LimitsConcurrentCallsThroughCheckApprovalAndExecution$"
+  },
+  {
+    "id": "tool-omitted-arguments-denial",
+    "file": "internal/app/tool/runtime.go",
+    "before": "if candidate.LimitArguments().ArgumentsOmitted {",
+    "after": "if false && candidate.LimitArguments().ArgumentsOmitted {",
+    "test": "^TestRuntime_OversizedArgumentsNeverReachToolCallbacks$"
+  },
+  {
+    "id": "tool-cancel-keeps-body-failure",
+    "file": "internal/app/tool/runtime.go",
+    "before": "// a failure the body returned keeps its own text and classification.\n\tif err != nil {",
+    "after": "// a failure the body returned keeps its own text and classification.\n\tif err != nil && ctx.Err() == nil {",
+    "test": "^TestRuntime_CancellationKeepsTheBodyFailure$"
+  },
+  {
+    "id": "agent-arguments-before-journal",
+    "file": "internal/app/agent/engine.go",
+    "before": "completion.Calls[index] = completion.Calls[index].LimitArguments()",
+    "after": "// Oversized proposals bypass normalization.",
+    "test": "^TestEngine_OversizedArgumentsProduceRecoverableResults$"
+  },
+  {
+    "id": "provider-arguments-recovery",
+    "file": "internal/adapter/model/provider/responses.go",
+    "before": "if !call.AppendArguments(event.Delta) {\n\t\t\t\treturn nil",
+    "after": "if !call.AppendArguments(event.Delta) {\n\t\t\t\treturn &llm.Error{Code: llm.ErrorProtocol, Provider: provider.id, Cause: errors.New(\"tool arguments exceed size limit\")}",
+    "test": "^TestProvider_ArgumentLimitsKeepCallsRecoverable$"
+  },
+  {
+    "id": "session-omitted-arguments-result",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": "if call.ArgumentsOmitted && !record.Result.IsError {",
+    "after": "if false && call.ArgumentsOmitted && !record.Result.IsError {",
+    "test": "^TestSessionV2Arguments_RejectsChangedContract$"
+  },
+  {
+    "id": "web-search-audit-failure",
+    "file": "internal/adapter/model/provider/search.go",
+    "before": "return fmt.Errorf(\"%w: %w\", llm.ErrSearchAudit, err)",
+    "after": "return nil",
+    "test": "^TestSearch_AuditFailurePreventsEveryProviderDispatch$"
+  },
+  {
+    "id": "web-search-audit-call-kind",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": "if call == nil || call.Name != \"web_search\" || call.ArgumentsOmitted {",
+    "after": "if call == nil || call.ArgumentsOmitted {",
+    "test": "^TestSessionV2WebSearch_RejectsChangedContract$"
+  },
+  {
+    "id": "credential-lock-canceled-entry",
+    "file": "internal/adapter/credential/file/store.go",
+    "before": "for {\n\t\tif err := ctx.Err(); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tfile, err := credentialOpenFile",
+    "after": "for {\n\t\tfile, err := credentialOpenFile",
+    "test": "^TestWithLock_PreCanceledDoesNotCreateLock$"
+  },
+  {
+    "id": "credential-lock-acquired-cancellation",
+    "file": "internal/adapter/credential/file/store.go",
+    "before": "defer func() { _ = credentialRemove(path) }()\n\t\t\tif err := ctx.Err(); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\treturn operation()",
+    "after": "defer func() { _ = credentialRemove(path) }()\n\t\t\treturn operation()",
+    "test": "^TestStore_CanceledDuringAcquisitionAndRead$"
+  },
+  {
+    "id": "credential-lock-cancellation-priority",
+    "file": "internal/adapter/credential/file/store.go",
+    "before": "case <-deadline.C:\n\t\t\tif err := ctx.Err(); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\treturn errors.New(\"credential writer lock timed out\")",
+    "after": "case <-deadline.C:\n\t\t\treturn errors.New(\"credential writer lock timed out\")",
+    "test": "^TestWithLock_CancellationWinsExpiredWait$"
+  },
+  {
+    "id": "credential-mutation-cancellation",
+    "file": "internal/adapter/credential/file/store.go",
+    "before": "\t\tif err := ctx.Err(); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tvar current *llm.Credential",
+    "after": "\t\tvar current *llm.Credential",
+    "test": "^TestStore_CanceledDuringAcquisitionAndRead$"
+  },
+  {
+    "id": "subagent-slot-transfer",
+    "file": "internal/app/subagent/service.go",
+    "before": "service.unreserveLocked(current.pool)",
+    "after": "service.reserved[current.pool] += 0",
+    "test": "^TestService_ConcurrentCreationsHoldOneSlotEach$"
+  },
+  {
+    "id": "subagent-inbox-cancellation",
+    "file": "internal/app/agent/agent.go",
+    "before": "if err := ctx.Err(); err != nil {",
+    "after": "if err := ctx.Err(); false && err != nil {",
+    "test": "^TestAgent_NotifyContextChecksCancellationAtInboxAcceptance$"
+  },
+  {
+    "id": "subagent-post-interrupt-wake",
+    "file": "internal/app/agent/agent.go",
+    "before": "if agent.busy && agent.turnAbortedLocked() {",
+    "after": "if false && agent.busy && agent.turnAbortedLocked() {",
+    "test": "^TestAgent_NoticeAfterInterruptWakesNextTurn$"
+  },
+  {
+    "id": "subagent-teardown-priority",
+    "file": "internal/app/subagent/service.go",
+    "before": "func teardownFailure(id string, err error) error {\n\tif err == nil {",
+    "after": "func teardownFailure(id string, err error) error {\n\tif err == nil || true {",
+    "test": "^TestService_(TeardownFailureOverridesSuccessfulSettlement|CancelledJobWithTeardownFailureIsFailed|StartupCancellationCannotMaskTeardownFailure)$"
+  },
+  {
+    "id": "subagent-job-admission-first",
+    "file": "internal/app/subagent/service.go",
+    "before": "started := make(chan struct{})",
+    "after": "_, _ = service.create(ctx, request, session.SubagentOneShot)\n\tstarted := make(chan struct{})",
+    "test": "^TestService_BackgroundAdmissionPrecedesForkSideEffects$"
+  },
+  {
+    "id": "subagent-tool-only-closing",
+    "file": "internal/core/session/subagent.go",
+    "before": "if len(record.Message.Content) > 0 || hasCalls {",
+    "after": "if len(record.Message.Content) > 0 || false && hasCalls {",
+    "test": "^TestFinalAssistantText_LastToolProposalWithholdsEarlierProgress$"
+  },
+  {
+    "id": "subagent-preserve-label",
+    "file": "internal/app/subagent/service.go",
+    "before": "return request.Description, nil",
+    "after": "return strings.TrimSpace(request.Description), nil",
+    "test": "^TestService_DelegationPreservesDescriptionAndBlankPrompt$"
+  },
+  {
+    "id": "subagent-label-notification-budget",
+    "file": "internal/core/session/subagent.go",
+    "before": "const MaxSubagentLabelBytes = 128 << 10",
+    "after": "const MaxSubagentLabelBytes = MaxArgumentsBytes",
+    "test": "^TestRecordValidateRejectsEveryInvalidShape$"
+  },
+  {
+    "id": "subagent-settle-notice-before-done",
+    "file": "internal/app/subagent/service.go",
+    "before": "\tcurrent.closeErr = failure\n\tparent := service.children[current.parent]\n\tdelivered := false\n\tif notice != nil && service.active && (parent == nil || !parent.closing) {\n\t\t// The only failure is a parent that is no longer live; the notice\n\t\t// then has no reader, as during teardown.\n\t\tdelivered = service.registry.Notify(current.parent, *notice) == nil\n\t}\n\tif parent != nil {\n\t\tif delivered {\n\t\t\tparent.delivered++\n\t\t}\n\t\twakeLocked(parent)\n\t}\n\tclose(current.done)\n\treleased(current.id)\n",
+    "after": "\tcurrent.closeErr = failure\n\tclose(current.done)\n\treleased(current.id)\n\tparent := service.children[current.parent]\n\tdelivered := false\n\tif notice != nil && service.active && (parent == nil || !parent.closing) {\n\t\t// The only failure is a parent that is no longer live; the notice\n\t\t// then has no reader, as during teardown.\n\t\tdelivered = service.registry.Notify(current.parent, *notice) == nil\n\t}\n\tif parent != nil {\n\t\tif delivered {\n\t\t\tparent.delivered++\n\t\t}\n\t\twakeLocked(parent)\n\t}\n",
+    "test": "^TestService_SettlementNoticePrecedesReleaseWaiters$"
+  },
+  {
+    "id": "todo-ecmascript-durable-trim",
+    "file": "internal/core/session/todo.go",
+    "before": "item.Content != text.TrimSpace(item.Content)",
+    "after": "false && item.Content != text.TrimSpace(item.Content)",
+    "test": "^TestTodoWrite_ECMAScriptTrimmedDurableContent$"
+  },
+  {
+    "id": "goal-ecmascript-durable-text",
+    "file": "internal/core/session/goal.go",
+    "before": "value == text.TrimSpace(value) && len(value) <= MaxGoalTextBytes",
+    "after": "value == text.TrimSpace(strings.TrimSpace(value)) && len(value) <= MaxGoalTextBytes",
+    "test": "^TestGoalChange_ECMAScriptDurableTextAndIDs$"
+  },
+  {
+    "id": "skill-explicit-incomplete-discovery",
+    "file": "internal/adapter/tool/skill/provider.go",
+    "before": "if len(names) > 0 {",
+    "after": "if false && len(names) > 0 {",
+    "test": "^TestStepContext_ExplicitInvocationFailsOnIncompleteDiscovery$"
+  },
+  {
+    "id": "question-multiselect-custom-step",
+    "file": "internal/adapter/tui/question.go",
+    "before": "state.selected == nil && state.current().MultiSelect && len(answer.Selected) > 0",
+    "after": "false && state.selected == nil && state.current().MultiSelect && len(answer.Selected) > 0",
+    "test": "^TestModelQuestion_MultiSelectKeepsChoicesForCustomStep$"
+  },
+  {
+    "id": "attachment-reference-claim",
+    "file": "internal/app/llm/images.go",
+    "before": "return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, width: image.Width, height: image.Height}",
+    "after": "return imageContent{id: image.ID, mediaType: image.MediaType, width: image.Width, height: image.Height}",
+    "test": "^Test(ResolveImages_VerifiesEveryReferenceToOneObject|CallStream_KeepsTheImagePayloadWithinTheBudget)$"
+  },
+  {
+    "id": "attachment-reference-media-type",
+    "file": "internal/app/llm/images.go",
+    "before": "return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, width: image.Width, height: image.Height}",
+    "after": "return imageContent{id: image.ID, bytes: image.Bytes, width: image.Width, height: image.Height}",
+    "test": "^TestResolveImages_VerifiesEveryReferenceToOneObject$"
+  },
+  {
+    "id": "attachment-reference-width",
+    "file": "internal/app/llm/images.go",
+    "before": "return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, width: image.Width, height: image.Height}",
+    "after": "return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, height: image.Height}",
+    "test": "^TestResolveImages_VerifiesEveryReferenceToOneObject$"
+  },
+  {
+    "id": "attachment-reference-height",
+    "file": "internal/app/llm/images.go",
+    "before": "return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, width: image.Width, height: image.Height}",
+    "after": "return imageContent{id: image.ID, mediaType: image.MediaType, bytes: image.Bytes, width: image.Width}",
+    "test": "^TestResolveImages_VerifiesEveryReferenceToOneObject$"
+  },
+  {
+    "id": "goal-stop-round-owner",
+    "file": "internal/app/goal/goal.go",
+    "before": "if round != nil {\n\t\t\t\tref = round\n\t\t\t}",
+    "after": "if false {\n\t\t\t\tref = round\n\t\t\t}",
+    "test": "^TestService_SettleUsesStoppedRoundRef$"
+  },
+  {
+    "id": "goal-admission-stop-owner",
+    "file": "internal/app/goal/goal.go",
+    "before": "slices.Contains(outcome.disarm, ref)",
+    "after": "slices.ContainsFunc(outcome.disarm, func(session.GoalRef) bool { return true })",
+    "test": "^TestService_SettleUsesStoppedRoundRef$"
+  },
+  {
+    "id": "goal-settle-keeps-pause",
+    "file": "internal/app/goal/goal.go",
+    "before": "outcome.disarm = append(outcome.disarm, *ref)",
+    "after": "outcome = settlement{disarm: []session.GoalRef{*ref}}",
+    "test": "^TestService_SettleWindowKeepsACancelledRoundPause$"
+  },
+  {
+    "id": "goal-failure-drops-pause",
+    "file": "internal/app/goal/goal.go",
+    "before": "if record.Outcome != session.OutcomeCanceled && outcome.pause != nil && *outcome.pause == *ref {",
+    "after": "if false && record.Outcome != session.OutcomeCanceled && outcome.pause != nil && *outcome.pause == *ref {",
+    "test": "^TestService_SettleWindowKeepsACancelledRoundPause$"
+  },
+  {
+    "id": "prune-relieves-pressure",
+    "file": "internal/app/compaction/service.go",
+    "before": "if pruned && !request.Force && estimateSurface(surface) < threshold {",
+    "after": "if false && pruned && !request.Force && estimateSurface(surface) < threshold {",
+    "test": "^TestMaybe_PruningAloneRelievesPressure$"
+  },
+  {
+    "id": "prune-replacement-checked",
+    "file": "internal/core/session/prune.go",
+    "before": "if !ok || pruned != data.Output {",
+    "after": "if !ok || pruned == \"\" {",
+    "test": "^TestSurface_AppliesRecordedPrunes$"
+  },
+  {
+    "id": "compaction-rejects-truncated-summary",
+    "file": "internal/app/compaction/service.go",
+    "before": "if completion.Stop == llm.StopMaxTokens {",
+    "after": "if false && completion.Stop == llm.StopMaxTokens {",
+    "test": "^TestMaybe_TruncatedSummary(FailsCompaction|PreservesFinishFailure)$"
+  },
+  {
+    "id": "sandbox-runner-failure-priority",
+    "file": "internal/platform/process/runner.go",
+    "before": "if request.Mode != ModeHost && result.ExitCode > 0 {",
+    "after": "if false && request.Mode != ModeHost && result.ExitCode > 0 {",
+    "test": "^TestRunnerRun_RunnerFailureOutranksDenial$"
+  },
+  {
+    "id": "process-term-grace",
+    "file": "internal/platform/process/runner.go",
+    "before": "if request.TerminationGrace > 0 {",
+    "after": "if false && request.TerminationGrace > 0 {",
+    "test": "^TestRunnerRun_GraceAllowsTERMTrapToFinish$"
+  },
+  {
+    "id": "job-decoded-output-budget",
+    "file": "internal/app/job/ring.go",
+    "before": "writer.output.service.write(writer.output.record, writer.channel, decodeUTF8(pending[:complete]))",
+    "after": "writer.output.service.write(writer.output.record, writer.channel, pending[:complete])",
+    "test": "^TestOutput_DecodesBeforeCountingRetention$"
+  },
+  {
+    "id": "job-output-status-envelope",
+    "file": "internal/adapter/tool/job/output.go",
+    "before": "limit := session.MaxTextBytes - len(status) - 1",
+    "after": "limit := session.MaxTextBytes",
+    "test": "^TestJobOutput_LargeValueKeepsFinalEnvelope$"
+  },
+  {
+    "id": "job-explicit-empty-reason",
+    "file": "internal/app/job/service.go",
+    "before": "if reason != nil {",
+    "after": "if reason != nil && *reason != \"\" {",
+    "test": "^TestService_ExplicitEmptyKillReasonReplacesPriorIntent$"
+  },
+  {
+    "id": "job-wait-identity-priority",
+    "file": "internal/adapter/tool/job/provider.go",
+    "before": "if _, err := provider.jobs.Get(invocation.SessionID, arguments.JobID); err != nil {",
+    "after": "if _, err := provider.jobs.Get(invocation.SessionID, arguments.JobID); false && err != nil {",
+    "test": "^TestJobOutput_IdentityErrorsPrecedeInvalidWait$"
+  },
+  {
+    "id": "bash-handoff-cancellation",
+    "file": "internal/adapter/tool/shell/bash.go",
+    "before": "if ctx.Err() != nil {\n\t\treturn provider.abortForeground(ctx, owner, id)\n\t}",
+    "after": "if false && ctx.Err() != nil {\n\t\treturn provider.abortForeground(ctx, owner, id)\n\t}",
+    "test": "^TestBash_ForegroundHandoffCancellationKillsOwnedJob$"
+  },
+  {
+    "id": "compaction-inherited-route",
+    "file": "internal/app/compaction/service.go",
+    "before": "route := request.Route",
+    "after": "route := session.SubagentRoute{}",
+    "test": "^TestMaybe_UsesTheInheritedRouteForThresholdAndSummary$"
+  },
+  {
+    "id": "compaction-sorted-shadow",
+    "file": "internal/app/compaction/service.go",
+    "before": "slices.Sort(sequences)",
+    "after": "sequences = slices.Clip(sequences)",
+    "test": "^TestMaybe_SecondCompactionRecordsSortedShadowedSequences$"
+  },
+  {
+    "id": "tool-failure-classification",
+    "file": "internal/app/tool/runtime.go",
+    "before": "\treturn errorText(err), &classification\n",
+    "after": "\treturn errorText(err), nil\n",
+    "test": "^TestRuntime_RecordsDeclaredFailureClassifications$"
+  },
+  {
+    "id": "tool-meta-recorded",
+    "file": "internal/app/tool/runtime.go",
+    "before": "\t\tresult.Meta = &meta\n",
+    "after": "\t\t_ = meta\n",
+    "test": "^TestRuntime_FitsMetadataAndRejectsAnotherToolsMember$"
+  },
+  {
+    "id": "tool-meta-owner-order",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": "meta != nil && meta.Tool() != call.Name",
+    "after": "meta != nil && false",
+    "test": "^TestSessionV2StructuredResults_RejectsChangedContract$"
+  },
+  {
+    "id": "tool-meta-fit-drops-an-item",
+    "file": "internal/core/session/toolresult.go",
+    "before": "sort.Search(n, func(count int) bool",
+    "after": "sort.Search(n+1, func(count int) bool",
+    "test": "^TestToolMeta_FitKeepsTheEncodingWithinTheBudget$"
+  },
+  {
+    "id": "tool-repair-unknown-outcome",
+    "file": "internal/adapter/session/jsonl/jsonl.go",
+    "before": "interrupted := coresession.InterruptedToolResult(callID)",
+    "after": "interrupted := coresession.ToolResult{CallID: callID, Output: \"Error: interrupted before a result was committed\", IsError: true, Error: &coresession.ToolError{Name: \"ToolNotStartedError\", Code: \"TOOL_NOT_STARTED\"}}",
+    "test": "^TestLog_RepairClassifiesAnUnknownOutcome$"
+  },
+  {
+    "id": "tool-error-only-on-failure",
+    "file": "internal/core/session/validate.go",
+    "before": "\t\tif !record.Result.IsError {\n\t\t\treturn invalid(\"successful tool result carries an error classification\")",
+    "after": "\t\tif false {\n\t\t\treturn invalid(\"successful tool result carries an error classification\")",
+    "test": "^TestRecord_ResultErrorAndMetaFollowTheOutcome$"
+  },
+  {
+    "id": "fetch-expired-deadline-in-decoder",
+    "file": "internal/adapter/web/fetch/compression.go",
+    "before": "func (reader *contextReader) Read(buffer []byte) (int, error) {",
+    "after": "func (reader *contextReader) Read(buffer []byte) (int, error) {\n\treader.ctx = context.WithoutCancel(reader.ctx)",
+    "test": "^TestFetch_ExpiredDeadlineStopsBufferedMultiLayerDecoding$"
+  },
+  {
+    "id": "fetch-intermediate-decompression-budget",
+    "file": "internal/adapter/web/fetch/compression.go",
+    "before": "if len(decoders) > 0 {",
+    "after": "if false && len(decoders) > 0 {",
+    "test": "^TestFetch_RejectsIntermediateDecompressionBomb$"
+  },
+  {
+    "id": "fetch-content-encoding-layer-cap",
+    "file": "internal/adapter/web/fetch/compression.go",
+    "before": "if len(codings) > maxContentEncodings {",
+    "after": "if false && len(codings) > maxContentEncodings {",
+    "test": "^TestFetch_RejectsExcessiveContentEncodingLayersBeforeReading$"
+  },
+  {
+    "id": "fetch-cancellation-before-body-read",
+    "file": "internal/adapter/web/fetch/compression.go",
+    "before": "if err := reader.ctx.Err(); err != nil {",
+    "after": "if err := reader.ctx.Err(); false && err != nil {",
+    "test": "^TestFetch_AlreadyCancelledContextDoesNotReadBody$"
+  },
+  {
+    "id": "fetch-cancellation-after-body-read",
+    "file": "internal/adapter/web/fetch/compression.go",
+    "before": "if ctxErr := reader.ctx.Err(); ctxErr != nil {",
+    "after": "if ctxErr := reader.ctx.Err(); false && ctxErr != nil {",
+    "test": "^TestFetch_CancellationAfterFirstBodyReadStopsDecoding$"
+  },
+  {
+    "id": "fetch-cancellation-in-buffered-decoder",
+    "file": "internal/adapter/web/fetch/compression.go",
+    "before": "source = &contextReader{ctx: ctx, source: decoder}",
+    "after": "source = decoder",
+    "test": "^TestDecompress_CancellationStopsBufferedDecoder$"
+  },
+  {
+    "id": "fetch-decompressed-byte-cap",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "source: source, remaining: maxResponseBytes",
+    "after": "source: source, remaining: maxResponseBytes * 3",
+    "test": "^TestFetch_StopsDecompressionBeforeBombTrailer$"
+  },
+  {
+    "id": "fetch-bypass-decompression",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "source: source, remaining: maxResponseBytes",
+    "after": "source: io.MultiReader(io.LimitReader(source, 0), response.Body), remaining: maxResponseBytes",
+    "test": "^TestFetch_DecodesSupportedContentEncodings$"
+  },
+  {
+    "id": "fetch-utf16-budget",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "if scalar > 0xffff {",
+    "after": "if false && scalar > 0xffff {",
+    "test": "^TestFetch_TruncatesUTF16WithoutSplittingEmoji$"
+  },
+  {
+    "id": "fetch-url-idna-mapping",
+    "file": "internal/adapter/web/fetch/policy.go",
+    "before": "idna.Lookup.ToASCII(host)",
+    "after": "idna.Lookup.ToASCII(\"example.com\")",
+    "test": "^TestParseURL_NormalizesNormalURLs$"
+  },
+  {
+    "id": "fetch-address-family-interleave",
+    "file": "internal/adapter/web/fetch/dial.go",
+    "before": "pending := interleaveAddresses(addresses)",
+    "after": "pending := addresses",
+    "test": "^TestDialPinned_InterleavesAndJoinsLateConnections$"
+  },
+  {
+    "id": "fetch-close-late-connections",
+    "file": "internal/adapter/web/fetch/dial.go",
+    "before": "if result.connection != nil {",
+    "after": "if false && result.connection != nil {",
+    "test": "^TestDialPinned_InterleavesAndJoinsLateConnections$"
+  },
+  {
+    "id": "fetch-cancelled-winner",
+    "file": "internal/adapter/web/fetch/dial.go",
+    "before": "winner != nil && ctx.Err() != nil",
+    "after": "winner != nil && false && ctx.Err() != nil",
+    "test": "^TestDialPinned_InterleavesAndJoinsLateConnections$"
+  },
+  {
+    "id": "fetch-block-fallback",
+    "file": "internal/adapter/web/fetch/fetch.go",
+    "before": "client.dialPinned(ctx, \"tcp\", addresses, port, ticker.C)",
+    "after": "client.dialPinned(ctx, \"tcp\", addresses, port, nil)",
+    "test": "^TestFetch_FallsBackWhileFirstValidatedAddressIsBlocked$"
+  },
+  {
+    "id": "file-cancel-before-publication",
+    "file": "internal/adapter/tool/file/provider.go",
+    "before": "if err = ctx.Err(); err != nil {",
+    "after": "if err = ctx.Err(); false {",
+    "test": "^Test(Write|Edit)_CancellationDuringSyncDoesNotPublish$"
+  },
+  {
+    "id": "file-physical-parent",
+    "file": "internal/adapter/tool/workspace/workspace.go",
+    "before": "if !hasParent(target) {",
+    "after": "if true {",
+    "test": "^TestRoot_PhysicalParentTraversal$"
+  },
+  {
+    "id": "file-missing-parent",
+    "file": "internal/adapter/tool/workspace/workspace.go",
+    "before": "if hasParent(suffix) {",
+    "after": "if false && hasParent(suffix) {",
+    "test": "^TestRoot_PhysicalParentTraversal$"
+  },
+  {
+    "id": "file-offset-range",
+    "file": "internal/adapter/tool/file/read.go",
+    "before": "*arguments.Offset > maxOffset",
+    "after": "*arguments.Offset > math.MaxFloat64",
+    "test": "^TestRead_RejectsOffsetBeyondSupportedRange$"
+  },
+  {
+    "id": "web-fetch-encoded-network-budget",
+    "file": "internal/adapter/web/fetch/compression.go",
+    "before": "// Empty gzip members consume network bytes without producing final output.\n\tsource = &expansionReader{cappedReader{source: source, remaining: maxResponseBytes}}",
+    "after": "// Empty gzip members consume network bytes without producing final output.",
+    "test": "^TestFetch_(BoundsEncodedNetworkInput|RejectsSingleLayerCompressedNetworkBomb|IdentityNetworkOverflowRequiresEncodingHeader)$"
+  },
+  {
+    "id": "web-search-audit-query-binding",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": " || data.Query != accepted[data.Index-1]",
+    "after": "",
+    "test": "^TestSessionV2WebSearch_(FrozenContract|RejectsChangedContract)$|^TestLog_WebSearchAuditMatchesDistinctCallQueries$"
+  },
+  {
+    "id": "web-search-audit-omitted-arguments",
+    "file": "internal/adapter/session/jsonl/order.go",
+    "before": "if call == nil || call.Name != \"web_search\" || call.ArgumentsOmitted {",
+    "after": "if call == nil || call.Name != \"web_search\" {",
+    "test": "^TestSessionV2WebSearch_FrozenContract$|^TestLog_WebSearchAuditRejectsOmittedArguments$"
+  },
+  {
+    "id": "sandbox-read-only-mutation",
+    "file": "internal/adapter/tool/file/sandbox.go",
+    "before": "if mode == session.SandboxReadOnly {",
+    "after": "if false && mode == session.SandboxReadOnly {",
+    "test": "^TestProvider_ReadOnlyEnforcedAtMutation$"
+  },
+  {
+    "id": "sandbox-after-approval",
+    "file": "internal/adapter/tool/file/write.go",
+    "before": "mode, err := mutationMode(ctx, invocation, arguments.SandboxPermissions, arguments.Justification)\n\tif err != nil {\n\t\treturn appTool.Result{}, err\n\t}",
+    "after": "mode, err := invocation.SandboxMode(ctx)\n\tif err != nil {\n\t\treturn appTool.Result{}, err\n\t}",
+    "test": "^TestProvider_ModeChangeDuringApprovalAndDirectDenial$"
+  },
+  {
+    "id": "sandbox-delegation-capture",
+    "file": "internal/app/subagent/service.go",
+    "before": "Sandbox: session.SandboxOverride(events)",
+    "after": "Sandbox: \"\"",
+    "test": "^TestService_SandboxCapturedAtDelegationAndRestored$"
+  },
+  {
+    "id": "sandbox-linux-network",
+    "file": "internal/platform/process/runner.go",
+    "before": "\"--die-with-parent\", \"--unshare-pid\",",
+    "after": "\"--die-with-parent\", \"--unshare-all\",",
+    "test": "^TestRunnerCommand_SandboxModesShareNetwork$"
+  },
+  {
+    "id": "sandbox-delegation-ownership",
+    "file": "internal/adapter/session/jsonl/sandbox.go",
+    "before": "if event.Record.Sandbox != nil &&",
+    "after": "if false && event.Record.Sandbox != nil &&",
+    "test": "^TestSandboxOrder_DelegationOwnership$"
+  },
+  {
+    "id": "sandbox-delegation-context-independent",
+    "file": "internal/app/agent/context.go",
+    "before": "sections = append(sections, contribution.Sections...)",
+    "after": "sections = contribution.Sections",
+    "test": "^TestEngine_CompleteRuntimeSnapshotLifecycle$"
+  },
+  {
+    "id": "search-failure-classification",
+    "file": "internal/adapter/tool/search/failure.go",
+    "before": "return &searchFailure{text: cause.Error(), code: code, cause: cause}",
+    "after": "return cause",
+    "test": "^TestSearch_PersistsFailureClassifications$"
+  },
+  {
+    "id": "search-glob-meta-through-save",
+    "file": "internal/adapter/tool/search/glob.go",
+    "before": "result.Text = renderGlob(paths, &ref)",
+    "after": "result.Text = renderGlob(paths, &ref)\n\tresult.Meta = nil",
+    "test": "^TestSearch_PersistsMetadataThroughSaveAndSpill$"
+  },
+  {
+    "id": "search-grep-meta-through-save",
+    "file": "internal/adapter/tool/search/grep.go",
+    "before": "result.Text = renderGrep(matches, &ref)",
+    "after": "result.Text = renderGrep(matches, &ref)\n\tresult.Meta = nil",
+    "test": "^TestSearch_PersistsMetadataThroughSaveAndSpill$"
+  },
+  {
+    "id": "search-grep-meta-group-order",
+    "file": "internal/adapter/tool/search/grep.go",
+    "before": "groups[match.path] = index",
+    "after": "groups[match.path] = 0",
+    "test": "^TestSearch_PersistsMetadataThroughSaveAndSpill$"
+  },
+  {
+    "id": "tool-meta-through-spill",
+    "file": "internal/app/tool/runtime.go",
+    "before": "text = retainInline(ctx, invocation, candidate.Name, text)",
+    "after": "before := text\n\t\t\ttext = retainInline(ctx, invocation, candidate.Name, text)\n\t\t\tif text != before { result.Meta = nil }",
+    "test": "^TestRuntime_SpillKeepsMetadataAndPanicsDropIt$"
+  },
+  {
+    "id": "shell-sandbox-classification",
+    "file": "internal/adapter/tool/shell/bash.go",
+    "before": "return appTool.Result{}, &toolFailure{text: run.err.Error(), info: session.ToolError{Name: \"SandboxUnavailableError\", Code: \"SANDBOX_UNAVAILABLE\"}, cause: run.err}",
+    "after": "return appTool.Result{}, run.err",
+    "test": "^TestBash_PersistsSandboxClassificationForActualModes$"
+  },
+  {
+    "id": "shell-aborted-wait-classification",
+    "file": "internal/adapter/tool/shell/bash.go",
+    "before": "return appTool.Result{}, aborted(ctx.Err())\n}\n\nfunc finish",
+    "after": "return appTool.Result{}, errors.New(\"tool call aborted\")\n}\n\nfunc finish",
+    "test": "^TestBash_PersistsAbortedWaitAndFallback$"
+  },
+  {
+    "id": "shell-aborted-fallback-classification",
+    "file": "internal/adapter/tool/shell/bash.go",
+    "before": "return appTool.Result{}, aborted(errors.Join(ctx.Err(), run.err))",
+    "after": "return appTool.Result{}, errors.New(\"tool call aborted\")",
+    "test": "^TestBash_PersistsAbortedWaitAndFallback$"
+  },
+  {
+    "id": "file-error-classification",
+    "file": "internal/adapter/tool/file/error.go",
+    "before": "func (failure *fsError) ToolError() session.ToolError {",
+    "after": "func (failure *fsError) ToolErrorOmitted() session.ToolError {",
+    "test": "^TestFileResults_ClassifyFailures$"
+  },
+  {
+    "id": "file-result-metadata",
+    "file": "internal/adapter/tool/file/write.go",
+    "before": "Meta: &session.ToolMeta{Write: &meta}",
+    "after": "Meta: func() *session.ToolMeta { _ = meta; return nil }()",
+    "test": "^TestFileResults_DiffsMatchPublishedFiles$"
+  },
+  {
+    "id": "file-spill-keeps-meta",
+    "file": "internal/app/tool/runtime.go",
+    "before": "text = retainInline(ctx, invocation, candidate.Name, text)",
+    "after": "text = retainInline(ctx, invocation, candidate.Name, text)\n\t\t\tresult.Meta = nil",
+    "test": "^TestRuntime_SpillKeepsMetadataAndPanicsDropIt$"
+  },
+  {
+    "id": "file-diff-LF-basis",
+    "file": "internal/adapter/tool/file/diff.go",
+    "before": "return strings.ReplaceAll(string(bytes.TrimPrefix(raw, utf8BOM)), \"\\r\\n\", \"\\n\")",
+    "after": "return string(bytes.TrimPrefix(raw, utf8BOM))",
+    "test": "^TestFileResults_DiffsMatchPublishedFiles$"
+  },
+  {
+    "id": "file-diff-basis-cap",
+    "file": "internal/adapter/tool/file/observe.go",
+    "before": "if len(before)+count >= maxEditBytes {",
+    "after": "if len(before)+count > maxEditBytes {",
+    "test": "^TestDigestFile_RetentionAndCancellation$"
+  },
+  {
+    "id": "approval-decision-commit-serializes-stop",
+    "file": "internal/app/approval/service.go",
+    "before": "service.mu.Lock()\n\tdefer service.mu.Unlock()\n\t// The stop transition and durable outcome must serialize; cleanup cannot",
+    "after": "service.mu.Lock()\n\tservice.mu.Unlock()\n\t// The stop transition and durable outcome must serialize; cleanup cannot",
+    "test": "^TestService_CleanupDuringDecisionCommit$"
+  },
+  {
+    "id": "approval-id-process-independent",
+    "file": "internal/app/approval/service.go",
+    "before": "id := \"approval-\" + rand.Text()",
+    "after": "id := \"approval-\" + request.Call.ID + rand.Text()[:0]",
+    "test": "^TestService_QuestionIDsNeedNoProcessState$"
+  },
+  {
+    "id": "sandbox-complete-snapshot-resume",
+    "file": "internal/app/agent/context.go",
+    "before": "if session.Text(*node.Message) == text {",
+    "after": "if false && session.Text(*node.Message) == text {",
+    "test": "^TestEngine_CompleteRuntimeSnapshotLifecycle$"
+  },
+  {
+    "id": "sandbox-complete-snapshot-compaction",
+    "file": "internal/app/agent/context.go",
+    "before": "surface, err := session.Surface(events)",
+    "after": "uncompacted := slices.DeleteFunc(slices.Clone(events), func(event session.Event) bool { return event.Record.Type == session.RecordCompactionSummary })\n\tsurface, err := session.Surface(uncompacted)",
+    "test": "^TestEngine_CompleteRuntimeSnapshotLifecycle$"
+  },
+  {
+    "id": "sandbox-policy-javascript-quote",
+    "file": "internal/core/session/sandbox.go",
+    "before": "case SandboxWorkspaceWrite:\n\t\treturn \"Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: \" + text.Quote(workspace) + \". Some platform temporary areas may also be writable.\"",
+    "after": "case SandboxWorkspaceWrite:\n\t\t_ = text.Quote(workspace)\n\t\tquoted, _ := json.Marshal(workspace)\n\t\treturn \"Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: \" + string(quoted) + \". Some platform temporary areas may also be writable.\"",
+    "test": "^TestSandboxPolicyText_JavaScriptWorkspaceVectors$"
+  },
+  {
+    "id": "goal-error-classification",
+    "file": "internal/app/goal/goal.go",
+    "before": "return session.ToolError{Name: \"GoalError\", Code: string(err.Code)}",
+    "after": "return session.ToolError{Name: \"HarnessError\", Code: string(err.Code)}",
+    "test": "^TestError_ClassifiesAsGoalError$"
+  },
+  {
+    "id": "goal-tool-error-classification",
+    "file": "internal/adapter/tool/goal/goal.go",
+    "before": "return session.ToolError{Name: \"HarnessError\", Code: err.code}",
+    "after": "return session.ToolError{Name: \"GoalError\", Code: err.code}",
+    "test": "^TestTools_PersistUpstreamClassifications$"
+  },
+  {
+    "id": "question-cancel-classification",
+    "file": "internal/app/question/question.go",
+    "before": "ErrCancelled = &Error{Code: \"ASK_CANCELLED\"",
+    "after": "ErrCancelled = &Error{Code: \"ASK_ABORTED\"",
+    "test": "^TestError_ClassifiesTheUpstreamFailures$"
+  },
+  {
+    "id": "question-intent-classification",
+    "file": "internal/app/question/question.go",
+    "before": "return classified(\"BAD_INTENT\", \"question %s declares intent %s without the detail it reviews\", question.ID, intent.Kind)",
+    "after": "return invalid(\"question %s declares intent %s without the detail it reviews\", question.ID, intent.Kind)",
+    "test": "^TestError_ClassifiesTheUpstreamFailures$"
+  },
+  {
+    "id": "web-error-keeps-code",
+    "file": "internal/app/web/web.go",
+    "before": "return session.ToolError{Name: \"WebError\", Code: string(failure.Code)}",
+    "after": "return session.ToolError{Name: \"WebError\", Code: string(CodeProviderError)}",
+    "test": "^TestError_ToolErrorKeepsTheCodeAndText$"
+  },
+  {
+    "id": "web-search-meta-answer",
+    "file": "internal/adapter/tool/web/web.go",
+    "before": "Answer: result.Content, Truncated: result.Truncated",
+    "after": "Answer: \"\", Truncated: result.Truncated",
+    "test": "^TestProvider_PersistsSearchMetadata$"
+  },
+  {
+    "id": "web-fetch-meta-effective-truncation",
+    "file": "internal/adapter/tool/web/web.go",
+    "before": "\treturn text + fetchFooter, true\n",
+    "after": "\treturn text + fetchFooter, result.Truncated\n",
+    "test": "^TestProvider_PersistsFetchMetadata$"
+  },
+  {
+    "id": "plugin-calls-release-unregisters",
+    "file": "internal/core/plugin/calls.go",
+    "before": "delete(calls.cancel, key)",
+    "after": "_ = key",
+    "test": "^TestCalls_ReleaseCancelsUnregistersAndUnblocksWait$"
+  },
+  {
+    "id": "wire-responses-projects-result-fields",
+    "file": "internal/adapter/model/provider/responses.go",
+    "before": "Output: responsesOutput(node.Result, images)})",
+    "after": "Output: node.Result})",
+    "test": "^TestStream_OmitsToolErrorsAndMetadataInEachWireFormat$"
+  },
+  {
+    "id": "wire-anthropic-projects-result-fields",
+    "file": "internal/adapter/model/provider/anthropic.go",
+    "before": "Content: anthropicResultContent(node.Result, images), IsError",
+    "after": "Content: node.Result, IsError",
+    "test": "^TestStream_OmitsToolErrorsAndMetadataInEachWireFormat$"
+  },
+  {
+    "id": "compaction-estimate-counts-output-only",
+    "file": "internal/app/compaction/service.go",
+    "before": "total += max(1, len(node.Result.Output)/4)",
+    "after": "total += max(1, len(fmt.Sprint(*node.Result))/4)",
+    "test": "^TestEstimateSurface_IgnoresToolErrorsAndMetadata$"
+  },
+  {
+    "id": "question-broker-failure-unclassified",
+    "file": "internal/app/question/question.go",
+    "before": "return nil, errBrokerFailed",
+    "after": "return nil, ErrUnavailable",
+    "test": "^TestService_BrokerFailuresStayUnclassified$"
+  },
+  {
+    "id": "question-invalid-answer-unclassified",
+    "file": "internal/app/question/question.go",
+    "before": "ErrInvalidAnswer = errors.New(\"the user-questions answerer returned an invalid answer batch\")",
+    "after": "ErrInvalidAnswer = &Error{Code: \"BAD_ANSWER\", Message: \"the user-questions answerer returned an invalid answer batch\"}",
+    "test": "^TestService_BrokerFailuresStayUnclassified$"
+  },
+  {
+    "id": "web-cleanup-cancels-operations",
+    "file": "internal/app/web/web.go",
+    "before": "service.operations.Cancel(nil)",
+    "after": "// cleanup no longer cancels in-flight operations",
+    "test": "^TestService_ShutdownCancelsAndWaitsForInFlightOperations$"
+  },
+  {
+    "id": "context-sections-follow-order",
+    "file": "internal/app/agent/context.go",
+    "before": "return cmp.Compare(left.Order, right.Order)",
+    "after": "return cmp.Compare(0, 0)",
+    "test": "^TestEngine_SnapshotSectionsFollowOrderNotRegistration$"
+  },
+  {
+    "id": "context-sections-sort-stably",
+    "file": "internal/app/agent/context.go",
+    "before": "slices.SortStableFunc(sections, func(left, right ContextSection) int {",
+    "after": "slices.SortFunc(sections, func(left, right ContextSection) int {",
+    "test": "^TestEngine_SnapshotKeepsRegistrationOrderAmongManyTiedSections$"
+  },
+  {
+    "id": "file-edit-actual-line-changes",
+    "file": "internal/adapter/tool/file/diff.go",
+    "before": "changes, complete := work.changedLines(ctx, a, b, 0, 0)",
+    "after": "changes, complete := []lineChange{{0, len(a), 0, len(b)}}, work.used == 0",
+    "test": "^TestEditResult_UsesActualChangesInsideLargeReplacement$"
+  },
+  {
+    "id": "file-ordinary-io-is-unclassified",
+    "file": "internal/adapter/tool/file/error.go",
+    "before": "default:\n\t\treturn err",
+    "after": "default:\n\t\treturn fsFailure(\"FS_IO_ERROR\", err)",
+    "test": "^TestFileResults_OrdinaryIOStaysUnclassified$"
+  },
+  {
+    "id": "file-permission-is-unclassified",
+    "file": "internal/adapter/tool/file/error.go",
+    "before": "case errors.Is(err, errBinary), errors.Is(err, errNotText):",
+    "after": "case errors.Is(err, fs.ErrPermission):\n\t\tcode = \"FS_PERMISSION_DENIED\"\n\tcase errors.Is(err, errBinary), errors.Is(err, errNotText):",
+    "test": "^TestReadResult_PermissionFailureStaysUnclassified$|^TestFileResults_OrdinaryIOStaysUnclassified$"
+  },
+  {
+    "id": "file-create-collision-checks-type",
+    "file": "internal/adapter/tool/file/provider.go",
+    "before": "case err == nil && info.Mode().IsRegular():",
+    "after": "case err == nil && !info.Mode().IsRegular():",
+    "test": "^TestWriteResult_CreateDirectoryCollisionIsNotRegular$"
+  },
+  {
+    "id": "file-create-classifies-publication-only",
+    "file": "internal/adapter/tool/file/provider.go",
+    "before": "staged, err := createTemp(filepath.Dir(target), \".\"+filepath.Base(target)+\".*.tmp\")\n\tif err != nil {\n\t\treturn err",
+    "after": "staged, err := createTemp(filepath.Dir(target), \".\"+filepath.Base(target)+\".*.tmp\")\n\tif err != nil {\n\t\treturn fsFailure(\"FS_IO_ERROR\", err)",
+    "test": "^TestFileResults_OrdinaryIOStaysUnclassified$|^TestWriteResult_ClassifiesOnlyFailedCreatePublication$"
+  },
+  {
+    "id": "file-edit-diff-work-budget",
+    "file": "internal/adapter/tool/file/diff.go",
+    "before": "ctx.Err() != nil || units > maxDiffWork-work.used",
+    "after": "ctx.Err() != nil",
+    "test": "^TestDiffWork_BoundsSearchAndChecksCancellation$"
+  },
+  {
+    "id": "file-edit-diff-cancellation",
+    "file": "internal/adapter/tool/file/diff.go",
+    "before": "ctx.Err() != nil || units > maxDiffWork-work.used",
+    "after": "units > maxDiffWork-work.used",
+    "test": "^TestDiffWork_BoundsSearchAndChecksCancellation$"
+  },
+  {
+    "id": "file-edit-diff-keeps-caller-context",
+    "file": "internal/adapter/tool/file/edit.go",
+    "before": "meta := editMeta(ctx, target, raw, edited)",
+    "after": "meta := editMeta(context.WithoutCancel(ctx), target, raw, edited)",
+    "test": "^TestEditResult_DiffCancellationKeepsPublishedFile$"
+  },
+  {
+    "id": "file-edit-diff-frontier-guard",
+    "file": "internal/adapter/tool/file/diff.go",
+    "before": "if 2*offset+1 > maxDiffWork-work.used {",
+    "after": "if false && 2*offset+1 > maxDiffWork-work.used {",
+    "test": "^TestBisectLines_RefusesFrontiersTheBudgetCannotInitialize$"
+  },
+  {
+    "id": "file-edit-diff-hunk-merge-boundary",
+    "file": "internal/adapter/tool/file/diff.go",
+    "before": "change.startA <= hunks[len(hunks)-1].endA && change.startB <= hunks[len(hunks)-1].endB",
+    "after": "change.startA < hunks[len(hunks)-1].endA && change.startB < hunks[len(hunks)-1].endB",
+    "test": "^TestEditMeta_MergesHunksAtJsdiffBoundary$"
+  },
+  {
+    "id": "file-path-quote-raw",
+    "file": "internal/adapter/tool/file/observe.go",
+    "before": "cannot modify \\\"%s\\\": file has not been read",
+    "after": "cannot modify %q: file has not been read",
+    "test": "^TestFileTools_QuotePathsLikeUpstream$"
+  },
+  {
+    "id": "file-guarded-create-path-quote-raw",
+    "file": "internal/adapter/tool/file/provider.go",
+    "before": "fmt.Sprintf(\"cannot write \\\"%s\\\": not a regular file\", target)",
+    "after": "fmt.Sprintf(\"cannot write %q: not a regular file\", target)",
+    "test": "^TestGuardedCreateFailure_QuotesPathsLikeUpstream$"
+  },
+  {
+    "id": "shell-workdir-quote-raw",
+    "file": "internal/adapter/tool/shell/bash.go",
+    "before": "fmt.Errorf(\"invalid workdir \\\"%s\\\": not found\", *requested)",
+    "after": "fmt.Errorf(\"invalid workdir %q: not found\", *requested)",
+    "test": "^TestBash_QuotesWorkdirLikeFileTools$"
+  },
+  {
+    "id": "attachment-observer-rollback",
+    "file": "internal/adapter/attachment/store.go",
+    "before": "return errors.Join(err, store.withdraw(context.Background(), entry))",
+    "after": "return err",
+    "test": "^TestStore_FailedObserverRegistrationLeavesNoCallback$"
+  },
+  {
+    "id": "attachment-observer-quiescence",
+    "file": "internal/adapter/attachment/store.go",
+    "before": "\tdelete(store.observers, entry)\n\tif entry.calls == 0 {",
+    "after": "\tdelete(store.observers, entry)\n\tif entry.calls >= 0 {",
+    "test": "^TestStore_ObserverCleanupWaitsForRunningCallbacks$"
+  },
+  {
+    "id": "provider-watch-rollback",
+    "file": "internal/adapter/model/provider/provider.go",
+    "before": "_ = stop(context.Background()) // undo the watch and catalog published above",
+    "after": "// the watch and catalog stay published",
+    "test": "^TestProviderStartLoginRefreshAndStreamFailures$"
+  },
+  {
+    "id": "file-write-delegated-refusal",
+    "file": "internal/adapter/tool/file/write.go",
+    "before": "if invocation.Delegated {",
+    "after": "if false && invocation.Delegated {",
+    "test": "^TestFileMutations_RefuseDelegatedCallsAtExecution$"
+  },
+  {
+    "id": "file-edit-delegated-refusal",
+    "file": "internal/adapter/tool/file/edit.go",
+    "before": "if invocation.Delegated {",
+    "after": "if false && invocation.Delegated {",
+    "test": "^TestFileMutations_RefuseDelegatedCallsAtExecution$"
+  },
+  {
+    "id": "plan-review-forwards-delegation",
+    "file": "internal/adapter/tool/plan/provider.go",
+    "before": "Delegated: invocation.Delegated,",
+    "after": "Delegated: false,",
+    "test": "^TestExitPlanMode_DelegatedCallerNeverReachesTheUser$"
+  },
+  {
+    "id": "private-files-stay-outside-workspace",
+    "file": "cmd/nano-harness/main.go",
+    "before": "\t\toverlaps, err = within(workspaceRoot, resolved)\n",
+    "after": "\t\toverlaps, err = private.directory && contains(workspaceRoot, resolved), error(nil)\n",
+    "test": "^TestNormalizeConfig_KeepsSecretsAndSessionsOutsideTheWorkspace$"
+  },
+  {
+    "id": "private-session-root-is-a-store",
+    "file": "cmd/nano-harness/main.go",
+    "before": "path: config.sessionRoot, directory: true}",
+    "after": "path: config.sessionRoot}",
+    "test": "^TestNormalizeConfig_KeepsSecretsAndSessionsOutsideTheWorkspace$"
+  },
+  {
+    "id": "private-config-errors-reach-stderr",
+    "file": "cmd/nano-harness/main.go",
+    "before": "normalized, err := normalizeConfig(config)\n\tif err != nil {\n\t\t_, _ = fmt.Fprintln(stderr, err)",
+    "after": "normalized, err := normalizeConfig(config)\n\tif err != nil {\n\t\t_ = stderr",
+    "test": "^TestRunTUI_RefusesAHomeWorkspaceHoldingTheDefaultPrivateFiles$"
+  },
+  {
+    "id": "session-interrupted-result-unknown-outcome",
+    "file": "internal/core/session/toolresult.go",
+    "before": "unknown := ToolOutcomeUnknown",
+    "after": "unknown := ToolError{Name: \"ToolNotStartedError\", Code: \"TOOL_NOT_STARTED\"}",
+    "test": "^TestInterruptedToolResult_IsAValidDetachedUnknownOutcome$"
+  },
+  {
+    "id": "agent-batch-calls-cancellable",
+    "file": "internal/app/agent/engine.go",
+    "before": "input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordToolCall,",
+    "after": "input.journal.Append(ctx, session.Record{Type: session.RecordToolCall,",
+    "test": "^TestEngine_CancelWhileRecordingToolCallsClosesTheStep$"
+  },
+  {
+    "id": "agent-step-skips-call-recovery",
+    "file": "internal/app/agent/engine.go",
+    "before": "for _, callID := range calls {",
+    "after": "for _, callID := range calls[:0] {",
+    "test": "^TestEngine_FailedToolRecordingResolvesCommittedCalls$"
+  },
+  {
+    "id": "agent-result-keeps-call-unresolved",
+    "file": "internal/app/agent/engine.go",
+    "before": "calls = slices.DeleteFunc(calls, func(id string) bool { return id == record.Result.CallID })",
+    "after": "calls = slices.Clip(calls)",
+    "test": "^TestEngine_FailedToolRecordingResolvesCommittedCalls$"
+  },
+  {
+    "id": "agent-closeout-skips-open-questions",
+    "file": "internal/app/agent/engine.go",
+    "before": "for _, approvalID := range approvals {",
+    "after": "for _, approvalID := range approvals[:0] {",
+    "test": "^TestEngine_FailedDecisionRecordingCancelsTheQuestion$"
+  },
+  {
+    "id": "agent-decision-keeps-question-open",
+    "file": "internal/app/agent/engine.go",
+    "before": "approvals = slices.DeleteFunc(approvals, func(id string) bool { return id == record.Approval.ID })",
+    "after": "approvals = slices.Clip(approvals)",
+    "test": "^TestEngine_FailedDecisionRecordingCancelsTheQuestion$"
+  },
+  {
+    "id": "agent-closeout-drops-read-failure",
+    "file": "internal/app/agent/engine.go",
+    "before": "result.Err = errors.Join(result.Err, eventsErr)",
+    "after": "_ = eventsErr",
+    "test": "^TestEngine_CloseoutReportsAnUnreadableLog$"
+  },
+  {
+    "id": "settings-watch-quiescence",
+    "file": "internal/app/settings/settings.go",
+    "before": "if entry.calls == 0 {",
+    "after": "if entry.calls >= 0 {",
+    "test": "^TestServiceWatch_DisposeWaitsForRunningCallbacks$"
+  },
+  {
+    "id": "provider-stopped-install",
+    "file": "internal/adapter/model/provider/provider.go",
+    "before": "if !provider.stopped {",
+    "after": "if true {",
+    "test": "^TestProviderStop_IgnoresCallbacksThatOutliveCleanup$"
+  },
+  {
+    "id": "private-identity-compares-ancestors",
+    "file": "cmd/nano-harness/main.go",
+    "before": "case err == nil && os.SameFile(info, directoryInfo):",
+    "after": "case err == nil && false && os.SameFile(info, directoryInfo):",
+    "test": "^TestNormalizeConfig_JudgesContainmentByFileIdentity$"
+  },
+  {
+    "id": "private-identity-walks-every-ancestor",
+    "file": "cmd/nano-harness/main.go",
+    "before": "case current == filepath.Dir(current):\n\t\t\treturn false, nil",
+    "after": "case true:\n\t\t\treturn false, nil",
+    "test": "^TestNormalizeConfig_JudgesContainmentByFileIdentity$"
+  },
+  {
+    "id": "private-store-reverse-identity",
+    "file": "cmd/nano-harness/main.go",
+    "before": "overlaps, err = within(resolved, workspaceRoot)",
+    "after": "overlaps, err = contains(resolved, workspaceRoot), nil",
+    "test": "^TestNormalizeConfig_JudgesContainmentByFileIdentity$"
+  },
+  {
+    "id": "private-lexical-path-outside-workspace",
+    "file": "cmd/nano-harness/main.go",
+    "before": "overlaps, err := within(workspaceRoot, private.path)",
+    "after": "overlaps, err := false, error(nil)",
+    "test": "^TestNormalizeConfig_RejectsPrivatePathsThroughWorkspaceLinks$"
+  },
+  {
+    "id": "web-html-scripting-disabled",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "html.ParseOptionEnableScripting(false)",
+    "after": "html.ParseOptionEnableScripting(true)",
+    "test": "^TestRenderHTML_(MatchesUpstreamSemantics|OmitsPathologicalNesting|MarksTemplateDroppedInForeignContent)$"
+  },
+  {
+    "id": "web-html-body-context",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "Data: \"body\", DataAtom: atom.Body",
+    "after": "Data: \"head\", DataAtom: atom.Head",
+    "test": "^TestRenderHTML_(MatchesUpstreamSemantics|OmitsPathologicalNesting|MarksTemplateDroppedInForeignContent)$"
+  },
+  {
+    "id": "web-html-depth-omission",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\treturn omittedHTML, true\n\t}\n\tstate :=",
+    "after": "\t\treturn \"\", true\n\t}\n\tstate :=",
+    "test": "^TestRenderHTML_(MatchesUpstreamSemantics|OmitsPathologicalNesting|MarksTemplateDroppedInForeignContent)$"
+  },
+  {
+    "id": "web-html-template-marker",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\tif state.stopped || templateStartTags(source) > parsed {",
+    "after": "\tif state.stopped || false && templateStartTags(source) > parsed {",
+    "test": "^TestRenderHTML_(MatchesUpstreamSemantics|OmitsPathologicalNesting|MarksTemplateDroppedInForeignContent)$"
+  },
+  {
+    "id": "web-html-conversion-cost",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\tif conversionCost(source) > maxConversionCost {\n\t\treturn omittedHTML, true",
+    "after": "\tif false && conversionCost(source) > maxConversionCost {\n\t\treturn omittedHTML, true",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-boundary",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\tif conversionCost(source) > maxConversionCost {\n\t\treturn omittedHTML, true",
+    "after": "\tif conversionCost(source) >= maxConversionCost {\n\t\treturn omittedHTML, true",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-reversed",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\tif conversionCost(source) > maxConversionCost {\n\t\treturn omittedHTML, true",
+    "after": "\tif conversionCost(source) < maxConversionCost {\n\t\treturn omittedHTML, true",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-attribute-weight",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\telement.weight = 1 + attributes\n",
+    "after": "\t\t\telement.weight = 1\n",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-element-weight",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\tstate.cost += state.weight + 1 + attributes\n",
+    "after": "\tstate.cost += state.weight + 1\n",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-text-points",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "func (state *costState) text() { state.cost += state.weight + 1 }",
+    "after": "func (state *costState) text() { state.cost++ }",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-adoption",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\tif formattingElements[name] && !top {\n\t\tstate.cost += adoptionClones * (state.heaviest + 1)",
+    "after": "\tif formattingElements[name] && !top {\n\t\tstate.cost += 0",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-anchor-adoption",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\tstate.cost += adoptionClones * (state.heaviest + 1)\n\t\t}\n\t\tsignature :=",
+    "after": "\t\t\tstate.cost += 0\n\t\t}\n\t\tsignature :=",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-stack-top",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\ttop := len(state.open) > 0 && state.open[len(state.open)-1].tag == name",
+    "after": "\ttop := len(state.open) > 0",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-noscript",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\tif token.Data == \"noscript\" {\n\t\t\t\ttokenizer.NextIsNotRawText()",
+    "after": "\t\t\tif false && token.Data == \"noscript\" {\n\t\t\t\ttokenizer.NextIsNotRawText()",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-foreign-switch",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\tif (token.Data == \"svg\" || token.Data == \"math\") && kind == html.StartTagToken {",
+    "after": "\t\t\tif false && (token.Data == \"svg\" || token.Data == \"math\") && kind == html.StartTagToken {",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-sticky",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\tif state.foreign || element.sticky || element.weight == 0 {",
+    "after": "\tif element.weight == 0 {",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-resume-horizon",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\tif closing && index >= horizon && depth[name] > 0 {",
+    "after": "\t\t\tif closing && depth[name] > 0 {",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-resume-raw-text",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\t\t\thorizon = max(horizon, rawTextExtent(source, name, end))",
+    "after": "\t\t\t\t\thorizon = max(horizon, end)",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-resume-depth",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\t\tif _, root := depth[name]; root && !selfClosing {",
+    "after": "\t\t\t\tif _, root := depth[name]; false && root && !selfClosing {",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-resume-comment",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\t\thorizon = max(horizon, farthestEnd(source, index+len(\"<!--\"), \"-->\"))",
+    "after": "\t\t\thorizon = max(horizon, index)",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-region-cap",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\tif regions < maxForeignRegions {",
+    "after": "\t\tif true {",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-cost-foreign-attributes",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\tattributes++\n\t\tindex = skipAttribute(source, index)",
+    "after": "\t\tindex = skipAttribute(source, index)",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-render-budget",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\tif state.stopped || templateStartTags(source) > parsed {",
+    "after": "\tif templateStartTags(source) > parsed {",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-render-write-stop",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\tremaining := maxRenderBytes - state.written\n",
+    "after": "\tremaining := maxRenderBytes - state.written + len(value)\n",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-render-capture-bound",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\tif state.captured > maxCapturedBytes {",
+    "after": "\t\tif false && state.captured > maxCapturedBytes {",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-render-capture-remaining",
+    "file": "internal/adapter/tool/web/html.go",
+    "before": "\t\tremaining -= state.current().text.Len()\n",
+    "after": "\t\tremaining -= 0\n",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "web-html-dropped-truncated",
+    "file": "internal/adapter/tool/web/web.go",
+    "before": "\tif !result.Truncated && !sourceTruncated && !outputTruncated && !dropped {",
+    "after": "\tif !result.Truncated && !sourceTruncated && !outputTruncated && (!dropped || true) {",
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "sandbox-linux-private-tmp-order",
+    "file": "internal/platform/process/runner.go",
+    "before": "arguments = append(arguments, \"--tmpfs\", \"/tmp\", \"--bind\", root, root)",
+    "after": "arguments = append(arguments, \"--bind\", root, root, \"--tmpfs\", \"/tmp\")",
+    "test": "^TestRunnerCommand_BuildsSandboxInvocation$"
   }
 ]

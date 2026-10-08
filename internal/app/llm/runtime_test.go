@@ -84,6 +84,8 @@ type fakePrepared struct {
 	completion  Completion
 	streamErr   error
 	request     Request
+	search      SearchRequest
+	credential  Credential
 }
 
 func (prepared *fakePrepared) Info() ModelInfo       { return prepared.info }
@@ -103,6 +105,11 @@ func (prepared *fakePrepared) Stream(_ context.Context, _ Credential, request Re
 	return prepared.completion, prepared.streamErr
 }
 
+func (prepared *fakePrepared) Search(_ context.Context, credential Credential, request SearchRequest) (SearchResult, error) {
+	prepared.search, prepared.credential = request, credential
+	return SearchResult{Content: "answer", Sources: []SearchSource{{URL: "https://example.com"}}}, nil
+}
+
 type fakeInteraction struct{}
 
 func (fakeInteraction) Prompt(context.Context, AuthPrompt) (string, error) { return "", nil }
@@ -110,7 +117,7 @@ func (fakeInteraction) Notify(AuthNotice)                                  {}
 
 func activeRuntime(t *testing.T, store *fakeStore) (*Runtime, *plugin.Scope) {
 	t.Helper()
-	runtime, err := New(store)
+	runtime, err := New(store, noImages{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,17 +171,17 @@ func TestCredentialAndError(t *testing.T) {
 }
 
 func TestRuntimeRouteLoginAndCleanup(t *testing.T) {
-	if _, err := New(nil); err == nil {
+	if _, err := New(nil, noImages{}); err == nil {
 		t.Fatal("nil store accepted")
 	}
 	store := &fakeStore{credential: Credential{Kind: CredentialAPIKey, APIKey: "key"}, accounts: []AccountInfo{{Provider: "p"}}}
 	closedStart := &plugin.Scope{}
 	_ = closedStart.Close(context.Background())
-	closedRuntime, _ := New(store)
+	closedRuntime, _ := New(store, noImages{})
 	if err := closedRuntime.Start(context.Background(), closedStart); !errors.Is(err, plugin.ErrScopeClosed) {
 		t.Fatalf("closed start=%v", err)
 	}
-	inactive, _ := New(store)
+	inactive, _ := New(store, noImages{})
 	inactiveProvider := &fakeProvider{id: "inactive"}
 	if err := inactive.Register(inactiveProvider, &plugin.Scope{}); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("inactive register=%v", err)
@@ -221,6 +228,20 @@ func TestRuntimeRouteLoginAndCleanup(t *testing.T) {
 	}
 	if _, err := call.Stream(context.Background(), Request{}, nil); err == nil {
 		t.Fatal("nil emit accepted")
+	}
+	found, err := call.Search(context.Background(), SearchRequest{Query: "go", MaxResults: 8})
+	if err != nil || found.Content != "answer" || (prepared.search.Query != "go" || prepared.search.MaxResults != 8) || prepared.credential.APIKey != "key" {
+		t.Fatalf("search=%#v err=%v forwarded=%#v", found, err, prepared.search)
+	}
+	for _, query := range []string{"\u0085", "\ufeff\u0085\ufeff"} {
+		if _, err := call.Search(t.Context(), SearchRequest{Query: query, MaxResults: 8}); err != nil || prepared.search.Query != query {
+			t.Fatalf("nonblank search query=%q: %v", query, err)
+		}
+	}
+	for _, invalid := range []SearchRequest{{Query: " ", MaxResults: 8}, {Query: "\ufeff", MaxResults: 8}, {Query: "go"}} {
+		if _, err := call.Search(context.Background(), invalid); !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("invalid search %#v=%v", invalid, err)
+		}
 	}
 	if err := runtime.Login(context.Background(), "p", "api-key", nil); err == nil {
 		t.Fatal("nil interaction accepted")
@@ -335,13 +356,15 @@ func TestCloneRequestDetachesImagesCallsAndResults(t *testing.T) {
 	request := Request{Surface: []session.SurfaceNode{
 		{Message: &session.Message{Content: []session.ContentBlock{{Type: session.ContentImage, Image: image}}}},
 		{Call: &session.ToolCall{ID: "call", Arguments: json.RawMessage(`{}`)}},
-		{Result: &session.ToolResult{CallID: "call", Output: "ok"}},
+		{Result: &session.ToolResult{CallID: "call", Output: "ok", Image: &session.Image{ID: "result-image", Name: "shot.png"}}},
+		{Result: &session.ToolResult{CallID: "plain", Output: "ok"}},
 	}}
 	cloned := cloneRequest(request)
 	cloned.Surface[0].Message.Content[0].Image.Name = "changed"
 	cloned.Surface[1].Call.Arguments[0] = '['
 	cloned.Surface[2].Result.Output = "changed"
-	if request.Surface[0].Message.Content[0].Image.Name == "changed" || request.Surface[1].Call.Arguments[0] == '[' || request.Surface[2].Result.Output == "changed" {
+	cloned.Surface[2].Result.Image.Name = "changed"
+	if request.Surface[0].Message.Content[0].Image.Name == "changed" || request.Surface[1].Call.Arguments[0] == '[' || request.Surface[2].Result.Output == "changed" || request.Surface[2].Result.Image.Name == "changed" || cloned.Surface[3].Result.Image != nil {
 		t.Fatal("cloneRequest aliases source")
 	}
 }

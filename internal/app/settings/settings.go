@@ -64,12 +64,29 @@ type Compaction struct {
 	Retries        int     `yaml:"retries" json:"retries"`
 }
 
+// WebSearch selects the provider route whose server-side web search backs the
+// web_search tool. The zero value means search is not configured: the tool stays
+// registered and fails each call with a structured unavailable error.
+type WebSearch struct {
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Model    string `yaml:"model,omitempty" json:"model,omitempty"`
+}
+
+// Configured reports whether a search route was selected.
+func (search WebSearch) Configured() bool { return search.Provider != "" || search.Model != "" }
+
+// Web configures provider-backed web capabilities.
+type Web struct {
+	Search WebSearch `yaml:"search,omitempty" json:"search,omitzero"`
+}
+
 // Document is the complete hot-reloadable configuration.
 type Document struct {
 	Route      Route               `yaml:"route" json:"route"`
 	Providers  map[string]Provider `yaml:"providers" json:"providers"`
 	Retry      Retry               `yaml:"retry" json:"retry"`
 	Compaction Compaction          `yaml:"compaction" json:"compaction"`
+	Web        Web                 `yaml:"web,omitempty" json:"web,omitzero"`
 }
 
 // Defaults returns a detached usable document.
@@ -123,6 +140,9 @@ func Resolve(user Document) (Document, error) {
 	if user.Compaction.ThresholdRatio != 0 {
 		resolved.Compaction = user.Compaction
 	}
+	if user.Web.Search.Configured() {
+		resolved.Web.Search = user.Web.Search
+	}
 	if err := resolved.Validate(); err != nil {
 		return Document{}, err
 	}
@@ -155,6 +175,24 @@ func (document Document) Validate() error {
 	}
 	if document.Compaction.ThresholdRatio <= 0 || document.Compaction.ThresholdRatio >= 1 || document.Compaction.RetainRatio < 0 || document.Compaction.RetainRatio >= document.Compaction.ThresholdRatio || document.Compaction.MaxTokens < 256 || document.Compaction.MaxTokens > 65_536 || document.Compaction.Retries < 0 || document.Compaction.Retries > 4 {
 		return invalid("compaction policy is invalid")
+	}
+	return validateWebSearch(document)
+}
+
+func validateWebSearch(document Document) error {
+	search := document.Web.Search
+	if !search.Configured() {
+		return nil
+	}
+	if !validName(search.Provider, 64) || !validName(search.Model, 256) {
+		return invalid("web search route requires both provider and model")
+	}
+	provider, ok := document.Providers[search.Provider]
+	if !ok {
+		return invalid("web search provider %q is not installed", search.Provider)
+	}
+	if !slices.ContainsFunc(provider.Models, func(model Model) bool { return model.ID == search.Model }) {
+		return invalid("web search model %q is not in provider %q", search.Model, search.Provider)
 	}
 	return nil
 }
@@ -233,13 +271,21 @@ type Service struct {
 	provider ProviderBackend
 	document Document
 	revision uint64
-	watchers map[uint64]func(Document)
-	nextID   uint64
+	watchers map[*watcher]struct{}
 	lastErr  error
 }
 
+// watcher is one Watch registration. calls counts the callbacks commits are
+// running; idle closes when the last one returns after dispose withdrew the
+// registration. Both are guarded by the service mutex.
+type watcher struct {
+	notify func(Document)
+	calls  int
+	idle   chan struct{}
+}
+
 // New constructs an empty Service Definition.
-func New() *Service { return &Service{watchers: map[uint64]func(Document){}} }
+func New() *Service { return &Service{watchers: map[*watcher]struct{}{}} }
 
 // ID returns the stable settings-service plugin identity.
 func (*Service) ID() string { return "settings" }
@@ -254,7 +300,7 @@ func (service *Service) Start(_ context.Context, scope *plugin.Scope) error {
 	if err := scope.Defer(func(context.Context) error {
 		service.mu.Lock()
 		service.active = false
-		service.watchers = map[uint64]func(Document){}
+		service.watchers = map[*watcher]struct{}{}
 		service.mu.Unlock()
 		return nil
 	}); err != nil {
@@ -337,14 +383,24 @@ func (service *Service) commit(document Document) {
 		return
 	}
 	service.document, service.revision, service.lastErr = cloneDocument(document), service.revision+1, nil
-	watchers := make([]func(Document), 0, len(service.watchers))
-	for _, watcher := range service.watchers {
-		watchers = append(watchers, watcher)
+	// Each captured watcher counts as running until its callback returns,
+	// so disposing it waits instead of racing this commit.
+	watchers := make([]*watcher, 0, len(service.watchers))
+	for entry := range service.watchers {
+		entry.calls++
+		watchers = append(watchers, entry)
 	}
 	snapshot := cloneDocument(document)
 	service.mu.Unlock()
-	for _, watcher := range watchers {
-		callWatcher(watcher, cloneDocument(snapshot))
+	for _, entry := range watchers {
+		callWatcher(entry.notify, cloneDocument(snapshot))
+		service.mu.Lock()
+		entry.calls--
+		if entry.calls == 0 && entry.idle != nil {
+			close(entry.idle)
+			entry.idle = nil
+		}
+		service.mu.Unlock()
 	}
 }
 
@@ -370,9 +426,12 @@ func (service *Service) LastReloadError() error {
 	return service.lastErr
 }
 
-// Watch registers a contained synchronous observer.
-func (service *Service) Watch(watcher func(Document)) (func(), error) {
-	if watcher == nil {
+// Watch calls notify with every committed document until the returned
+// dispose runs; a panic in notify is contained. Dispose withdraws the registration, so no later commit calls
+// notify, and waits until callbacks already running return or ctx ends. It
+// must not be called from notify itself.
+func (service *Service) Watch(notify func(Document)) (func(context.Context) error, error) {
+	if notify == nil {
 		return nil, ErrInvalidDocument
 	}
 	service.mu.Lock()
@@ -380,15 +439,30 @@ func (service *Service) Watch(watcher func(Document)) (func(), error) {
 		service.mu.Unlock()
 		return nil, ErrNotRunning
 	}
-	service.nextID++
-	id := service.nextID
-	service.watchers[id] = watcher
+	entry := &watcher{notify: notify}
+	service.watchers[entry] = struct{}{}
 	service.mu.Unlock()
-	return func() {
-		service.mu.Lock()
-		delete(service.watchers, id)
+	return func(ctx context.Context) error { return service.unwatch(ctx, entry) }, nil
+}
+
+func (service *Service) unwatch(ctx context.Context, entry *watcher) error {
+	service.mu.Lock()
+	delete(service.watchers, entry)
+	if entry.calls == 0 {
 		service.mu.Unlock()
-	}, nil
+		return nil
+	}
+	if entry.idle == nil {
+		entry.idle = make(chan struct{})
+	}
+	idle := entry.idle
+	service.mu.Unlock()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for settings watcher callbacks: %w", ctx.Err())
+	}
 }
 
 // Update persists and commits one revision-checked mutation.

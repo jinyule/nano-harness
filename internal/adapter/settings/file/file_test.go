@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,13 +61,17 @@ func TestProviderPersistLoadWatchAndLifecycle(t *testing.T) {
 	changed := make(chan appsettings.Document, 1)
 	dispose, err := service.Watch(func(document appsettings.Document) {
 		if document.Route.Provider == "openrouter" {
-			changed <- document
+			// Never block the commit: dispose waits for running callbacks.
+			select {
+			case changed <- document:
+			default:
+			}
 		}
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer dispose()
+	defer func() { _ = dispose(context.Background()) }()
 	encoded := []byte("route:\n  provider: openrouter\n  model: openai/gpt-5.4\n")
 	if err := os.WriteFile(path, encoded, 0o600); err != nil {
 		t.Fatal(err)
@@ -81,6 +86,48 @@ func TestProviderPersistLoadWatchAndLifecycle(t *testing.T) {
 	}
 	if err := serviceScope.Close(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProvider_PersistsWebSearchRouteOnlyWhenConfigured(t *testing.T) {
+	service := appsettings.New()
+	path := filepath.Join(t.TempDir(), "settings.yaml")
+	provider, err := New(service, Config{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Persist(context.Background(), appsettings.Defaults()); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := os.ReadFile(path) //nolint:gosec // the path is rooted in this test's private temporary directory
+	if err != nil || strings.Contains(string(encoded), "web:") {
+		t.Fatalf("unconfigured web search was persisted: %s err=%v", encoded, err)
+	}
+	configured := appsettings.Defaults()
+	configured.Web.Search = appsettings.WebSearch{Provider: "openrouter", Model: "openai/gpt-5.4"}
+	if err := provider.Persist(context.Background(), configured); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := provider.Load(context.Background())
+	if err != nil || loaded.Web.Search != configured.Web.Search {
+		t.Fatalf("loaded web=%#v err=%v", loaded.Web, err)
+	}
+	// The README example is a complete sparse document.
+	if err := os.WriteFile(path, []byte("web:\n  search:\n    provider: openai\n    model: gpt-5.4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sparse, err := provider.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved, err := appsettings.Resolve(sparse); err != nil || resolved.Web.Search != (appsettings.WebSearch{Provider: "openai", Model: "gpt-5.4"}) {
+		t.Fatalf("README example resolved=%#v err=%v", resolved.Web, err)
+	}
+	if err := os.WriteFile(path, []byte("web:\n  search:\n    provider: openai\n    model: gpt-5.4\n    region: us\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Load(context.Background()); err == nil {
+		t.Fatal("unknown web search field accepted")
 	}
 }
 
