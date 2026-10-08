@@ -262,21 +262,23 @@ func (state *renderer) walk(node *html.Node) {
 	}
 }
 
-// conversionCost reports an upper bound on the weight tree construction may
-// create: every element counts one plus its attributes, because x/net/html
-// copies the whole attribute slice whenever it clones a node, and every text
-// node counts one. Above maxConversionCost the caller omits the input.
+// conversionCost estimates the weight tree construction may create: every
+// element counts one plus its attributes, because x/net/html copies the whole
+// attribute slice whenever it clones a node, and every text node counts one.
+// Above maxConversionCost the caller omits the input. The estimate is a
+// best-effort upper bound, not a strict one: ADR-0011 lists inputs it is known
+// to undercount, by enough that the budget can be bypassed.
 //
-// HTML content is priced from an x/net tokenizer, whose token stream there is
-// exactly the parser's: the parser changes the tokenizer only through
-// NextIsNotRawText (parse.go:645, 748 and 1096 for noscript, which this does
-// too because scripting is disabled, and 2122 when it inserts a foreign
-// element) and AllowCDATA (parse.go:2233, foreign content only). Names,
-// attributes, comments, raw text and quoted values are therefore exact, and
-// weight is released only when an end tag closes the innermost open element.
-// Inside an SVG or MathML subtree the two diverge, so that stretch is priced by
-// bytes and its weight is never released; see foreignEnd for where the exact
-// tokenizer resumes.
+// HTML content is priced from an x/net tokenizer. The parser changes the
+// tokenizer only through NextIsNotRawText (parse.go:645, 748 and 1096 for
+// noscript, and 2122 when it inserts a foreign element) and AllowCDATA
+// (parse.go:2233, foreign content only); this calls NextIsNotRawText after
+// every noscript start tag because scripting is disabled. The parser skips
+// that call when it ignores the noscript tag, so the token streams can
+// diverge. Weight is released only when an end tag closes the innermost open
+// element. Inside an SVG or MathML subtree the streams diverge by design, so
+// that stretch is priced by bytes and its weight is never released; see
+// foreignEnd for where the tokenizer resumes.
 func conversionCost(source string) int {
 	state := &costState{signatures: map[string]int{}}
 	for start, regions := 0, 0; start < len(source) && state.cost <= maxConversionCost; regions++ {
@@ -391,8 +393,9 @@ func (state *costState) startTag(name string, attributes int, raw string) {
 
 // endTag charges the node and any adoption-agency clones. It releases weight
 // only in HTML content, only for an element opened there, and only when the tag
-// closes the innermost open element, which is exactly when the parser removes
-// that entry from the list of active formatting elements.
+// closes the innermost open element, the condition under which the parser
+// removes that entry from the list of active formatting elements when its
+// token stream matches this one.
 func (state *costState) endTag(name string) {
 	state.cost += state.weight + 1
 	top := len(state.open) > 0 && state.open[len(state.open)-1].tag == name
@@ -442,17 +445,20 @@ func (state *costState) scanForeign(source string) {
 	}
 }
 
-// foreignEnd returns where the exact tokenizer may resume after the foreign
-// subtree whose root start tag ends at from: just past the end tag that closes
-// it, or the input length. Resuming early would be unsound, because the parser
-// may still be in foreign content, where CDATA exists and raw text does not.
-// Resuming late only prices more by bytes. So the end tag only counts when it
-// lies beyond every stretch some reading takes as non-markup: comment and CDATA
-// interiors, bogus comments, quoted attribute values and raw-text content, each
-// to its farthest possible end. SVG and MathML roots are counted apart, any
-// start tag counts toward the depth wherever it lies, and an end tag only
-// counts outside those stretches. The parser may leave earlier, at a breakout
-// tag; that makes this later, never earlier.
+// foreignEnd returns where the tokenizer resumes after the foreign subtree
+// whose root start tag ends at from: just past the end tag that closes it, or
+// the input length. Resuming early undercounts, because the parser may still be
+// in foreign content, where CDATA exists and raw text does not; resuming late
+// only prices more by bytes. So the end tag only counts when it lies beyond
+// every stretch some reading takes as non-markup: comment and CDATA interiors,
+// bogus comments, quoted attribute values and raw-text content, each to its
+// farthest possible end. SVG and MathML roots are counted apart, any start tag
+// counts toward the depth wherever it lies, and an end tag only counts outside
+// those stretches. A breakout tag makes the parser leave earlier, which only
+// delays resumption here. Resumption can still come too early: the root type is
+// inferred from the last "<", a root end tag the parser ignores inside an
+// integration point still counts, and readTagExtent's self-closing test is
+// looser than x/net's (ADR-0011 lists these known undercounts).
 func foreignEnd(source string, from int) int {
 	depth := map[string]int{"svg": 0, "math": 0}
 	root := strings.ToLower(source[strings.LastIndexByte(source[:from], '<')+1 : from])
@@ -518,8 +524,10 @@ func farthestEnd(source string, from int, terminator string) int {
 
 // readTagExtent reads the tag at index with x/net's grammar, quoted values
 // included, and returns its lower-cased name, whether it is an end tag, whether
-// x/net reports it self-closing, and the offset just past it (the input length
-// when it never closes).
+// the byte before ">" is "/", and the offset just past it (the input length
+// when it never closes). x/net additionally refuses self-closing when that "/"
+// ends an unquoted attribute value, so this reports some open tags as
+// self-closing (a known undercount in ADR-0011).
 func readTagExtent(source string, index int) (name string, closing, selfClosing bool, end int) {
 	position := index + 1
 	if closing = source[position] == '/'; closing {
@@ -587,8 +595,9 @@ func rawTextExtent(source, name string, from int) int {
 
 // scanForeignTag reads one tag at the start of source with x/net's tag grammar,
 // stopping at any nested "<". It returns the lower-cased name (with a leading
-// "/" for an end tag, empty when the bytes are not a tag), an upper bound on the
-// attributes and the bytes consumed.
+// "/" for an end tag, empty when the bytes are not a tag), the attribute count
+// and the bytes consumed. The count never falls below the tokenizer's for a tag
+// without a nested "<"; stopping at one undercounts the attributes after it.
 func scanForeignTag(source string) (name string, attributes, consumed int) {
 	index := 1
 	closing := index < len(source) && source[index] == '/'

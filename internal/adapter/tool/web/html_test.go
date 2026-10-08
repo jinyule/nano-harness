@@ -433,9 +433,9 @@ func reviewVectors() map[string]string {
 	vectors["end tag names with trailing punctuation"] = "<p>" + bang.String() + strings.Repeat("</b!>", 500) + paragraphs
 	vectors["attribute names starting with a quote"] = "<p>" + quoted.String() + "x</p>" + paragraphs
 	vectors["attribute names starting with an equals sign"] = "<p>" + equalled.String() + "x</p>" + paragraphs
-	// Inside an SVG or MathML subtree nothing is certain, so the exact
-	// tokenizer must not resume at an end tag that a comment, a CDATA section,
-	// a quoted value or raw-text content may hide.
+	// Inside an SVG or MathML subtree nothing is certain, so the tokenizer
+	// must not resume at an end tag that a comment, a CDATA section, a quoted
+	// value or raw-text content may hide.
 	for name, region := range map[string][2]string{
 		"a comment":       {"<svg><!--", "</svg>--></svg>"},
 		"a CDATA section": {"<svg><![CDATA[", "</svg>]]></svg>"},
@@ -450,8 +450,9 @@ func reviewVectors() map[string]string {
 	return vectors
 }
 
-// ordinaryPages must keep converting: the scan is conservative, so its headroom
-// on real markup is the evidence that it does not reject what it should keep.
+// ordinaryPages must keep converting: the scan overestimates ordinary markup,
+// so its headroom on real markup is the evidence that it does not reject what
+// it should keep.
 func ordinaryPages() map[string]string {
 	return map[string]string{
 		"links":          "<div>" + strings.Repeat(`<a href="/x">link</a> `, 3000) + "</div>",
@@ -513,9 +514,9 @@ func TestRenderHTML_OmitsAmplifiedTreeConstruction(t *testing.T) {
 
 // Inside a foreign subtree attributes are counted by scanForeignTag's port of
 // x/net's tag reader, which must never count fewer than the tokenizer reads
-// from the same bytes. It stops at a nested "<" on purpose, so tags holding one
-// are left to TestConversionCost_BoundsParsedWeight.
-func TestScanForeignTag_NeverUndercountsAttributes(t *testing.T) {
+// from the same bytes when the tag holds no nested "<". It stops at a nested
+// "<" on purpose; such tags undercount, a known gap recorded in ADR-0011.
+func TestScanForeignTag_NeverUndercountsTagsWithoutInnerAngle(t *testing.T) {
 	parts := []string{" ", "  ", "a", "b", "=", "'", `"`, "/", "x", "=v", `="v"`, "='v'", "= v", `= "v"`, "=>", ">", "\t", "a=1/", "=a"}
 	sources := []string{"<g>", "<g  >", "<g a= \"v\">", "<g a=>", "<g a= ", "<g a= x", "<g a='v", "<g/a>", "</g a b>"}
 	// Samples only need to be varied and reproducible, not unpredictable.
@@ -545,10 +546,11 @@ func TestScanForeignTag_NeverUndercountsAttributes(t *testing.T) {
 	}
 }
 
-// The exact tokenizer may only resume once the parser is certainly back in
-// HTML content: past every stretch some reading takes as non-markup, with the
-// SVG and MathML roots balanced. Resuming later is merely conservative.
-func TestForeignEnd_ResumesOnlyPastEveryUncertainStretch(t *testing.T) {
+// The tokenizer resumes past every stretch some reading takes as non-markup,
+// with the SVG and MathML roots balanced. These cases only cover forms where
+// that is late enough; ADR-0011 lists forms that resume too early, such as
+// <svg><svg a=b/></svg>.
+func TestForeignEnd_ResumesPastCoveredUncertainStretches(t *testing.T) {
 	for _, test := range []struct {
 		name, source, resumeAfter string
 	}{
@@ -577,7 +579,7 @@ func TestForeignEnd_ResumesOnlyPastEveryUncertainStretch(t *testing.T) {
 	})
 }
 
-// Each SVG or MathML subtree resumes the exact tokenizer with a new read
+// Each SVG or MathML subtree resumes the tokenizer with a new read
 // buffer, so many small subtrees are capped by maxForeignRegions.
 func TestConversionCost_BoundsForeignRegionAllocation(t *testing.T) {
 	const maxBytes = 4 << 20
@@ -853,7 +855,7 @@ func TestConversionCost_ChargesWeightedFormatting(t *testing.T) {
 		{"a tag name runs past punctuation", "</b!>x", 2},
 		{"an attribute name may be a quote", "<b '>x", 5},
 		{"weight opened inside foreign content stays", `<svg><b x="1"></b></svg>` + strings.Repeat("<p>x</p>", 10), 99},
-		{"the exact tokenizer resumes after the subtree", `<b x="1">y</b><svg></svg>` + strings.Repeat("<p>x</p>", 10), 40},
+		{"the tokenizer resumes after the subtree", `<b x="1">y</b><svg></svg>` + strings.Repeat("<p>x</p>", 10), 40},
 		{"a self-closing svg opens no subtree", `<svg/><b x="1">y</b>` + strings.Repeat("<p>x</p>", 10), 39},
 	} {
 		t.Run(test.name, func(t *testing.T) {

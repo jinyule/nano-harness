@@ -261,7 +261,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 | SVG/MathML 中的 `</p>`、`</br>` 按当前 HTML 标准结束 foreign 内容，其后文本输出；上游 domino 实现此前的规则，外层隐藏元素保持打开 | 遵循当前标准，浏览器中这些文本同样可见 | ADR-0011 | — |
 | x/net/html 在 SVG/MathML 元素打开时遇到 template 开始标签会忽略其后的全部输入；本仓保留已解析内容并在可检测时追加省略标记，SVG title/style 中的 template 不带标记；上游照常输出后续内容 | 依赖源码注明的偏差，只会少输出内容；组合罕见 | ADR-0011 | x/net/html 修复该偏差 |
 | HTML 建树前按「1 + 属性数」的权重估算建树量，超过 2^18 时输出省略标记并报告截断：HTML 内容用复用的 tokenizer，SVG/MathML 子树内按字节且权重只增不减；渲染器在输出预算处停止。上游只有 512 层词法深度 guard，格式元素重建与属性复制的放大样本在上游 domino 中同样展开 | 深度与节点计数都不够：clone 复制整份属性，建树又发生在隐藏过滤与输出截断之前；11 个真实页面费用 2,050–120,161，最高者占上限 46% | ADR-0011 | 上游加入建树预算，或 x/net/html 提供节点预算的 ParseOption |
-| 建树估算是尽力而为的上界，已知会低估：`<template><col>` 后被忽略的 noscript、以 `/` 结尾的无引号属性值、integration point 中被忽略的根结束标签、属性中的 `<` 都会让估算偏低，113 KB 输入可分配约 593 MB；另有分隔符绕过计数、部分 template 丢弃时 `truncated` 漏报、捕获上限触发后整页只剩省略标记三项限制 | 维护者决定作为已知缺口遗留，遇到真实场景再修；精确修复需要 fork x/net 或完整的并行解释地平线 | [ADR-0011](decisions/0011-provider-web-search-and-public-fetch.md) | 真实页面触发，或出现 `web_fetch` 内存问题报告 |
+| 建树估算是尽力而为的上界，已知会低估：`<template><col>` 后被忽略的 noscript、以 `/` 结尾的无引号属性值、integration point 中被忽略的根结束标签、属性中的 `<` 都会让估算偏低，其中四类已实测可让约 97 KB 的输入分配约 507 MB；另有分隔符绕过计数、部分 template 丢弃时 `truncated` 漏报、捕获上限触发后整页只剩省略标记三项限制 | 维护者决定作为已知缺口遗留，遇到真实场景再修；可放大的几项有定点修法（例如照搬 x/net 的自闭合条件），根治整类问题需要 fork x/net 或完整的并行解释地平线 | [ADR-0011](decisions/0011-provider-web-search-and-public-fetch.md) | 真实页面触发（依赖用户报告），或出现 `web_fetch` 内存问题报告 |
 | 检索请求审计记录固定的协议类别而不是完整 endpoint；没有 journal 时失败关闭，上游接线可以省略记录 | 减少部署地址留存；未审计的检索不发送 | ADR-0022 | 需要完整目的地审计 |
 
 #### 运行时、结构化结果与 compaction

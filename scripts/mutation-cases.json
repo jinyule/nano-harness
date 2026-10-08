@@ -1516,160 +1516,160 @@
     "file": "internal/adapter/tool/web/html.go",
     "before": "\tif conversionCost(source) > maxConversionCost {\n\t\treturn omittedHTML, true",
     "after": "\tif false && conversionCost(source) > maxConversionCost {\n\t\treturn omittedHTML, true",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-boundary",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\tif conversionCost(source) > maxConversionCost {\n\t\treturn omittedHTML, true",
     "after": "\tif conversionCost(source) >= maxConversionCost {\n\t\treturn omittedHTML, true",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-reversed",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\tif conversionCost(source) > maxConversionCost {\n\t\treturn omittedHTML, true",
     "after": "\tif conversionCost(source) < maxConversionCost {\n\t\treturn omittedHTML, true",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-attribute-weight",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\t\t\telement.weight = 1 + attributes\n",
     "after": "\t\t\telement.weight = 1\n",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-element-weight",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\tstate.cost += state.weight + 1 + attributes\n",
     "after": "\tstate.cost += state.weight + 1\n",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-text-points",
     "file": "internal/adapter/tool/web/html.go",
     "before": "func (state *costState) text() { state.cost += state.weight + 1 }",
     "after": "func (state *costState) text() { state.cost++ }",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-adoption",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\tif formattingElements[name] && !top {\n\t\tstate.cost += adoptionClones * (state.heaviest + 1)",
     "after": "\tif formattingElements[name] && !top {\n\t\tstate.cost += 0",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-anchor-adoption",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\t\t\tstate.cost += adoptionClones * (state.heaviest + 1)\n\t\t}\n\t\tsignature :=",
     "after": "\t\t\tstate.cost += 0\n\t\t}\n\t\tsignature :=",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-stack-top",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\ttop := len(state.open) > 0 && state.open[len(state.open)-1].tag == name",
     "after": "\ttop := len(state.open) > 0",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-noscript",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\t\t\tif token.Data == \"noscript\" {\n\t\t\t\ttokenizer.NextIsNotRawText()",
     "after": "\t\t\tif false && token.Data == \"noscript\" {\n\t\t\t\ttokenizer.NextIsNotRawText()",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-foreign-switch",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\t\t\tif (token.Data == \"svg\" || token.Data == \"math\") && kind == html.StartTagToken {",
     "after": "\t\t\tif false && (token.Data == \"svg\" || token.Data == \"math\") && kind == html.StartTagToken {",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-sticky",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\tif state.foreign || element.sticky || element.weight == 0 {",
     "after": "\tif element.weight == 0 {",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-resume-horizon",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\t\t\tif closing && index >= horizon && depth[name] > 0 {",
     "after": "\t\t\tif closing && depth[name] > 0 {",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-resume-raw-text",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\t\t\t\t\thorizon = max(horizon, rawTextExtent(source, name, end))",
     "after": "\t\t\t\t\thorizon = max(horizon, end)",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-resume-depth",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\t\t\t\tif _, root := depth[name]; root && !selfClosing {",
     "after": "\t\t\t\tif _, root := depth[name]; false && root && !selfClosing {",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-resume-comment",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\t\t\thorizon = max(horizon, farthestEnd(source, index+len(\"<!--\"), \"-->\"))",
     "after": "\t\t\thorizon = max(horizon, index)",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-region-cap",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\t\tif regions < maxForeignRegions {",
     "after": "\t\tif true {",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-cost-foreign-attributes",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\t\tattributes++\n\t\tindex = skipAttribute(source, index)",
     "after": "\t\tindex = skipAttribute(source, index)",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-render-budget",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\tif state.stopped || templateStartTags(source) > parsed {",
     "after": "\tif templateStartTags(source) > parsed {",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-render-write-stop",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\tremaining := maxRenderBytes - state.written\n",
     "after": "\tremaining := maxRenderBytes - state.written + len(value)\n",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-render-capture-bound",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\t\tif state.captured > maxCapturedBytes {",
     "after": "\t\tif false && state.captured > maxCapturedBytes {",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-render-capture-remaining",
     "file": "internal/adapter/tool/web/html.go",
     "before": "\t\tremaining -= state.current().text.Len()\n",
     "after": "\t\tremaining -= 0\n",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   },
   {
     "id": "web-html-dropped-truncated",
     "file": "internal/adapter/tool/web/web.go",
     "before": "\tif !result.Truncated && !sourceTruncated && !outputTruncated && !dropped {",
     "after": "\tif !result.Truncated && !sourceTruncated && !outputTruncated && (!dropped || true) {",
-    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsAttributes|ForeignEnd_ResumesOnlyPastEveryUncertainStretch)$"
+    "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
   }
 ]
