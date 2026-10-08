@@ -110,6 +110,7 @@ func composeApplication(config applicationConfig, deps dependencies) (*applicati
 			ID: id, HTTPClient: deps.httpClient, CodexHome: config.codexHome,
 			ChatGPTBaseURL: deps.chatGPTBaseURL, OpenAIAuthURL: deps.openAIAuthURL,
 			AnthropicAuthURL: deps.anthropicAuthURL, OpenRouterAuthURL: deps.openRouterAuthURL,
+			IdleTimeout: deps.providerIdle,
 		})
 		if providerErr != nil {
 			return nil, providerErr

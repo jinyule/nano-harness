@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jinyule/nano-harness/internal/app/compaction"
 	"github.com/jinyule/nano-harness/internal/app/llm"
@@ -47,7 +48,10 @@ type modelAction struct {
 	started    chan<- struct{}
 	// cancelled runs when ctx ends during wait, before Stream returns.
 	cancelled func()
-	panic     bool
+	// uncancelable streams the chunks first and then waits without
+	// observing ctx, like a provider that fails on its own deadline.
+	uncancelable bool
+	panic        bool
 }
 
 type scriptedModel struct {
@@ -79,6 +83,16 @@ func (model *scriptedModel) Stream(ctx context.Context, _ llm.Credential, reques
 	model.mu.Unlock()
 	if action.panic {
 		panic("scripted panic")
+	}
+	if action.uncancelable {
+		for _, chunk := range action.chunks {
+			if err := emit(chunk); err != nil {
+				return llm.Completion{}, err
+			}
+		}
+		action.started <- struct{}{}
+		<-action.wait
+		return action.completion, action.err
 	}
 	if action.started != nil {
 		action.started <- struct{}{}
@@ -388,6 +402,10 @@ func TestEngine_ClassifiesCancellationProviderFailureAndPanic(t *testing.T) {
 	}{
 		{name: "cancelled", action: modelAction{err: context.Canceled}, outcome: session.OutcomeCanceled, match: "canceled"},
 		{name: "provider", action: modelAction{err: &llm.Error{Code: llm.ErrorInvalid, Provider: "openai"}}, outcome: session.OutcomeError, match: "invalid_request"},
+		// A deadline the provider enforced itself is a failed turn, not a
+		// cancellation: the turn's own context is still live. The streamed
+		// chunk keeps retry from repeating the attempt.
+		{name: "provider deadline", action: modelAction{chunks: []session.AssistantChunk{{Kind: session.ChunkReasoning, Text: "thinking"}}, err: &llm.Error{Code: llm.ErrorTimeout, Provider: "openai", Cause: context.DeadlineExceeded}}, outcome: session.OutcomeError, match: "timeout"},
 		{name: "panic", action: modelAction{panic: true}, outcome: session.OutcomeError, match: "panicked"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -402,6 +420,22 @@ func TestEngine_ClassifiesCancellationProviderFailureAndPanic(t *testing.T) {
 				t.Fatalf("unclosed records = %#v", types)
 			}
 		})
+	}
+}
+
+// TestEngine_CallerDeadlineRemainsCanceled keeps a deadline on the turn's
+// own context classified as a cancellation.
+func TestEngine_CallerDeadlineRemainsCanceled(t *testing.T) {
+	harness := startEngineHarness(t, 1, modelAction{wait: make(chan struct{})})
+	journal, log := turnJournal()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	result := harness.engine.runTurn(ctx, runInput{notices: noMessages, journal: journal, message: agentMessage(session.RoleUser, "go"), drain: func() []session.Message { return nil }})
+	if result.Outcome != session.OutcomeCanceled || !errors.Is(result.Err, context.DeadlineExceeded) {
+		t.Fatalf("result = %+v", result)
+	}
+	if outcomes := turnOutcomes(log.events); !slices.Equal(outcomes, []session.TurnOutcome{session.OutcomeCanceled}) {
+		t.Fatalf("outcomes = %v", outcomes)
 	}
 }
 
@@ -436,7 +470,13 @@ func TestEngine_ValidatesMessagesAndHelperCopies(t *testing.T) {
 	if got := findModel(document, "openai", "missing"); got.ID != "missing" || got.ContextWindow != 0 {
 		t.Fatalf("unknown model = %#v", got)
 	}
-	if outcomeFor(context.DeadlineExceeded) != session.OutcomeCanceled || outcomeFor(errors.New("x")) != session.OutcomeError {
+	expired, cancel := context.WithDeadline(context.Background(), time.Unix(0, 0))
+	defer cancel()
+	// The turn's own end wins over any failure; a dependency's cancellation
+	// counts; a dependency's own deadline does not.
+	if outcomeFor(expired, context.DeadlineExceeded) != session.OutcomeCanceled || outcomeFor(context.Background(), context.DeadlineExceeded) != session.OutcomeError ||
+		outcomeFor(context.Background(), context.Canceled) != session.OutcomeCanceled || outcomeFor(expired, errors.New("x")) != session.OutcomeCanceled ||
+		outcomeFor(context.Background(), errors.New("x")) != session.OutcomeError {
 		t.Fatal("outcomeFor misclassified error")
 	}
 }

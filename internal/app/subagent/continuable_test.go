@@ -6,12 +6,14 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	jsonl "github.com/jinyule/nano-harness/internal/adapter/session/jsonl"
 	"github.com/jinyule/nano-harness/internal/app/agent"
 	"github.com/jinyule/nano-harness/internal/app/job"
+	"github.com/jinyule/nano-harness/internal/app/llm"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
@@ -883,6 +885,84 @@ func TestService_InterruptedChildKeepsDeliveredMessages(t *testing.T) {
 	}
 	if outcome, _ := session.LastOutcome(h.events(id)); outcome != session.OutcomeCanceled {
 		t.Fatalf("interrupted turn outcome = %q", outcome)
+	}
+	// The next delivery wakes the resident child, which handles both messages.
+	parked = previousParked
+	if err := h.service.SendMessage(context.Background(), "root", id, "AGAIN"); err != nil {
+		t.Fatal(err)
+	}
+	receive(t, h.done(id))
+	relayed := messages(h.events(id), SourceAgentMessage)
+	if len(relayed) != 2 || relayed[0] != "Agent root sent a message: QUEUED" || relayed[1] != "Agent root sent a message: AGAIN" {
+		t.Fatalf("child messages = %q", relayed)
+	}
+	rootCall.release <- "released"
+	receive(t, results)
+	h.idle(h.root)
+	if notices := messages(h.events("root"), SourceSettled); len(notices) != 1 || !strings.HasSuffix(notices[0], "Its closing message:handled both") {
+		t.Fatalf("root notices = %q", notices)
+	}
+}
+
+// TestService_ChildInterruptedWhileClosingKeepsDeliveredMessages covers a
+// child whose failed turn is interrupted while turn/end is being written:
+// the turn keeps its error outcome and does not wake for the message
+// accepted during it, so the watcher must keep the child resident because
+// the agent still holds that message, whatever the outcome says.
+func TestService_ChildInterruptedWhileClosingKeepsDeliveredMessages(t *testing.T) {
+	previousParked, previousClose := parked, closeAgent
+	t.Cleanup(func() { parked, closeAgent = previousParked, previousClose })
+	gate := make(chan struct{})
+	failure := &llm.Error{Code: llm.ErrorInvalid, Provider: "openai"}
+	h := startHarness(t,
+		rule{match: "ROOT_HOLD", first: reply{hold: true}, then: reply{text: "root done"}},
+		rule{match: "CHILD_FAIL", first: reply{gate: gate, err: failure}},
+		rule{match: "sent a message: AGAIN", first: reply{text: "handled both"}},
+	)
+	rootCall, results := h.submit("ROOT_HOLD")
+	id, err := h.service.StartContinuable(context.Background(), start(rootCall, "worker", "CHILD_FAIL", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receive(t, h.model.blocked)
+	child, err := h.registry.Find(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parkedChild, closed := make(chan string, 4), make(chan string, 4)
+	parked = func(id string) { parkedChild <- id }
+	closeAgent = func(registry *agent.Registry, ctx context.Context, target string) error {
+		closed <- target
+		return previousClose(registry, ctx, target)
+	}
+	// The message is accepted while the failing request runs; no boundary
+	// commits it before the turn fails.
+	if err := h.service.SendMessage(context.Background(), "root", id, "QUEUED"); err != nil {
+		t.Fatal(err)
+	}
+	var interrupted atomic.Bool
+	hook := func(sessionID string, record session.Record) {
+		if sessionID == id && record.Type == session.RecordTurnEnd && interrupted.CompareAndSwap(false, true) {
+			child.Interrupt()
+		}
+	}
+	h.appendHook.Store(&hook)
+	close(gate)
+	select {
+	case parkedID := <-parkedChild:
+		if parkedID != id {
+			t.Fatalf("parked %q", parkedID)
+		}
+	case closedID := <-closed:
+		t.Fatalf("child %q settled with an accepted message still queued", closedID)
+	case <-time.After(waitLimit):
+		t.Fatal("watcher neither parked nor settled")
+	}
+	if !interrupted.Load() {
+		t.Fatal("the child's turn/end was never interrupted")
+	}
+	if outcome, _ := session.LastOutcome(h.events(id)); outcome != session.OutcomeError {
+		t.Fatalf("interrupted closeout outcome = %q", outcome)
 	}
 	// The next delivery wakes the resident child, which handles both messages.
 	parked = previousParked

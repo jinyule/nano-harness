@@ -98,12 +98,12 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 	active := engine.active
 	engine.mu.RUnlock()
 	if !active {
-		result.Err, result.Outcome = ErrNotRunning, session.OutcomeError
+		result.Err, result.Outcome = ErrNotRunning, outcomeFor(ctx, ErrNotRunning)
 		return result
 	}
 	events, err := input.journal.Events(ctx)
 	if err != nil {
-		result.Err, result.Outcome = err, outcomeFor(err)
+		result.Err, result.Outcome = err, outcomeFor(ctx, err)
 		return result
 	}
 	turn := nextTurn(events)
@@ -114,9 +114,11 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 	// Like upstream's finally block, this closes every turn whose
 	// turn/start committed, whatever ends it, including its opening.
 	defer func() {
+		panicked := false
 		if recovered := recover(); recovered != nil {
 			result.Err = errors.New("agent loop panicked")
 			result.Outcome = session.OutcomeError
+			panicked = true
 		}
 		if stepOpen {
 			// A step cannot close over an open question or a committed call
@@ -137,6 +139,16 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			}
 			_, closeErr := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordStepEnd, Turn: turn, Step: openStep})
 			result.Err = errors.Join(result.Err, closeErr)
+		}
+		if !panicked && result.Outcome == session.OutcomeError {
+			// A failure is settled once, after the step closeout (whose
+			// appends ignore cancellation and may block on fsync) and just
+			// before turn/end commits: whichever boundary returned it, a
+			// turn cancelled by now records a cancellation. The failure
+			// itself is kept, and a committed or stopped outcome is never
+			// rewritten. An interrupt during the turn/end append itself is
+			// left to the agent, which then does not wake for notices.
+			result.Outcome = outcomeFor(ctx, result.Err)
 		}
 		if turnOpen {
 			_, closeErr := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordTurnEnd, Turn: turn, Outcome: result.Outcome})
@@ -163,7 +175,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		return result
 	}
 	if err != nil {
-		result.Err, result.Outcome = err, outcomeFor(err)
+		result.Err, result.Outcome = err, outcomeFor(ctx, err)
 		return result
 	}
 	// Every boundary that takes queued input checks cancellation first, so
@@ -191,11 +203,11 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		// request header below is the first to reflect them.
 		planPolicy, err := engine.plan.Step(ctx, input.journal, turn)
 		if err != nil {
-			result.Err, result.Outcome = fmt.Errorf("plan mode boundary: %w", err), outcomeFor(err)
+			result.Err, result.Outcome = fmt.Errorf("plan mode boundary: %w", err), outcomeFor(ctx, err)
 			return result
 		}
 		if err := engine.stepContext(ctx, input, turn); err != nil {
-			result.Err, result.Outcome = fmt.Errorf("step context: %w", err), outcomeFor(err)
+			result.Err, result.Outcome = fmt.Errorf("step context: %w", err), outcomeFor(ctx, err)
 			return result
 		}
 		// Step context commits regardless of cancellation; a cancellation
@@ -205,7 +217,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			return result
 		}
 		if _, err := input.journal.Append(ctx, session.Record{Type: session.RecordStepStart, Turn: turn, Step: step}); err != nil {
-			result.Err, result.Outcome = err, outcomeFor(err)
+			result.Err, result.Outcome = err, outcomeFor(ctx, err)
 			return result
 		}
 		stepOpen = true
@@ -238,7 +250,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		}
 		call, err := engine.llm.PrepareCall(ctx, route.Provider, route.Model)
 		if err != nil {
-			result.Err, result.Outcome = err, outcomeFor(err)
+			result.Err, result.Outcome = err, outcomeFor(ctx, err)
 			return result
 		}
 		events, err = input.journal.Events(ctx)
@@ -279,7 +291,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 				}
 				continue
 			}
-			result.Err, result.Outcome = err, outcomeFor(err)
+			result.Err, result.Outcome = err, outcomeFor(ctx, err)
 			return result
 		}
 		message := completion.Message
@@ -445,8 +457,14 @@ func findModel(document settings.Document, provider, model string) settings.Mode
 	return settings.Model{ID: model}
 }
 
-func outcomeFor(err error) session.TurnOutcome {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+// outcomeFor settles a failed turn. The turn's own cancellation wins over
+// whatever failure it caused or raced, including a provider timeout that
+// fired first; a cancellation that reached the turn through a dependency,
+// such as a service stopping at shutdown, counts too. Any other failure,
+// including a deadline a dependency enforced internally, is an error, so
+// pending notices still open the next turn.
+func outcomeFor(ctx context.Context, err error) session.TurnOutcome {
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 		return session.OutcomeCanceled
 	}
 	return session.OutcomeError

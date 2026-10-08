@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/jinyule/nano-harness/internal/app/retry"
 	"github.com/jinyule/nano-harness/internal/app/settings"
 	appTool "github.com/jinyule/nano-harness/internal/app/tool"
+	"github.com/jinyule/nano-harness/internal/app/transcript"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
@@ -52,12 +54,16 @@ type rule struct {
 }
 
 // reply is one scripted completion. hold makes the agent call the hold
-// tool; block makes the stream wait until its request is cancelled.
+// tool; block makes the stream wait until its request is cancelled; gate
+// makes it wait for gate to close, ignoring cancellation, and then fail
+// with err.
 type reply struct {
 	text       string
 	hold       bool
 	block      bool
 	afterAbort func()
+	gate       chan struct{}
+	err        error
 }
 
 type testModel struct {
@@ -120,6 +126,11 @@ func (model *testModel) Stream(ctx context.Context, _ llm.Credential, request ll
 	model.calls++
 	callID := "call-" + strconv.Itoa(model.calls)
 	model.mu.Unlock()
+	if chosen.gate != nil {
+		model.blocked <- struct{}{}
+		<-chosen.gate
+		return llm.Completion{}, chosen.err
+	}
 	if chosen.block {
 		model.blocked <- struct{}{}
 		<-ctx.Done()
@@ -191,6 +202,35 @@ type harness struct {
 	serviceScope *plugin.Scope
 	held         chan held
 	scopes       []*plugin.Scope
+	// appendHook, when set, runs before each record an agent's log appends.
+	appendHook atomic.Pointer[func(sessionID string, record session.Record)]
+}
+
+// hookedRepository opens agent logs whose appends first run the harness's
+// appendHook, so a test can act at an exact record.
+type hookedRepository struct {
+	transcript.Repository
+	h *harness
+}
+
+func (repository hookedRepository) OpenSession(ctx context.Context, options transcript.OpenOptions) (transcript.Log, error) {
+	log, err := repository.Repository.OpenSession(ctx, options)
+	if err != nil {
+		return nil, err
+	}
+	return hookedLog{Log: log, h: repository.h}, nil
+}
+
+type hookedLog struct {
+	transcript.Log
+	h *harness
+}
+
+func (log hookedLog) Append(ctx context.Context, record session.Record) (session.Event, error) {
+	if hook := log.h.appendHook.Load(); hook != nil {
+		(*hook)(log.Header().SessionID, record)
+	}
+	return log.Log.Append(ctx, record)
 }
 
 func startHarness(t *testing.T, rules ...rule) *harness {
@@ -262,7 +302,7 @@ func startHarness(t *testing.T, rules ...rule) *harness {
 	start(h.manager)
 	policies := approval.New()
 	start(policies)
-	h.registry, err = agent.NewRegistry(h.manager, engine, policies, t.TempDir())
+	h.registry, err = agent.NewRegistry(hookedRepository{Repository: h.manager, h: h}, engine, policies, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

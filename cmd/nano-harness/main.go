@@ -59,6 +59,7 @@ type applicationConfig struct {
 
 type dependencies struct {
 	httpClient        *http.Client
+	providerIdle      time.Duration // zero selects the provider stream idle default
 	chatGPTBaseURL    string
 	openAIAuthURL     string
 	anthropicAuthURL  string

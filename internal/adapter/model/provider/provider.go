@@ -18,7 +18,11 @@ import (
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
 
-const defaultRequestTimeout = 2 * time.Minute
+// streamIdleTimeout bounds every silent interval of one provider exchange:
+// connecting and sending the request, waiting for response headers, and each
+// gap between body reads. It matches the reference stream idle default and
+// does not limit how long a stream that keeps delivering data may run.
+const streamIdleTimeout = 300 * time.Second
 
 // Config supplies transports and OAuth endpoints; production defaults are applied per field.
 type Config struct {
@@ -29,6 +33,8 @@ type Config struct {
 	OpenAIAuthURL     string
 	AnthropicAuthURL  string
 	OpenRouterAuthURL string
+	// IdleTimeout replaces streamIdleTimeout when positive; zero selects it.
+	IdleTimeout time.Duration
 }
 
 type snapshot struct {
@@ -48,8 +54,10 @@ type Provider struct {
 	runtime  *llm.Runtime
 	settings settingsSource
 	client   *http.Client
-	auth     authConfig
-	current  atomic.Pointer[snapshot]
+	// idleTimeout is the exchange watchdog interval; see streamIdleTimeout.
+	idleTimeout time.Duration
+	auth        authConfig
+	current     atomic.Pointer[snapshot]
 
 	// installMu orders catalog installs against stop, so a settings callback
 	// that outlives cleanup cannot republish the catalog.
@@ -59,18 +67,25 @@ type Provider struct {
 
 // New constructs one of the installed providers.
 func New(runtime *llm.Runtime, settings *appsettings.Service, config Config) (*Provider, error) {
-	if runtime == nil || settings == nil || config.ID != "openai" && config.ID != "anthropic" && config.ID != "openrouter" {
+	if runtime == nil || settings == nil || config.ID != "openai" && config.ID != "anthropic" && config.ID != "openrouter" || config.IdleTimeout < 0 {
 		return nil, llm.ErrInvalidConfig
 	}
+	// The default client sets no overall deadline, which would also bound
+	// reading a stream that is still delivering events. Its transport
+	// bounds dialing and TLS handshakes; the exchange watchdog bounds the rest.
 	client := config.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: defaultRequestTimeout}
+		client = &http.Client{}
+	}
+	idle := config.IdleTimeout
+	if idle == 0 {
+		idle = streamIdleTimeout
 	}
 	auth, err := resolveAuthConfig(config)
 	if err != nil {
 		return nil, err
 	}
-	return &Provider{id: config.ID, runtime: runtime, settings: settings, client: client, auth: auth}, nil
+	return &Provider{id: config.ID, runtime: runtime, settings: settings, client: client, idleTimeout: idle, auth: auth}, nil
 }
 
 // ID is both the plugin identity and provider route key.
@@ -249,7 +264,7 @@ func surfaceHasImage(surface []session.SurfaceNode) bool {
 	return false
 }
 
-func statusError(provider string, status int, retryAfter string) error {
+func statusError(provider string, status int, retryAfter string) *llm.Error {
 	code := llm.ErrorInvalid
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:

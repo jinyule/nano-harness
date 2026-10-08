@@ -613,11 +613,15 @@ func (service *Service) watch(current *child) {
 			outcome = session.OutcomeCompleted
 		}
 		committed := relayed(own)
+		// The agent itself reports whether it still holds accepted notices,
+		// whatever its last outcome: a cancelled turn and a failed turn
+		// interrupted while closing both keep them without opening a turn.
+		// An agent that stopped before this check holds none, so a shortfall
+		// then settles; one that stops while the child is parked is reclaimed
+		// by the next delivery or by service shutdown.
+		held := current.agent.Status().Queued > 0
 		service.mu.Lock()
-		// An agent leaves accepted messages queued without opening a turn
-		// for them only after a cancelled turn; after any other ending a
-		// shortfall means nothing is left to wait for.
-		queued := committed < current.delivered && outcome == session.OutcomeCanceled
+		queued := committed < current.delivered && held
 		switch {
 		case current.generation != generation:
 			// A delivery or closing advanced the generation; re-check.

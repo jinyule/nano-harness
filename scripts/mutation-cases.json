@@ -1685,5 +1685,124 @@
     "before": "if change.Operation == session.GoalOpPause && change.Actor == ActorHost {",
     "after": "if change.Operation == session.GoalOpPause {",
     "test": "^TestDriver_ModelPauseDoesNotInterrupt$"
+  },
+  {
+    "id": "provider-default-client-deadline",
+    "file": "internal/adapter/model/provider/provider.go",
+    "before": "client = &http.Client{}",
+    "after": "client = &http.Client{Timeout: 2 * time.Minute}",
+    "test": "^TestNew_DefaultClientHasNoTotalDeadline$"
+  },
+  {
+    "id": "provider-idle-rearm",
+    "file": "internal/adapter/model/provider/wire_common.go",
+    "before": "\t\t\ttimer.Reset(dog.idle)\n",
+    "after": "\t\t\t_ = timer\n",
+    "test": "^Test(Watchdog_ActivityRearmsAndStopJoinsAnExpiredWorker|Send_ActiveStreamOutlivesIdleWindow)$"
+  },
+  {
+    "id": "provider-idle-body-unwatched",
+    "file": "internal/adapter/model/provider/wire_common.go",
+    "before": "consume(io.LimitReader(dog.body(response.Body), maxProviderResponseBytes+1))",
+    "after": "consume(io.LimitReader(response.Body, maxProviderResponseBytes+1+int64(dog.idle*0)))",
+    "test": "^TestSend_ActiveStreamOutlivesIdleWindow$"
+  },
+  {
+    "id": "provider-idle-classification",
+    "file": "internal/adapter/model/provider/wire_common.go",
+    "before": "if err != nil && errors.Is(context.Cause(ctx), errIdleTimeout) {",
+    "after": "if err != nil && errors.Is(context.Cause(ctx), errProviderRedirect) {",
+    "test": "^TestSend_(StalledStreamTimesOut|ResponseHeaderStallTimesOut|ConnectStallTimesOut)$"
+  },
+  {
+    "id": "provider-read-deadline-timeout",
+    "file": "internal/adapter/model/provider/wire_common.go",
+    "before": "\t\tcode = llm.ErrorTimeout\n",
+    "after": "\t\tcode = llm.ErrorProtocol\n",
+    "test": "^TestSend_(BodyDeadlineIsTimeout|CallerDeadlineKeepsItsCause)$"
+  },
+  {
+    "id": "provider-oauth-idle-classification",
+    "file": "internal/adapter/model/provider/oauth.go",
+    "before": "\tdata, err := provider.readOAuth(request, dog)\n\treturn data, provider.idleFailure(ctx, err)",
+    "after": "\treturn provider.readOAuth(request, dog)",
+    "test": "^TestPostOAuth_StalledResponseTimesOut$"
+  },
+  {
+    "id": "agent-outcome-internal-deadline",
+    "file": "internal/app/agent/engine.go",
+    "before": "if ctx.Err() != nil || errors.Is(err, context.Canceled) {",
+    "after": "if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {",
+    "test": "^TestAgent_ProviderTimeoutWakesPendingNotices$"
+  },
+  {
+    "id": "provider-watchdog-join",
+    "file": "internal/adapter/model/provider/wire_common.go",
+    "before": "\t\tclose(dog.stopping)\n\t\t<-dog.exited\n",
+    "after": "\t\tclose(dog.stopping)\n",
+    "test": "^TestWatchdog_(ActivityRearmsAndStopJoinsAnExpiredWorker|StopOverlappingExpiryJoinsTheWorker)$"
+  },
+  {
+    "id": "provider-error-body-watched",
+    "file": "internal/adapter/model/provider/wire_common.go",
+    "before": "io.ReadAll(io.LimitReader(dog.body(response.Body), 64<<10))",
+    "after": "io.ReadAll(io.LimitReader(response.Body, 64<<10))",
+    "test": "^TestSend_ErrorBodyIsWatched$"
+  },
+  {
+    "id": "provider-error-body-cancel",
+    "file": "internal/adapter/model/provider/wire_common.go",
+    "before": "\t\t\t// The caller's own cancellation, returned as transportError does.\n\t\t\treturn zero, err\n",
+    "after": "\t\t\t// The caller's own cancellation, returned as transportError does.\n\t\t\t_ = err\n",
+    "test": "^TestSend_ErrorBodyIsWatched$"
+  },
+  {
+    "id": "agent-outcome-turn-cancel",
+    "file": "internal/app/agent/engine.go",
+    "before": "if ctx.Err() != nil || errors.Is(err, context.Canceled) {",
+    "after": "if errors.Is(err, context.Canceled) {",
+    "test": "^TestAgent_InterruptedTurnIsCanceledWhereverItFails$"
+  },
+  {
+    "id": "agent-outcome-settled-before-end",
+    "file": "internal/app/agent/engine.go",
+    "before": "\t\t\tresult.Outcome = outcomeFor(ctx, result.Err)\n",
+    "after": "\t\t\t_ = outcomeFor(ctx, result.Err)\n",
+    "test": "^TestAgent_InterruptedTurnIsCanceledWhereverItFails$"
+  },
+  {
+    "id": "agent-interrupted-no-wake",
+    "file": "internal/app/agent/agent.go",
+    "before": "(result.Outcome != session.OutcomeCanceled && !result.interrupted || agent.woken)",
+    "after": "(result.Outcome != session.OutcomeCanceled || agent.woken)",
+    "test": "^TestAgent_InterruptDuringCloseoutDoesNotWake$"
+  },
+  {
+    "id": "agent-interrupted-recorded",
+    "file": "internal/app/agent/agent.go",
+    "before": "result.interrupted = turnContext.Err() != nil",
+    "after": "result.interrupted = false",
+    "test": "^TestAgent_InterruptDuringCloseoutDoesNotWake$"
+  },
+  {
+    "id": "subagent-residency-outcome",
+    "file": "internal/app/subagent/service.go",
+    "before": "queued := committed < current.delivered && held",
+    "after": "queued := committed < current.delivered && held && outcome == session.OutcomeCanceled",
+    "test": "^TestService_ChildInterruptedWhileClosingKeepsDeliveredMessages$"
+  },
+  {
+    "id": "subagent-residency-held",
+    "file": "internal/app/subagent/service.go",
+    "before": "queued := committed < current.delivered && held",
+    "after": "queued := committed < current.delivered && held || committed < current.delivered",
+    "test": "^TestService_ResidencyWithoutTurnSettlesAsFinished$"
+  },
+  {
+    "id": "agent-status-queued",
+    "file": "internal/app/agent/agent.go",
+    "before": "Queued: len(agent.notices)",
+    "after": "Queued: 0",
+    "test": "^TestAgent_InterruptDuringCloseoutDoesNotWake$"
   }
 ]

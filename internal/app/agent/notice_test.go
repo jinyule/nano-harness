@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jinyule/nano-harness/internal/app/llm"
 	"github.com/jinyule/nano-harness/internal/core/plugin"
 	"github.com/jinyule/nano-harness/internal/core/session"
 )
@@ -259,6 +260,40 @@ func TestAgent_NoticesFromCanceledTurnWaitForNextTurn(t *testing.T) {
 	events, _ := root.Events(context.Background())
 	if texts := userTexts(events); !slices.Equal(texts, []string{"1:block", "2:next", "2:pending"}) {
 		t.Fatalf("user messages = %q", texts)
+	}
+}
+
+// TestAgent_ProviderTimeoutWakesPendingNotices reproduces a provider that
+// ends a streamed step with its own deadline while a child's message waits:
+// the failed turn is an error, not a cancellation, so the notice opens the
+// next turn instead of stranding the agent.
+func TestAgent_ProviderTimeoutWakesPendingNotices(t *testing.T) {
+	started, gate := make(chan struct{}, 1), make(chan struct{})
+	timeout := &llm.Error{Code: llm.ErrorTimeout, Provider: "openai", Cause: context.DeadlineExceeded}
+	harness := startEngineHarness(t, 2,
+		modelAction{started: started, wait: gate, chunks: []session.AssistantChunk{{Kind: session.ChunkReasoning, Text: "waiting"}}, err: timeout},
+		modelAction{completion: assistantCompletion("woken")},
+	)
+	registry, _ := startRegistry(t, harness, newMemoryRepository(), newMemoryPolicy())
+	root, _ := registry.Create(context.Background(), CreateRequest{SessionID: "root", Create: true})
+	results, _ := root.Submit(context.Background(), agentMessage(session.RoleUser, "wait for the child"))
+	<-started
+	if err := root.Notify(noticeMessage("child replied")); err != nil {
+		t.Fatal(err)
+	}
+	close(gate)
+	if result := <-results; result.Outcome != session.OutcomeError || !errors.Is(result.Err, timeout) {
+		t.Fatalf("timed-out turn = %+v", result)
+	}
+	if err := root.WhenIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := root.Events(context.Background())
+	if texts := userTexts(events); !slices.Equal(texts, []string{"1:wait for the child", "2:child replied"}) || root.Status().Last.Text != "woken" {
+		t.Fatalf("notice stranded after provider timeout: messages=%q status=%+v", texts, root.Status())
+	}
+	if outcomes := turnOutcomes(events); !slices.Equal(outcomes, []session.TurnOutcome{session.OutcomeError, session.OutcomeCompleted}) {
+		t.Fatalf("outcomes = %v", outcomes)
 	}
 }
 

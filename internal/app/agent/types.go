@@ -31,6 +31,9 @@ type TurnResult struct {
 	// opened reports that turn/start committed, so the opening message
 	// left its queue for good.
 	opened bool
+	// interrupted reports that the turn's context had ended by the time
+	// runTurn returned, even if the outcome was already recorded.
+	interrupted bool
 }
 
 // Status is a secret-free live-agent snapshot.
@@ -42,7 +45,10 @@ type Status struct {
 	Depth     int
 	Busy      bool
 	Pending   int
-	Last      TurnResult
+	// Queued counts accepted notices the agent holds in memory and has not
+	// yet committed to a turn.
+	Queued int
+	Last   TurnResult
 }
 
 // CreateRequest defines a root or delegated agent. A created delegated

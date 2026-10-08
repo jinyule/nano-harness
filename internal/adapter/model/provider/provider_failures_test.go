@@ -117,8 +117,11 @@ func TestConfigAndConstructionFailurePaths(t *testing.T) {
 		t.Fatal("invalid endpoint accepted")
 	}
 	provider, err := New(&llm.Runtime{}, appsettings.New(), Config{ID: "openai", CodexHome: t.TempDir()})
-	if err != nil || provider.client.Timeout != defaultRequestTimeout {
+	if err != nil || provider.idleTimeout != streamIdleTimeout {
 		t.Fatalf("default client=%#v err=%v", provider, err)
+	}
+	if _, err := New(&llm.Runtime{}, appsettings.New(), Config{ID: "openai", IdleTimeout: -time.Second, CodexHome: t.TempDir()}); !errors.Is(err, llm.ErrInvalidConfig) {
+		t.Fatalf("negative idle timeout=%v", err)
 	}
 	if _, err := New(&llm.Runtime{}, appsettings.New(), Config{ID: "openai", ChatGPTBaseURL: "ftp://bad", CodexHome: t.TempDir()}); !errors.Is(err, llm.ErrInvalidConfig) {
 		t.Fatalf("invalid new=%v", err)
@@ -219,7 +222,7 @@ func TestProviderStartLoginRefreshAndStreamFailures(t *testing.T) {
 }
 
 func TestWireRequestAndSSEFailurePaths(t *testing.T) {
-	provider := &Provider{id: "p", client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	provider := &Provider{id: "p", idleTimeout: time.Minute, client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("network")
 	})}}
 	if _, err := provider.streamRequest(context.Background(), "http://localhost", func() {}, nil, nil); err == nil {
@@ -275,7 +278,7 @@ func TestWireRequestAndSSEFailurePaths(t *testing.T) {
 }
 
 func TestOAuthTransportAndCallbackFailures(t *testing.T) {
-	provider := &Provider{id: "p", client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	provider := &Provider{id: "p", idleTimeout: time.Minute, client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, context.DeadlineExceeded
 	})}}
 	if _, err := provider.postForm(context.Background(), ":", nil, nil); err == nil {
@@ -299,13 +302,13 @@ func TestOAuthTransportAndCallbackFailures(t *testing.T) {
 	provider.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: errorReadCloser{err: errors.New("read")}}, nil
 	})}
-	if _, err := provider.doOAuth(mustRequest(t, "http://localhost")); err == nil {
+	if _, err := provider.postForm(context.Background(), "http://localhost", nil, nil); err == nil {
 		t.Fatal("OAuth read error missing")
 	}
 	provider.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(strings.Repeat("x", maxOAuthResponseBytes+1)))}, nil
 	})}
-	if _, err := provider.doOAuth(mustRequest(t, "http://localhost")); err == nil {
+	if _, err := provider.postForm(context.Background(), "http://localhost", nil, nil); err == nil {
 		t.Fatal("OAuth size error missing")
 	}
 
@@ -365,15 +368,6 @@ func TestOAuthTransportAndCallbackFailures(t *testing.T) {
 	if _, err := awaitCallback(ctx, make(chan oauthCallback), "x"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("callback cancellation=%v", err)
 	}
-}
-
-func mustRequest(t *testing.T, endpoint string) *http.Request {
-	t.Helper()
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, endpoint, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return request
 }
 
 func responseStatus(response *http.Response) any {
@@ -612,7 +606,7 @@ func TestProtocolAccumulatorLimitsAndToolCount(t *testing.T) {
 }
 
 func TestStreamCredentialAndRequestFailures(t *testing.T) {
-	provider := &Provider{id: "openai", client: http.DefaultClient}
+	provider := &Provider{id: "openai", idleTimeout: time.Minute, client: http.DefaultClient}
 	provider.auth.chatGPTBaseURL = "http://localhost"
 	current := &snapshot{baseURL: "http://localhost"}
 	model := llm.ModelInfo{Provider: "openai", ID: "m", Vision: true, Tools: true}
@@ -681,7 +675,7 @@ func TestOAuthFlowFailurePaths(t *testing.T) {
 		devicePollFloor, openAuthFile = originalFloor, originalOpen
 	})
 	interaction := &authInteraction{}
-	provider := &Provider{id: "openai", client: http.DefaultClient, auth: authConfig{
+	provider := &Provider{id: "openai", idleTimeout: time.Minute, client: http.DefaultClient, auth: authConfig{
 		openAIAuthURL: "http://localhost", anthropicAuthURL: "http://localhost",
 		anthropicExchangeURL: "http://localhost", openRouterAuthURL: "http://localhost",
 	}}
