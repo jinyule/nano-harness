@@ -1,4 +1,4 @@
-# provider 长流不再被 2 分钟总超时切断，被中断的 turn 一律记为取消
+# provider 长流不再被 2 分钟总超时切断，turn/end 之前的中断记为取消
 
 - Status: implemented
 - Date: 2026-10-08
@@ -63,7 +63,7 @@
 ## Consequences
 
 - 长时间 max effort 推理或长输出不再因时长失败。停住的连接最迟 300 s 后以可重试的 `timeout` 失败，结局为 `error`，原因是 provider 超时；后台消息和 job 通知不会因此滞留。
-- 用户在 turn 的任何位置中断，结局都是 `canceled`，排队的通知等下一个 turn。新的 engine 失败分支不需要各自判断取消。
+- 失败结局在 step 收尾之后、`turn/end` 之前判定，此前到达的中断记为 `canceled`；`turn/end` 追加期间到达的中断保留已写入的结局，但不唤醒旧通知；panic 和其他已判定的结局不改写。排队的通知等下一个 turn。新的 engine 失败分支不需要各自判断取消。
 - 服务端停住时，最长等待从 120 s 变为 300 s。持续发送字节但永远不结束的流，本地只能由用户中断或单次响应 16 MiB 的上限结束；step 上限打断不了仍在 `call.Stream` 中的流。
 - 每次 provider 交换多一个 goroutine，交换返回前它已退出。
 - 旧日志中已写入的结局不改写；session 格式、composition ID 和 wire 请求不变。

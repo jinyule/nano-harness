@@ -616,7 +616,9 @@ func (service *Service) watch(current *child) {
 		// The agent itself reports whether it still holds accepted notices,
 		// whatever its last outcome: a cancelled turn and a failed turn
 		// interrupted while closing both keep them without opening a turn.
-		// A stopped agent holds none, so a shortfall then settles.
+		// An agent that stopped before this check holds none, so a shortfall
+		// then settles; one that stops while the child is parked is reclaimed
+		// by the next delivery or by service shutdown.
 		held := current.agent.Status().Queued > 0
 		service.mu.Lock()
 		queued := committed < current.delivered && held
