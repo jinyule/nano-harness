@@ -48,7 +48,10 @@ type modelAction struct {
 	started    chan<- struct{}
 	// cancelled runs when ctx ends during wait, before Stream returns.
 	cancelled func()
-	panic     bool
+	// uncancelable streams the chunks first and then waits without
+	// observing ctx, like a provider that fails on its own deadline.
+	uncancelable bool
+	panic        bool
 }
 
 type scriptedModel struct {
@@ -80,6 +83,16 @@ func (model *scriptedModel) Stream(ctx context.Context, _ llm.Credential, reques
 	model.mu.Unlock()
 	if action.panic {
 		panic("scripted panic")
+	}
+	if action.uncancelable {
+		for _, chunk := range action.chunks {
+			if err := emit(chunk); err != nil {
+				return llm.Completion{}, err
+			}
+		}
+		action.started <- struct{}{}
+		<-action.wait
+		return action.completion, action.err
 	}
 	if action.started != nil {
 		action.started <- struct{}{}
@@ -459,8 +472,11 @@ func TestEngine_ValidatesMessagesAndHelperCopies(t *testing.T) {
 	}
 	expired, cancel := context.WithDeadline(context.Background(), time.Unix(0, 0))
 	defer cancel()
+	// The turn's own end wins over any failure; a dependency's cancellation
+	// counts; a dependency's own deadline does not.
 	if outcomeFor(expired, context.DeadlineExceeded) != session.OutcomeCanceled || outcomeFor(context.Background(), context.DeadlineExceeded) != session.OutcomeError ||
-		outcomeFor(context.Background(), context.Canceled) != session.OutcomeCanceled || outcomeFor(expired, errors.New("x")) != session.OutcomeError {
+		outcomeFor(context.Background(), context.Canceled) != session.OutcomeCanceled || outcomeFor(expired, errors.New("x")) != session.OutcomeCanceled ||
+		outcomeFor(context.Background(), errors.New("x")) != session.OutcomeError {
 		t.Fatal("outcomeFor misclassified error")
 	}
 }

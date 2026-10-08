@@ -27,21 +27,49 @@ var (
 
 // watchdog ends one provider exchange that makes no progress for its idle
 // interval. Arming covers connecting, sending the request, and waiting for
-// response headers; every body read that returns data rearms it.
+// response headers; every body read that returns data rearms it. One worker
+// goroutine owns the timer and is the only one that cancels; stop ends it
+// and waits for it, so no watchdog code runs after the exchange returns.
 type watchdog struct {
-	idle  time.Duration
-	timer *time.Timer
+	idle time.Duration
+	// activity carries at most one pending rearm; a read that finds it full
+	// is already covered by the rearm it would request.
+	activity chan struct{}
+	stopping chan struct{}
+	exited   chan struct{}
 }
 
-// watch derives the exchange context and its watchdog. The returned stop
-// releases both and must run after the response body is closed.
+// watch derives the exchange context and starts its watchdog. The returned
+// stop must run after the response body is closed; it returns only once the
+// worker has exited, then releases the context.
 func (provider *Provider) watch(ctx context.Context) (context.Context, *watchdog, func()) {
 	ctx, cancel := context.WithCancelCause(ctx)
-	dog := &watchdog{idle: provider.idleTimeout}
-	dog.timer = time.AfterFunc(dog.idle, func() { cancel(errIdleTimeout) })
+	dog := &watchdog{idle: provider.idleTimeout, activity: make(chan struct{}, 1), stopping: make(chan struct{}), exited: make(chan struct{})}
+	go dog.run(cancel)
 	return ctx, dog, func() {
-		dog.timer.Stop()
+		close(dog.stopping)
+		<-dog.exited
 		cancel(nil)
+	}
+}
+
+// run cancels the exchange once idle passes without activity, then waits
+// for stop; activity after expiry cannot revive an aborted exchange.
+func (dog *watchdog) run(cancel context.CancelCauseFunc) {
+	defer close(dog.exited)
+	timer := time.NewTimer(dog.idle)
+	defer timer.Stop()
+	for {
+		select {
+		case <-dog.stopping:
+			return
+		case <-dog.activity:
+			timer.Reset(dog.idle)
+		case <-timer.C:
+			cancel(errIdleTimeout)
+			<-dog.stopping
+			return
+		}
 	}
 }
 
@@ -58,7 +86,10 @@ type activityReader struct {
 func (reader activityReader) Read(buffer []byte) (int, error) {
 	count, err := reader.reader.Read(buffer)
 	if count > 0 {
-		reader.dog.timer.Reset(reader.dog.idle)
+		select {
+		case reader.dog.activity <- struct{}{}:
+		default:
+		}
 	}
 	return count, err
 }
@@ -122,9 +153,17 @@ func send[T any](ctx context.Context, provider *Provider, endpoint, accept strin
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		failure := statusError(provider.id, response.StatusCode, response.Header.Get("Retry-After"))
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
-		if contextWindowFailure(body) {
+		body, err := io.ReadAll(io.LimitReader(dog.body(response.Body), 64<<10))
+		switch {
+		case err == nil && contextWindowFailure(body):
 			failure = &llm.Error{Code: llm.ErrorContextWindow, Provider: provider.id, HTTPStatus: response.StatusCode}
+		case errors.Is(err, context.Canceled) && !errors.Is(context.Cause(ctx), errIdleTimeout):
+			// The caller's own cancellation, returned as transportError does.
+			return zero, err
+		case err != nil:
+			// The status already classified the failure; the body that
+			// could not be read only loses its context-window hint.
+			failure.Cause = provider.idleFailure(ctx, readFailure(provider.id, err))
 		}
 		return zero, failure
 	}

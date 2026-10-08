@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ import (
 )
 
 // TestComposition_ProviderIdleTimeoutFailsTurnAndWakesNotices drives the
-// real composition through the provider idle watchdog. A request whose
+// real composition through the provider idle watchdog (2 s here). A request whose
 // response headers never arrive times out and is retried. A later step that
 // streamed reasoning and then went silent while a background job finished
 // ends the turn as an error rather than a cancellation, and the job's
@@ -65,9 +66,18 @@ func TestComposition_ProviderIdleTimeoutFailsTurnAndWakesNotices(t *testing.T) {
 			writer.Header().Set("Content-Type", "text/event-stream")
 			_, _ = io.WriteString(writer, "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"waiting for the job\"}\n\n")
 			writer.(http.Flusher).Flush()
-			// The job finishes while this step is silent; its notice
+			// The job finishes while this step streams; its notice is
+			// committed and queued before the step goes silent, and it
 			// cannot be delivered before the step ends.
 			_ = os.WriteFile(filepath.Join(root, "notify"), nil, 0o600)
+			for deadline := time.Now().Add(10 * time.Second); !noticeQueued(filepath.Join(data, "sessions", "session-idle.jsonl")); time.Sleep(5 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Error("the job notice was never queued")
+					break
+				}
+			}
+			_, _ = io.WriteString(writer, "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\" notice queued\"}\n\n")
+			writer.(http.Flusher).Flush()
 			stall(request)
 		case 3:
 			writer.Header().Set("Content-Type", "text/event-stream")
@@ -91,7 +101,7 @@ func TestComposition_ProviderIdleTimeoutFailsTurnAndWakesNotices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := composeApplication(config, dependencies{httpClient: server.Client(), providerIdle: time.Second})
+	app, err := composeApplication(config, dependencies{httpClient: server.Client(), providerIdle: 2 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,6 +141,7 @@ func TestComposition_ProviderIdleTimeoutFailsTurnAndWakesNotices(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var queuedSeq, firstEndSeq uint64
 	var outcomes []session.TurnOutcome
 	var retries []string
 	var openings []string
@@ -150,6 +161,12 @@ func TestComposition_ProviderIdleTimeoutFailsTurnAndWakesNotices(t *testing.T) {
 		record := event.Record
 		if record.Type == session.RecordTurnEnd {
 			outcomes = append(outcomes, record.Outcome)
+			if firstEndSeq == 0 {
+				firstEndSeq = event.Sequence
+			}
+		}
+		if record.Type == session.RecordNoticeQueued && queuedSeq == 0 {
+			queuedSeq = event.Sequence
 		}
 		if record.Type == session.RecordRetry {
 			retries = append(retries, fmt.Sprintf("step %d: %s", record.Step, record.Retry.Failure))
@@ -158,6 +175,11 @@ func TestComposition_ProviderIdleTimeoutFailsTurnAndWakesNotices(t *testing.T) {
 			opened[record.Turn] = true
 			openings = append(openings, record.Message.Source.Kind)
 		}
+	}
+	// The notice was already waiting when the timed-out turn ended, so the
+	// error outcome, not a later arrival, is what opened the next turn.
+	if queuedSeq == 0 || queuedSeq > firstEndSeq {
+		t.Fatalf("notice/queued seq %d, first turn/end seq %d", queuedSeq, firstEndSeq)
 	}
 	if !slices.Equal(outcomes, []session.TurnOutcome{session.OutcomeError, session.OutcomeCompleted}) {
 		t.Fatalf("turn outcomes = %v", outcomes)
@@ -175,4 +197,20 @@ func TestComposition_ProviderIdleTimeoutFailsTurnAndWakesNotices(t *testing.T) {
 	if requests != 4 {
 		t.Fatalf("model requests = %d", requests)
 	}
+}
+
+// noticeQueued reports whether the transcript at path has committed a
+// notice/queued record; a partial last line is ignored.
+func noticeQueued(path string) bool {
+	data, err := os.ReadFile(path) //nolint:gosec // the path is rooted in the calling test's private temporary directory
+	if err != nil {
+		return false
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		var event session.Event
+		if json.Unmarshal([]byte(line), &event) == nil && event.Record.Type == session.RecordNoticeQueued {
+			return true
+		}
+	}
+	return false
 }

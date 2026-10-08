@@ -1696,9 +1696,9 @@
   {
     "id": "provider-idle-rearm",
     "file": "internal/adapter/model/provider/wire_common.go",
-    "before": "reader.dog.timer.Reset(reader.dog.idle)",
-    "after": "_ = reader.dog.idle",
-    "test": "^TestSend_ActiveStreamOutlivesIdleWindow$"
+    "before": "\t\t\ttimer.Reset(dog.idle)\n",
+    "after": "\t\t\t_ = timer\n",
+    "test": "^Test(Watchdog_ActivityRearmsAndStopJoinsAnExpiredWorker|Send_ActiveStreamOutlivesIdleWindow)$"
   },
   {
     "id": "provider-idle-body-unwatched",
@@ -1731,8 +1731,43 @@
   {
     "id": "agent-outcome-internal-deadline",
     "file": "internal/app/agent/engine.go",
-    "before": "ctx.Err() != nil && errors.Is(err, context.DeadlineExceeded)",
-    "after": "errors.Is(err, context.DeadlineExceeded)",
+    "before": "if ctx.Err() != nil || errors.Is(err, context.Canceled) {",
+    "after": "if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {",
     "test": "^TestAgent_ProviderTimeoutWakesPendingNotices$"
+  },
+  {
+    "id": "provider-watchdog-join",
+    "file": "internal/adapter/model/provider/wire_common.go",
+    "before": "\t\tclose(dog.stopping)\n\t\t<-dog.exited\n",
+    "after": "\t\tclose(dog.stopping)\n",
+    "test": "^TestWatchdog_(ActivityRearmsAndStopJoinsAnExpiredWorker|StopOverlappingExpiryJoinsTheWorker)$"
+  },
+  {
+    "id": "provider-error-body-watched",
+    "file": "internal/adapter/model/provider/wire_common.go",
+    "before": "io.ReadAll(io.LimitReader(dog.body(response.Body), 64<<10))",
+    "after": "io.ReadAll(io.LimitReader(response.Body, 64<<10))",
+    "test": "^TestSend_ErrorBodyIsWatched$"
+  },
+  {
+    "id": "provider-error-body-cancel",
+    "file": "internal/adapter/model/provider/wire_common.go",
+    "before": "\t\t\t// The caller's own cancellation, returned as transportError does.\n\t\t\treturn zero, err\n",
+    "after": "\t\t\t// The caller's own cancellation, returned as transportError does.\n\t\t\t_ = err\n",
+    "test": "^TestSend_ErrorBodyIsWatched$"
+  },
+  {
+    "id": "agent-outcome-turn-cancel",
+    "file": "internal/app/agent/engine.go",
+    "before": "if ctx.Err() != nil || errors.Is(err, context.Canceled) {",
+    "after": "if errors.Is(err, context.Canceled) {",
+    "test": "^TestAgent_InterruptedTurnIsCanceledWhereverItFails$"
+  },
+  {
+    "id": "agent-outcome-settled-before-end",
+    "file": "internal/app/agent/engine.go",
+    "before": "\t\t\tresult.Outcome = outcomeFor(ctx, result.Err)\n",
+    "after": "\t\t\t_ = outcomeFor(ctx, result.Err)\n",
+    "test": "^TestAgent_InterruptedTurnIsCanceledWhereverItFails$"
   }
 ]

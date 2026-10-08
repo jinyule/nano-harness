@@ -264,7 +264,7 @@ func surfaceHasImage(surface []session.SurfaceNode) bool {
 	return false
 }
 
-func statusError(provider string, status int, retryAfter string) error {
+func statusError(provider string, status int, retryAfter string) *llm.Error {
 	code := llm.ErrorInvalid
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:

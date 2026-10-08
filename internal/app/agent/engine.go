@@ -98,7 +98,7 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 	active := engine.active
 	engine.mu.RUnlock()
 	if !active {
-		result.Err, result.Outcome = ErrNotRunning, session.OutcomeError
+		result.Err, result.Outcome = ErrNotRunning, outcomeFor(ctx, ErrNotRunning)
 		return result
 	}
 	events, err := input.journal.Events(ctx)
@@ -117,6 +117,12 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 		if recovered := recover(); recovered != nil {
 			result.Err = errors.New("agent loop panicked")
 			result.Outcome = session.OutcomeError
+		} else if result.Outcome == session.OutcomeError {
+			// A failure is settled once, before turn/end commits: whichever
+			// boundary returned it, a cancelled turn records a cancellation.
+			// The failure itself is kept, and a committed or stopped outcome
+			// is never rewritten.
+			result.Outcome = outcomeFor(ctx, result.Err)
 		}
 		if stepOpen {
 			// A step cannot close over an open question or a committed call
@@ -445,14 +451,14 @@ func findModel(document settings.Document, provider, model string) settings.Mode
 	return settings.Model{ID: model}
 }
 
-// outcomeFor classifies a failed turn. A cancellation is canceled wherever
-// it surfaced, since shutdown reaches the turn through its dependencies. A
-// deadline is canceled only when it ended the turn's own context: one a
-// dependency enforced internally, such as a provider timeout whose cause
-// wraps context.DeadlineExceeded, is an error, so pending notices still
-// open the next turn.
+// outcomeFor settles a failed turn. The turn's own cancellation wins over
+// whatever failure it caused or raced, including a provider timeout that
+// fired first; a cancellation that reached the turn through a dependency,
+// such as a service stopping at shutdown, counts too. Any other failure,
+// including a deadline a dependency enforced internally, is an error, so
+// pending notices still open the next turn.
 func outcomeFor(ctx context.Context, err error) session.TurnOutcome {
-	if errors.Is(err, context.Canceled) || ctx.Err() != nil && errors.Is(err, context.DeadlineExceeded) {
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 		return session.OutcomeCanceled
 	}
 	return session.OutcomeError

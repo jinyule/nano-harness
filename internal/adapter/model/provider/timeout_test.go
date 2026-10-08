@@ -7,7 +7,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"testing/iotest"
+	"testing/synctest"
 	"time"
 
 	"github.com/jinyule/nano-harness/internal/app/llm"
@@ -177,4 +180,139 @@ func TestPostOAuth_StalledResponseTimesOut(t *testing.T) {
 	provider := idleProvider(server.Client(), 200*time.Millisecond)
 	_, err := provider.postJSON(context.Background(), server.URL, struct{}{}, nil)
 	expectIdleTimeout(t, err)
+}
+
+// exitedBeforeReturn fails unless the watchdog worker had already exited
+// when stop returned.
+func exitedBeforeReturn(t *testing.T, dog *watchdog) {
+	t.Helper()
+	select {
+	case <-dog.exited:
+	default:
+		t.Fatal("stop returned while the watchdog worker was still running")
+	}
+}
+
+// TestWatchdog_ActivityRearmsAndStopJoinsAnExpiredWorker runs on the
+// synctest clock: reads rearm the interval, expiry cancels with the idle
+// cause, reads after expiry do not revive it, and stop returns only after
+// the worker exits.
+func TestWatchdog_ActivityRearmsAndStopJoinsAnExpiredWorker(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		provider := idleProvider(nil, time.Second)
+		ctx, dog, stop := provider.watch(context.Background())
+		body := dog.body(iotest.OneByteReader(strings.NewReader("abcd")))
+		buffer := make([]byte, 1)
+		time.Sleep(900 * time.Millisecond)
+		if _, err := body.Read(buffer); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		time.Sleep(900 * time.Millisecond)
+		synctest.Wait()
+		if ctx.Err() != nil {
+			t.Fatalf("a read did not rearm the watchdog: %v", context.Cause(ctx))
+		}
+		time.Sleep(100 * time.Millisecond)
+		synctest.Wait()
+		if !errors.Is(context.Cause(ctx), errIdleTimeout) {
+			t.Fatalf("expired cause = %v", context.Cause(ctx))
+		}
+		// The worker no longer drains activity; the second read finds the
+		// pending rearm and moves on.
+		for range 2 {
+			if _, err := body.Read(buffer); err != nil {
+				t.Fatal(err)
+			}
+		}
+		stop()
+		exitedBeforeReturn(t, dog)
+	})
+}
+
+// TestWatchdog_StopOverlappingExpiryJoinsTheWorker stops the watchdog at the
+// instant its interval expires, so stop and expiry race on the worker.
+func TestWatchdog_StopOverlappingExpiryJoinsTheWorker(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		provider := idleProvider(nil, time.Second)
+		ctx, dog, stop := provider.watch(context.Background())
+		time.Sleep(time.Second)
+		stop()
+		exitedBeforeReturn(t, dog)
+		if cause := context.Cause(ctx); !errors.Is(cause, errIdleTimeout) && !errors.Is(cause, context.Canceled) {
+			t.Fatalf("cause = %v", cause)
+		}
+	})
+	// Without expiry, stop releases the context as an ordinary cancellation.
+	synctest.Test(t, func(t *testing.T) {
+		provider := idleProvider(nil, time.Second)
+		ctx, dog, stop := provider.watch(context.Background())
+		stop()
+		exitedBeforeReturn(t, dog)
+		if !errors.Is(context.Cause(ctx), context.Canceled) {
+			t.Fatalf("cause = %v", context.Cause(ctx))
+		}
+	})
+}
+
+// errorBodyServer answers with status and writes body one byte per
+// interval; with hold it then keeps the response open until the client
+// leaves, otherwise it completes the response.
+func errorBodyServer(t *testing.T, status int, body string, interval time.Duration, hold bool) *httptest.Server {
+	t.Helper()
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.Copy(io.Discard, request.Body)
+		writer.WriteHeader(status)
+		writer.(http.Flusher).Flush()
+		for index := range len(body) {
+			_, _ = io.WriteString(writer, body[index:index+1])
+			writer.(http.Flusher).Flush()
+			time.Sleep(interval)
+		}
+		if !hold {
+			return
+		}
+		select {
+		case <-request.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(func() { close(release); server.Close() })
+	return server
+}
+
+// TestSend_ErrorBodyIsWatched covers a non-2xx answer: the status decides
+// the class, the body is read under the watchdog so a slowly delivered
+// context-window hint still arrives, and a stalled body keeps its timeout
+// as the cause instead of being dropped.
+func TestSend_ErrorBodyIsWatched(t *testing.T) {
+	const idle = 300 * time.Millisecond
+	t.Run("slow body", func(t *testing.T) {
+		// Fifteen bytes 60 ms apart span three idle windows.
+		server := errorBodyServer(t, http.StatusBadRequest, "too many tokens", 60*time.Millisecond, false)
+		provider := idleProvider(server.Client(), idle)
+		_, err := provider.streamRequest(context.Background(), server.URL, struct{}{}, nil, consumeInto(provider))
+		expectLLMError(t, err, llm.ErrorContextWindow)
+	})
+	t.Run("stalled body", func(t *testing.T) {
+		server := errorBodyServer(t, http.StatusUnauthorized, "denied", 0, true)
+		provider := idleProvider(server.Client(), idle)
+		_, err := provider.streamRequest(context.Background(), server.URL, struct{}{}, nil, consumeInto(provider))
+		expectLLMError(t, err, llm.ErrorUnauthorized)
+		var cause *llm.Error
+		if !errors.Is(err, errIdleTimeout) || !errors.As(errors.Unwrap(err), &cause) || cause.Code != llm.ErrorTimeout {
+			t.Fatalf("stalled error body lost its timeout: %v", err)
+		}
+	})
+	t.Run("caller cancels", func(t *testing.T) {
+		server := errorBodyServer(t, http.StatusInternalServerError, "x", 0, true)
+		provider := idleProvider(server.Client(), time.Minute)
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(200*time.Millisecond, cancel)
+		_, err := provider.streamRequest(ctx, server.URL, struct{}{}, nil, consumeInto(provider))
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("caller cancellation while reading the error body = %v", err)
+		}
+	})
 }
