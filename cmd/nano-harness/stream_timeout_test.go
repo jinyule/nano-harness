@@ -70,11 +70,15 @@ func TestComposition_ProviderIdleTimeoutFailsTurnAndWakesNotices(t *testing.T) {
 			// committed and queued before the step goes silent, and it
 			// cannot be delivered before the step ends.
 			_ = os.WriteFile(filepath.Join(root, "notify"), nil, 0o600)
+			// SSE comment heartbeats keep the watchdog quiet while waiting;
+			// the stream parser skips them, so they add no model data.
 			for deadline := time.Now().Add(10 * time.Second); !noticeQueued(filepath.Join(data, "sessions", "session-idle.jsonl")); time.Sleep(5 * time.Millisecond) {
 				if time.Now().After(deadline) {
 					t.Error("the job notice was never queued")
 					break
 				}
+				_, _ = io.WriteString(writer, ": waiting\n\n")
+				writer.(http.Flusher).Flush()
 			}
 			_, _ = io.WriteString(writer, "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\" notice queued\"}\n\n")
 			writer.(http.Flusher).Flush()

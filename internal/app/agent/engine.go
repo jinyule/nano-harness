@@ -114,15 +114,11 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 	// Like upstream's finally block, this closes every turn whose
 	// turn/start committed, whatever ends it, including its opening.
 	defer func() {
+		panicked := false
 		if recovered := recover(); recovered != nil {
 			result.Err = errors.New("agent loop panicked")
 			result.Outcome = session.OutcomeError
-		} else if result.Outcome == session.OutcomeError {
-			// A failure is settled once, before turn/end commits: whichever
-			// boundary returned it, a cancelled turn records a cancellation.
-			// The failure itself is kept, and a committed or stopped outcome
-			// is never rewritten.
-			result.Outcome = outcomeFor(ctx, result.Err)
+			panicked = true
 		}
 		if stepOpen {
 			// A step cannot close over an open question or a committed call
@@ -143,6 +139,16 @@ func (engine *Engine) runTurn(ctx context.Context, input runInput) (result TurnR
 			}
 			_, closeErr := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordStepEnd, Turn: turn, Step: openStep})
 			result.Err = errors.Join(result.Err, closeErr)
+		}
+		if !panicked && result.Outcome == session.OutcomeError {
+			// A failure is settled once, after the step closeout (whose
+			// appends ignore cancellation and may block on fsync) and just
+			// before turn/end commits: whichever boundary returned it, a
+			// turn cancelled by now records a cancellation. The failure
+			// itself is kept, and a committed or stopped outcome is never
+			// rewritten. An interrupt during the turn/end append itself is
+			// left to the agent, which then does not wake for notices.
+			result.Outcome = outcomeFor(ctx, result.Err)
 		}
 		if turnOpen {
 			_, closeErr := input.journal.Append(context.WithoutCancel(ctx), session.Record{Type: session.RecordTurnEnd, Turn: turn, Outcome: result.Outcome})

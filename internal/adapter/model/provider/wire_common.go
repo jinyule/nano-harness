@@ -40,8 +40,8 @@ type watchdog struct {
 }
 
 // watch derives the exchange context and starts its watchdog. The returned
-// stop must run after the response body is closed; it returns only once the
-// worker has exited, then releases the context.
+// stop must run exactly once, after the response body is closed; it returns
+// only once the worker has exited, then releases the context.
 func (provider *Provider) watch(ctx context.Context) (context.Context, *watchdog, func()) {
 	ctx, cancel := context.WithCancelCause(ctx)
 	dog := &watchdog{idle: provider.idleTimeout, activity: make(chan struct{}, 1), stopping: make(chan struct{}), exited: make(chan struct{})}

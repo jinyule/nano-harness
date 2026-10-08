@@ -1769,5 +1769,19 @@
     "before": "\t\t\tresult.Outcome = outcomeFor(ctx, result.Err)\n",
     "after": "\t\t\t_ = outcomeFor(ctx, result.Err)\n",
     "test": "^TestAgent_InterruptedTurnIsCanceledWhereverItFails$"
+  },
+  {
+    "id": "agent-interrupted-no-wake",
+    "file": "internal/app/agent/agent.go",
+    "before": "(result.Outcome != session.OutcomeCanceled && !result.interrupted || agent.woken)",
+    "after": "(result.Outcome != session.OutcomeCanceled || agent.woken)",
+    "test": "^TestAgent_InterruptDuringCloseoutDoesNotWake$"
+  },
+  {
+    "id": "agent-interrupted-recorded",
+    "file": "internal/app/agent/agent.go",
+    "before": "result.interrupted = turnContext.Err() != nil",
+    "after": "result.interrupted = false",
+    "test": "^TestAgent_InterruptDuringCloseoutDoesNotWake$"
   }
 ]

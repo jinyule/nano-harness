@@ -144,6 +144,9 @@ func TestAgent_InterruptedTurnIsCanceledWhereverItFails(t *testing.T) {
 				close(gate)
 			}
 			result := <-results
+			if (test.events != nil || test.append != nil) && armed {
+				t.Fatal("the turn never reached the injection point")
+			}
 			if result.Outcome != session.OutcomeCanceled || !errors.Is(result.Err, test.cause) {
 				t.Fatalf("interrupted turn = %+v", result)
 			}
@@ -158,6 +161,78 @@ func TestAgent_InterruptedTurnIsCanceledWhereverItFails(t *testing.T) {
 				t.Fatalf("durable outcomes = %v", outcomes)
 			}
 			// The notice was not lost: the next turn delivers it.
+			next, _ := root.Submit(context.Background(), agentMessage(session.RoleUser, "again"))
+			if result := <-next; result.Outcome != session.OutcomeCompleted || result.Text != "next" {
+				t.Fatalf("next turn = %+v", result)
+			}
+			events, _ = root.Events(context.Background())
+			if texts := userTexts(events); !slices.Contains(texts, "2:pending") {
+				t.Fatalf("pending notice not delivered by the next turn: %q", texts)
+			}
+		})
+	}
+}
+
+// TestAgent_InterruptDuringCloseoutDoesNotWake interrupts a failed turn
+// while its closing records are being committed; those appends ignore
+// cancellation and can block on fsync. An interrupt that lands before
+// turn/end is written makes the turn canceled; one that lands while
+// turn/end is being written leaves the error the failure already
+// recorded. Either way the notice queued before the interrupt waits for
+// the next turn instead of waking one.
+func TestAgent_InterruptDuringCloseoutDoesNotWake(t *testing.T) {
+	failure := &llm.Error{Code: llm.ErrorInvalid, Provider: "openai"}
+	for _, test := range []struct {
+		name    string
+		record  session.RecordType
+		outcome session.TurnOutcome
+	}{
+		{name: "step end", record: session.RecordStepEnd, outcome: session.OutcomeCanceled},
+		{name: "turn end", record: session.RecordTurnEnd, outcome: session.OutcomeError},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			harness := startEngineHarness(t, 2, modelAction{err: failure}, modelAction{completion: assistantCompletion("next")})
+			repository := newMemoryRepository()
+			registry, _ := startRegistry(t, harness, repository, newMemoryPolicy())
+			root, err := registry.Create(context.Background(), CreateRequest{SessionID: "root", Create: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			log := repository.logs["root"]
+			armed := true
+			log.mu.Lock()
+			log.appendHook = func(record session.Record) error {
+				if armed && record.Type == test.record {
+					armed = false
+					if err := root.Notify(noticeMessage("pending")); err != nil {
+						t.Error(err)
+					}
+					root.Interrupt()
+				}
+				return nil
+			}
+			log.mu.Unlock()
+			results, err := root.Submit(context.Background(), agentMessage(session.RoleUser, "go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := <-results
+			if armed {
+				t.Fatal("the turn never reached the injection point")
+			}
+			if result.Outcome != test.outcome || !errors.Is(result.Err, failure) {
+				t.Fatalf("interrupted closeout = %+v", result)
+			}
+			if err := root.WhenIdle(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if last := root.Status().Last; last.Turn != 1 {
+				t.Fatalf("the interrupt woke a notice turn: %+v", last)
+			}
+			events, _ := root.Events(context.Background())
+			if outcomes := turnOutcomes(events); !slices.Equal(outcomes, []session.TurnOutcome{test.outcome}) {
+				t.Fatalf("durable outcomes = %v", outcomes)
+			}
 			next, _ := root.Submit(context.Background(), agentMessage(session.RoleUser, "again"))
 			if result := <-next; result.Outcome != session.OutcomeCompleted || result.Text != "next" {
 				t.Fatalf("next turn = %+v", result)

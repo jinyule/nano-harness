@@ -24,6 +24,8 @@
 - 非 2xx 响应的错误正文没有经过看门狗，`ReadAll` 的错误被丢弃，调用方的取消也随之被吞掉。
 - assembled 测试没有固定“通知先入队、再超时”的顺序。
 
+第二个提交（`6293cec`）复审后，两边确认又一个窗口：结局在 defer 一开始就确定了，而随后的读日志、补写结果、追加 `step/end` 与 `turn/end` 都不受取消影响，并且会 fsync，可能阻塞。用户在这段时间里中断时，写入的是 `turn/end error`，中断前排队的通知又被唤醒。Fable 在 `step/end` 与 `turn/end` 追加处注入“先 Notify 再 Interrupt”，持久化结局为 `[error completed]`。此外还有两点：非 2xx 取消测试的固定 200 ms 取消可能早于响应头到达；assembled 测试在等待 `notice/queued` 期间，看门狗仍在计时。
+
 参考实现（`5badb15009ae`）的 `llm-pi-ai` 与 `llm-deepseek` 使用 `idleWatchdog`：默认 300 s 的空闲间隔，从第一次读取开始计时，报 `TIMEOUT`；normal retry 策略把 `TIMEOUT` 视为可重试。
 
 ## Decision
@@ -39,12 +41,15 @@
 - **正文读取分类：** `readFailure` 处理 SSE、非流式 JSON 和 OAuth 的正文读取错误：`DeadlineExceeded` 归为 `timeout` 并保留原因，其余仍是 `protocol`。
 - **非 2xx 响应：** 状态码决定分类。错误正文经看门狗读取，正文完整时才识别 context-window。读取被调用方取消时原样返回取消；其他读取失败把分类后的错误放进 `statusError` 结果的 `Cause`。为此 `statusError` 改为返回 `*llm.Error`。
 - **turn 结局：**
-  - `runTurn` 的 defer 在 panic 判断之后、关闭 step/turn 之前，把 `error` 结局交给 `outcomeFor(ctx, err)` 重新判定一次：turn 的 context 已结束，或错误链含 `context.Canceled`，就记为 `canceled`；否则仍是 `error`。
+  - `runTurn` 的 defer 先处理 panic，再做 step 收尾，然后在追加 `turn/end` 之前，把 `error` 结局交给 `outcomeFor(ctx, err)` 重新判定一次：turn 的 context 已结束，或错误链含 `context.Canceled`，就记为 `canceled`；否则仍是 `error`。step 收尾期间到达的中断因此也记为取消。
   - 只改写 `error`；已提交或已判定的其他结局、panic、原始错误与收尾错误都保留。
   - defer 注册之前的两条提前返回（engine 未运行、首次读取事件失败）也使用 `outcomeFor`。
   - `ErrNotAdmitted` 不设结局，不受影响。
   - context-window 错误之后关闭 step 失败的分支不单独处理：它用 `WithoutCancel` 追加，自身不会因取消失败，按统一规则判定。
-- **唤醒：** agent 的唤醒规则不改。`error` 结局唤醒待投递通知；`canceled` 不唤醒中断前排队的通知；中断生效后新到达的通知仍可唤醒（`agent.go` 的 `NotifyContext`）。
+- **唤醒：**
+  - `agent.turn` 在 `runTurn` 返回后、`cancel()` 之前记下 `turnContext.Err() != nil`，存入 `TurnResult.interrupted`；`finishTurn` 计算 woken 时把它与 `canceled` 同样对待。
+  - 因此 `turn/end` 追加期间才到达的中断：已写入的 `error` 保留（失败先发生），但不唤醒中断前排队的通知。
+  - `error` 且未被中断的 turn 照常唤醒；中断生效后新到达的通知仍可唤醒（`agent.go` 的 `NotifyContext`）。
 - **retry：** 策略不变，`timeout` 原本就是可重试类别；流内容已提交时不重试。
 
 本 Note 拥有失败 turn 的结局判定与看门狗。[通知开场 Note](2026-10-06-wake-turn-opening.md) 和[后台任务 Note](2026-10-04-background-jobs.md) 中关于取消边界的记述仍然成立，不归档。
@@ -88,11 +93,19 @@
   - `notice/queued` 序号早于第一个 `turn/end`；
   - job 通知开启第二个 turn，结局为 `completed`；
   - 共 4 次模型请求。
+- 第三个提交修复前（产品代码为 `6293cec`）：`TestAgent_InterruptDuringCloseoutDoesNotWake` 两个子测试都失败。`step end` 返回 `Outcome:error`；`turn end` 被唤醒出第二个 turn（`Last.Turn:2 Text:next`）。
+- 第三个提交修复后：
+  - `step end` 记为 `canceled`；`turn end` 保留 `error`；两者都不唤醒，排队的通知由下一 turn 投递。
+  - `TestAgent_InterruptedTurnIsCanceledWhereverItFails` 每个 hook 子测试都断言注入点确实到达。
+  - 非 2xx 取消测试改为在进入错误正文 `Read` 时取消。
+  - assembled 测试在等待期间写 SSE 注释心跳。
+  - agent、subagent、goal、cmd 四个包在 `-race` 下通过。
+  - 新增 mutation `agent-interrupted-no-wake` 与 `agent-interrupted-recorded`。与收尾和错误正文相关的 6 项单独运行 `python3 scripts/mutation-check.py --manifest /tmp/st3-mutations.json --report /tmp/st3-mutations-report.json`，全部 killed。
 - 新二进制运行 repro：`elapsed_s 140.6`，`turn/end: ['completed']`，屏幕显示 `turn> completed`。审查修正后的二进制复跑，结果相同（140.6 s，completed）。
 - 定向 mutation：
   - 第一版新增 7 项；本轮更新其中 2 项（`provider-idle-rearm`、`agent-outcome-internal-deadline`，原文已随实现变化），新增 5 项：`provider-watchdog-join`、`provider-error-body-watched`、`provider-error-body-cancel`、`agent-outcome-turn-cancel`、`agent-outcome-settled-before-end`。
   - 本轮受影响的 7 项单独运行 `python3 scripts/mutation-check.py --manifest /tmp/st2-mutations.json --report /tmp/st2-mutations-report.json`，全部 killed。
-- 门禁：`GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check` 通过，覆盖 race 全量测试、lint 0 issues、架构、submodule、每个产品源文件 100% coverage、253 个定向 mutation 全部 killed 和 binary smoke。`AGENT_NOTE_BASE_REF=main make agent-notes` 与 `git diff --check` 通过。
+- 门禁：`GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check` 通过，覆盖 race 全量测试、lint 0 issues、架构、submodule、每个产品源文件 100% coverage、255 个定向 mutation 全部 killed 和 binary smoke（第三个提交；第二个提交时为 253 个）。`AGENT_NOTE_BASE_REF=main make agent-notes` 与 `git diff --check` 通过。
 - 第一版首次运行 `make check` 时，lint 报新测试中 `switch` 不穷举（exhaustive），改为 `if` 后通过。
 - 仓库外证据目录中，早期单独运行得到的 mutation 报告清单已过期，其中有一项 `build-error`。它已原样移入 `superseded/`，由最终 `make check` 生成的完整报告替代。
 

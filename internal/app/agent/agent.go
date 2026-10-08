@@ -133,13 +133,17 @@ func (agent *Agent) turn(ctx context.Context, message session.Message) TurnResul
 		journal: agent.journal, message: message, persona: agent.persona,
 		tools: agent.tools, delegated: agent.delegated, route: agent.route, drain: agent.drainSteers, notices: agent.drainNotices,
 	})
+	// An interrupt that arrived while turn/end was being written cannot
+	// change the recorded outcome, but it still withholds the wake.
+	result.interrupted = turnContext.Err() != nil
 	cancel()
 	return result
 }
 
 // finishTurn records a settled turn. Notices that arrived too late for it
 // open another turn unless a queued turn will deliver them first. A
-// cancelled turn only replays a wake requested after cancellation.
+// cancelled or interrupted turn only replays a wake requested after
+// cancellation.
 func (agent *Agent) finishTurn(result TurnResult, submitted bool) {
 	agent.mu.Lock()
 	defer agent.mu.Unlock()
@@ -152,7 +156,7 @@ func (agent *Agent) finishTurn(result TurnResult, submitted bool) {
 	if !errors.Is(result.Err, ErrNotAdmitted) {
 		agent.last = result
 	}
-	agent.woken = len(agent.notices) > 0 && agent.pending == 0 && (result.Outcome != session.OutcomeCanceled || agent.woken) && agent.mode != "one-shot"
+	agent.woken = len(agent.notices) > 0 && agent.pending == 0 && (result.Outcome != session.OutcomeCanceled && !result.interrupted || agent.woken) && agent.mode != "one-shot"
 	if agent.pending == 0 && !agent.woken {
 		agent.notifyIdleLocked()
 	}

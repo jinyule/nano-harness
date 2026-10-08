@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"testing/iotest"
 	"testing/synctest"
@@ -307,12 +308,43 @@ func TestSend_ErrorBodyIsWatched(t *testing.T) {
 	})
 	t.Run("caller cancels", func(t *testing.T) {
 		server := errorBodyServer(t, http.StatusInternalServerError, "x", 0, true)
-		provider := idleProvider(server.Client(), time.Minute)
+		// The cancellation waits until the error body is being read, so the
+		// headers have arrived and the transport cannot be the one to see it.
+		entered := make(chan struct{})
+		inner := server.Client().Transport
+		client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			response, err := inner.RoundTrip(request)
+			if err == nil {
+				response.Body = &signalingBody{ReadCloser: response.Body, entered: entered}
+			}
+			return response, err
+		})}
+		provider := idleProvider(client, time.Minute)
 		ctx, cancel := context.WithCancel(context.Background())
-		time.AfterFunc(200*time.Millisecond, cancel)
+		go func() {
+			<-entered
+			cancel()
+		}()
 		_, err := provider.streamRequest(ctx, server.URL, struct{}{}, nil, consumeInto(provider))
+		select {
+		case <-entered:
+		default:
+			t.Fatal("the error body was never read")
+		}
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("caller cancellation while reading the error body = %v", err)
 		}
 	})
+}
+
+// signalingBody closes entered on its first Read.
+type signalingBody struct {
+	io.ReadCloser
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (body *signalingBody) Read(buffer []byte) (int, error) {
+	body.once.Do(func() { close(body.entered) })
+	return body.ReadCloser.Read(buffer)
 }

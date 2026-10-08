@@ -31,6 +31,9 @@ type TurnResult struct {
 	// opened reports that turn/start committed, so the opening message
 	// left its queue for good.
 	opened bool
+	// interrupted reports that the turn's context had ended by the time
+	// runTurn returned, even if the outcome was already recorded.
+	interrupted bool
 }
 
 // Status is a secret-free live-agent snapshot.
