@@ -72,7 +72,11 @@ jobs:
         run: |
           scripts/install-ripgrep.sh "$RUNNER_TEMP/ripgrep"
           echo "$RUNNER_TEMP/ripgrep" >> "$GITHUB_PATH"
+      - name: Install and enable the Linux sandbox backend
+        run: scripts/setup-linux-sandbox.sh
       - name: Test with the selected toolchain only
+        env:
+          NANO_HARNESS_REQUIRE_SANDBOX: "1"
         run: go test -race -count=1 ./...
 
   coverage:
@@ -90,7 +94,11 @@ jobs:
         run: |
           scripts/install-ripgrep.sh "$RUNNER_TEMP/ripgrep"
           echo "$RUNNER_TEMP/ripgrep" >> "$GITHUB_PATH"
+      - name: Install and enable the Linux sandbox backend
+        run: scripts/setup-linux-sandbox.sh
       - name: Enforce product coverage floor
+        env:
+          NANO_HARNESS_REQUIRE_SANDBOX: "1"
         run: make coverage
 
   mutation:

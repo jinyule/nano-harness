@@ -46,7 +46,7 @@ confined runner 的启动与致命诊断失败优先于文件 denial；不可用
 
 ### Linux 与 macOS
 
-Linux 使用只读 root bind、独立 PID namespace（`--unshare-pid`）、`--dev /dev`、`--proc /proc` 与 `--die-with-parent`；workspace profile 另外挂载 workspace 与 owned temp，可读 profile 不增加这些可写挂载。删除 `--unshare-all`，共享宿主网络。macOS 保留 `allow default`，按档位限制文件写入。两个平台现在都允许 shell 联网，均不提供网络 sandbox；Linux 仍保留 PID namespace 的后代回收边界。联网风险与文件/进程边界由[安全规则](../security.md#approvalshell-与进程)拥有。
+Linux 使用只读 root bind、独立 PID namespace（`--unshare-pid`）、`--dev /dev`、`--proc /proc` 与 `--die-with-parent`；workspace profile 另外先挂载私有 `--tmpfs /tmp`、再 bind workspace（owned temp 在其中并作为 `TMPDIR`），与上游 `bwrapProfileArgs` 的顺序相同，使宿主 `/tmp` 下的 workspace 不被私有 `/tmp` 遮住；可读 profile 不增加这些可写挂载。删除 `--unshare-all`，共享宿主网络。macOS 保留 `allow default`，按档位限制文件写入。两个平台现在都允许 shell 联网，均不提供网络 sandbox；Linux 仍保留 PID namespace 的后代回收边界。联网风险与文件/进程边界由[安全规则](../security.md#approvalshell-与进程)拥有。
 
 ### 版本识别、拒绝与保留
 
@@ -62,4 +62,4 @@ nano-harness session format 仍为 v2，与上游格式无互通承诺。composi
 
 ## 验证
 
-固定 `session-v2-sandbox.jsonl` 与独立 writer 逐字节比较，反例覆盖 decoder、归属、因果与 composition 拒绝。文件与 shell 模式/升级/approval 矩阵验证实际文件效果和 runner profile；channel 屏障证明审批中切换阻止写入。真实 composition 覆盖三档、模型上下文位置与更新、JSONL resume；subagent 测试覆盖 spawn/fork 当前 override、旧种子与 cold resume。完整快照测试证明 fork 前缀不变、冷恢复去重、compaction 隐藏后重建与局部贡献失败；路径固定向量逐字节覆盖 HTML 字符、Unicode 分隔符和混合转义。PTY 经真实二进制切换模式并检查日志与请求；逐文件 coverage、race、lint 与定向 mutation 由[测试策略](../testing.md)规定，证据见[模式实施 Note](../../.agents/notes/implemented/2026-10-06-session-sandbox-modes.md)与[完整快照修复 Note](../../.agents/notes/implemented/2026-10-07-complete-runtime-context-snapshots.md)。
+固定 `session-v2-sandbox.jsonl` 与独立 writer 逐字节比较，反例覆盖 decoder、归属、因果与 composition 拒绝。文件与 shell 模式/升级/approval 矩阵验证实际文件效果和 runner profile；channel 屏障证明审批中切换阻止写入。真实 composition 覆盖三档、模型上下文位置与更新、JSONL resume；subagent 测试覆盖 spawn/fork 当前 override、旧种子与 cold resume。完整快照测试证明 fork 前缀不变、冷恢复去重、compaction 隐藏后重建与局部贡献失败；路径固定向量逐字节覆盖 HTML 字符、Unicode 分隔符和混合转义。PTY 经真实二进制切换模式并检查日志与请求；逐文件 coverage、race、lint 与定向 mutation 由[测试策略](../testing.md)规定，证据见[模式实施 Note](../../.agents/notes/implemented/2026-10-06-session-sandbox-modes.md)与[完整快照修复 Note](../../.agents/notes/implemented/2026-10-07-complete-runtime-context-snapshots.md)。真实宿主后端的文件效果测试与 CI 的 require 模式见[测试策略](../testing.md#真实-os-sandbox)，Linux 实机证据见 [Linux sandbox CI Note](../../.agents/notes/implemented/2026-10-08-linux-sandbox-ci.md)。

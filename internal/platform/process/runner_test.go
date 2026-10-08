@@ -270,30 +270,30 @@ func TestRunnerRun_ClassifiesSandboxDenial(t *testing.T) {
 func TestRunnerCommand_BuildsSandboxInvocation(t *testing.T) {
 	request := Request{Path: "/bin/tool", Args: []string{"one", "two"}, Mode: ModeHost}
 	runner := &Runner{sandboxPath: "/sandbox", goos: "linux"}
-	path, args, err := runner.command(`/work/"quoted`, "/work/sub", "/work/tmp", request)
+	path, args, err := runner.command(`/work/"quoted`, "/work/sub", request)
 	if err != nil || path != request.Path || strings.Join(args, " ") != "one two" {
 		t.Fatalf("host command = %q %#v, %v", path, args, err)
 	}
 
 	request.Mode = ModeWorkspace
-	path, args, err = runner.command("/work", "/work/sub", "/work/tmp", request)
+	path, args, err = runner.command("/work", "/work/sub", request)
 	joined := strings.Join(args, " ")
-	if err != nil || path != "/sandbox" || !strings.HasSuffix(joined, "--chdir /work/sub -- /bin/tool one two") || !strings.Contains(joined, "--bind /work /work --bind /work/tmp /tmp") || args[0] != "--die-with-parent" {
+	if err != nil || path != "/sandbox" || !strings.HasSuffix(joined, "--chdir /work/sub -- /bin/tool one two") || !strings.Contains(joined, "--tmpfs /tmp --bind /work /work --chdir") || args[0] != "--die-with-parent" {
 		t.Fatalf("linux command = %q %#v, %v", path, args, err)
 	}
 
 	runner.goos = "darwin"
-	path, args, err = runner.command(`/work/"quoted`, "/work/sub", "/work/tmp", request)
+	path, args, err = runner.command(`/work/"quoted`, "/work/sub", request)
 	if err != nil || path != "/sandbox" || args[0] != "-p" || !strings.Contains(args[1], `subpath "/work/\"quoted"`) || args[2] != "/bin/tool" {
 		t.Fatalf("darwin command = %q %#v, %v", path, args, err)
 	}
 
 	runner.sandboxPath = ""
-	if _, _, err := runner.command("/work", "/work", "/work/tmp", request); !errors.Is(err, ErrSandboxUnavailable) {
+	if _, _, err := runner.command("/work", "/work", request); !errors.Is(err, ErrSandboxUnavailable) {
 		t.Fatalf("missing sandbox error = %v", err)
 	}
 	runner.sandboxPath, runner.goos = "/sandbox", "plan9"
-	if _, _, err := runner.command("/work", "/work", "/work/tmp", request); !errors.Is(err, ErrSandboxUnavailable) {
+	if _, _, err := runner.command("/work", "/work", request); !errors.Is(err, ErrSandboxUnavailable) {
 		t.Fatalf("unsupported sandbox error = %v", err)
 	}
 }

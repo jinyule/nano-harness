@@ -27,6 +27,8 @@
 
 `test`、`coverage`、`mutation` 和 release build 在运行测试前执行 [`scripts/install-ripgrep.sh`](../scripts/install-ripgrep.sh)，安装校验过 SHA-256 的 ripgrep 15.2.0 并加入 PATH。`build` 只运行 `version`，不组装工具，所以 Linux/macOS/Windows 构建都不需要 ripgrep。固定版本与升级流程见[开发规范](development.md#ripgrep)。
 
+`test`、`coverage` 和 release build 还运行 [`scripts/setup-linux-sandbox.sh`](../scripts/setup-linux-sandbox.sh) 安装并启用 `bwrap`，测试步骤设置 `NANO_HARNESS_REQUIRE_SANDBOX=1`，使真实 sandbox 测试在后端不可用时失败而不是 skip；前置条件见[开发规范](development.md#linux-sandbox)。`mutation` 的定向用例使用替身 runner，不需要宿主后端。
+
 新增阻断 lane 必须加入汇总 job。观察性/昂贵信号若暂不阻断，应位于单独 workflow，不能用 `continue-on-error` 伪装成绿色阻断项。
 
 Release build 也运行 `make mutation`，避免手动 tag 发布绕过已校准的回归门禁。

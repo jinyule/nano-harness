@@ -144,6 +144,12 @@ file/shell 的 `SandboxApprovalMatrix` 覆盖 standing mode × 单次升级 × a
 
 `TestComposition_SandboxModesAndSwitch` 经真实 composition、SSE 模型、approval 与 JSONL 覆盖三档的 bash/write/edit 效果（full access 文件在 workspace 外）、context 位置、切换与 reopen。`TestComposition_SandboxSwitchWhileApprovalIsPending` 用 channel 屏障固定 asked→mode→decided→result，从文件、日志与下一请求证明 read-only 生效。`TestSandboxContext_RegistrationAndAuthoritativeSection` 证明策略贡献、注册回滚与 scope cleanup；`TestEngine_CompleteRuntimeSnapshotLifecycle` 从真实模型请求证明完整快照、独立消息顺序、冷恢复去重、切回旧模式与 compaction 隐藏后重建，错误矩阵拒绝局部快照发布。`TestComposition_SubagentsEndToEnd` 从磁盘证明 spawn/fork 快照同时包含 sandbox 与委派范围且替代声明只有一次，fork 前缀不变，冷恢复不重复。`TestSandboxPolicyText_JavaScriptWorkspaceVectors` 逐字节比较 `&`、`<`、`>`、U+2028、U+2029 与控制字符混合路径。定向 mutation 拒绝只读 guard、委派捕获、Linux namespace、局部快照、重复快照、忽略 compaction 与 Go JSON 转义回归；不以 100% 语句执行替代上述行为断言。长期契约见 [ADR-0021](decisions/0021-session-sandbox-modes.md)。
 
+## 真实 OS sandbox
+
+`TestRunner_RealSandboxConfinesWrites`、`TestBash_WorkspaceSandboxAllowsInsideAndDeniesOutside` 与 `TestComposition_SandboxModesAndSwitch` 的 read-only/workspace-write 子测试使用宿主真实后端（macOS `sandbox-exec`、Linux `bwrap`），workspace 位于平台临时目录下。它们从宿主文件证明 workspace 与 `TMPDIR` 可写、workspace 外和 read-only 写入被拒绝并带 denial 标记；Linux 另证明 `/tmp` 可写但仅对该命令可见。拒绝目标建在测试包目录下，因为 Linux 的 `/tmp` 是私有 tmpfs，写入宿主临时目录下的路径不会得到 denial。
+
+skip 只认稳定分类：runner 层用 `errors.Is(err, process.ErrSandboxUnavailable)`，工具与 composition 层用结果的 `SANDBOX_UNAVAILABLE` 错误码，不匹配文案。后端缺失和 runner 失败同属这一分类，所以开发机上缺少或无法运行 `bwrap` 时这些测试 skip，并在 skip 信息中保留原始错误。环境变量 `NANO_HARNESS_REQUIRE_SANDBOX` 非空时（CI 设为 `1`），同一分类改为测试失败；CI 的 `test`、`coverage` 与 release 源门禁都设置它，Linux 前置条件见[开发规范](development.md#linux-sandbox)。在缺少 `bwrap` 的 Linux 上，不设该变量时三项测试 skip，设置后全部失败。
+
 ## TUI 与真实 cmd
 
 TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event forwarding/backpressure、所有 durable presentation event、text/reasoning stream、图片附加、普通/approval/auth 输入模式、全部命令、UI 消失与 cancellation。
@@ -228,7 +234,7 @@ Go 包测试可能在不同进程中并发，包内 `t.Parallel` 和独立门禁
 
 ## 平台与发布证据范围
 
-跨编译只证明目标代码能构建；宿主 smoke 只证明该 OS/架构制品可启动。六个 archive 的哈希通过不等于六个平台都运行过。当前 CI 在 Linux 执行两个 Go 版本的 race tests，在 Linux/macOS/Windows 执行本机 build/version，完整 release dry-run 只在 Linux 执行宿主 archive；其他制品的原生执行证据必须单独报告。增加平台行为或宣称新的平台支持时，须补该平台真实入口、进程和文件语义测试。
+跨编译只证明目标代码能构建；宿主 smoke 只证明该 OS/架构制品可启动。六个 archive 的哈希通过不等于六个平台都运行过。当前 CI 在 Linux 执行两个 Go 版本的 race tests（含真实 `bwrap` sandbox），在 Linux/macOS/Windows 执行本机 build/version，完整 release dry-run 只在 Linux 执行宿主 archive；其他制品的原生执行证据必须单独报告。增加平台行为或宣称新的平台支持时，须补该平台真实入口、进程和文件语义测试。
 
 ## Live provider 验证
 

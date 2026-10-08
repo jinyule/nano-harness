@@ -6,6 +6,7 @@
 - `.go-version` / `.tool-versions` 固定主开发和 CI 工具链 Go 1.27.0。
 - golangci-lint 固定为 v2.12.2，GoReleaser 固定为 v2.17.1；工具升级使用独立依赖 PR。
 - 运行与测试需要 ripgrep 15.0.0 或更新版本，CI 固定 15.2.0，见 [ripgrep](#ripgrep)。
+- Linux 上的 confined bash 与其真实 sandbox 测试需要可用的 bubblewrap，见 [Linux sandbox](#linux-sandbox)。
 - 文本统一 UTF-8、LF、末尾一个换行；`.editorconfig` 和 `.gitattributes` 同时约束编辑器与 Git checkout。
 
 提高 Go 最低版本必须说明所需语言/标准库能力、兼容影响和回滚路径，并更新 CI matrix、文档和 release 配置。
@@ -24,6 +25,14 @@ Dependabot 不追踪 ripgrep。升级时提交专门的变更：
 2. 下载归档并在本机计算 SHA-256，确认与发布文件一致后，更新脚本中的 `version` 和 Linux x86_64、macOS arm64/x86_64 三个校验值。
 3. 用新版本运行 `make check` 和 `make tui-e2e`，并让完整 CI 通过。
 4. 提高最低版本时，同时修改 `internal/adapter/tool/search` 的 `minimumVersion`、本节、ADR-0007 与 README。
+
+### Linux sandbox
+
+Linux 的 read-only/workspace-write bash 只通过 PATH 中的 `bwrap` 执行，profile 由[安全规则](security.md#approvalshell-与进程)拥有。本仓没有实现 Landlock 后端；不可用错误逐字沿用上游文案，其中的 Landlock 建议在本仓不适用。找不到 `bwrap` 时命令以 `SANDBOX_UNAVAILABLE` 失败；`bwrap` 存在但无法建立 namespace 或挂载时，以同一分类附带 `Runner failure: bwrap: ...` 失败，均不降级为 host 执行。
+
+Ubuntu 23.10 起默认开启 `kernel.apparmor_restrict_unprivileged_userns`，未受 AppArmor profile 约束的进程创建 user namespace 后会失去 capability，非 setuid 的 `bwrap` 因此无法挂载。Ubuntu 文档给出的最小处理是为该可执行文件加载一个 `flags=(unconfined)` 且只增加 `userns,` 规则的 profile，形状与 Ubuntu 自带的 `chrome` profile 相同；全局关闭这项 sysctl 也可行，但会放开所有程序。
+
+CI 的 `test`、`coverage` 和 release 源门禁运行 [`scripts/setup-linux-sandbox.sh`](../scripts/setup-linux-sandbox.sh)：从 Ubuntu 仓库安装 `bubblewrap`（版本随 runner 镜像的发行版仓库，日志记录实际版本），在上述 sysctl 为 1 时加载 `nano-harness-bwrap` profile，再用 runner 的 workspace-write 挂载参数执行 `true` 作为探针。随后测试以 `NANO_HARNESS_REQUIRE_SANDBOX=1` 运行，后端不可用时失败而不是 skip，见[测试策略](testing.md#真实-os-sandbox)。
 
 ## 本地工作流
 

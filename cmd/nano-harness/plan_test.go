@@ -224,7 +224,13 @@ func (assembled *assembledApp) records(t *testing.T) []session.Record {
 	if err := assembled.runtime.Shutdown(shutdown); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(assembled.transcript)
+	return transcriptRecords(t, assembled.transcript)
+}
+
+// transcriptRecords decodes the records committed to a transcript so far.
+func transcriptRecords(t *testing.T, path string) []session.Record {
+	t.Helper()
+	data, err := os.ReadFile(path) //nolint:gosec // the transcript lives in this test's private session root
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -629,15 +629,40 @@ func TestBash_RunsRealHostProcess(t *testing.T) {
 	}
 }
 
+// skipWithoutSandbox skips a real-backend test when the tool reported the
+// stable SANDBOX_UNAVAILABLE classification. NANO_HARNESS_REQUIRE_SANDBOX
+// makes the backend a precondition instead, so CI cannot pass by skipping;
+// see docs/testing.md.
+func skipWithoutSandbox(t *testing.T, result session.ToolResult) {
+	t.Helper()
+	if result.Error == nil || result.Error.Code != "SANDBOX_UNAVAILABLE" {
+		return
+	}
+	if os.Getenv("NANO_HARNESS_REQUIRE_SANDBOX") != "" {
+		t.Fatalf("NANO_HARNESS_REQUIRE_SANDBOX is set but no sandbox backend is usable: %s", result.Output)
+	}
+	t.Skipf("no usable sandbox backend: %s", result.Output)
+}
+
 // TestBash_WorkspaceSandboxAllowsInsideAndDeniesOutside runs the real OS
 // sandbox where one is installed and checks the model-facing denial marker.
 func TestBash_WorkspaceSandboxAllowsInsideAndDeniesOutside(t *testing.T) {
 	h := newHarness(t, platformProcess.New())
-	outside := t.TempDir()
-	result := h.call(t, map[string]any{"description": "Write inside", "command": "printf inside > inside.txt"})
-	if result.IsError && strings.Contains(result.Output, "workspace sandbox is unavailable") || h.provider.bashPath == "" {
-		t.Skip("no OS sandbox or bash on this host")
+	if h.provider.bashPath == "" {
+		t.Skip("bash is not installed")
 	}
+	// Linux gives each command a private /tmp, so a denial target must lie
+	// outside both the workspace and the host's temporary directory.
+	outside, err := os.MkdirTemp(".", ".sandbox-outside-") //nolint:usetesting // t.TempDir lies under the host /tmp, which confined Linux commands cannot see
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(outside) })
+	if outside, err = filepath.Abs(outside); err != nil {
+		t.Fatal(err)
+	}
+	result := h.call(t, map[string]any{"description": "Write inside", "command": "printf inside > inside.txt"})
+	skipWithoutSandbox(t, result)
 	if result.IsError || result.Output != "(no output)" {
 		t.Fatalf("inside write = %#v", result)
 	}

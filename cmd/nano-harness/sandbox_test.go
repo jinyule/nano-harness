@@ -29,6 +29,21 @@ func allowSandboxCalls(t *testing.T, assembled *assembledApp, broker approval.Br
 	t.Cleanup(func() { _ = scope.Close(context.Background()) })
 }
 
+// skipWithoutSandbox skips a real-backend test when bash reported the stable
+// SANDBOX_UNAVAILABLE classification. NANO_HARNESS_REQUIRE_SANDBOX makes the
+// backend a precondition instead, so CI cannot pass by skipping; see
+// docs/testing.md.
+func skipWithoutSandbox(t *testing.T, result session.ToolResult) {
+	t.Helper()
+	if result.Error == nil || result.Error.Code != "SANDBOX_UNAVAILABLE" {
+		return
+	}
+	if os.Getenv("NANO_HARNESS_REQUIRE_SANDBOX") != "" {
+		t.Fatalf("NANO_HARNESS_REQUIRE_SANDBOX is set but no sandbox backend is usable: %s", result.Output)
+	}
+	t.Skipf("no usable sandbox backend: %s", result.Output)
+}
+
 func TestComposition_SandboxModesAndSwitch(t *testing.T) {
 	for _, mode := range []session.SandboxMode{session.SandboxReadOnly, session.SandboxWorkspaceWrite, session.SandboxDangerFullAccess} {
 		t.Run(string(mode), func(t *testing.T) {
@@ -76,6 +91,14 @@ func TestComposition_SandboxModesAndSwitch(t *testing.T) {
 			}
 			if string(contents) != want {
 				t.Fatalf("mode=%s file=%s", mode, contents)
+			}
+			// The fourth committed result is bash, run under the real host backend.
+			shell := orderedToolResults(transcriptRecords(t, assembled.transcript))[3]
+			if mode != session.SandboxDangerFullAccess {
+				skipWithoutSandbox(t, shell)
+			}
+			if denied := strings.Contains(shell.Output, "[sandbox: file access denied under read-only mode]"); shell.IsError || denied != (mode == session.SandboxReadOnly) {
+				t.Fatalf("shell result mode=%s: %+v", mode, shell)
 			}
 			_, shellErr := os.Stat(filepath.Join(workspace, "shell.txt"))
 			if (shellErr == nil) != (mode != session.SandboxReadOnly) {

@@ -1671,5 +1671,12 @@
     "before": "\tif !result.Truncated && !sourceTruncated && !outputTruncated && !dropped {",
     "after": "\tif !result.Truncated && !sourceTruncated && !outputTruncated && (!dropped || true) {",
     "test": "^Test(RenderHTML_(OmitsAmplifiedTreeConstruction|StopsAtTheOutputBudget)|ConversionCost_(ChargesWeightedFormatting|BoundsParsedWeight|BoundsForeignRegionAllocation)|ScanForeignTag_NeverUndercountsTagsWithoutInnerAngle|ForeignEnd_ResumesPastCoveredUncertainStretches)$"
+  },
+  {
+    "id": "sandbox-linux-private-tmp-order",
+    "file": "internal/platform/process/runner.go",
+    "before": "arguments = append(arguments, \"--tmpfs\", \"/tmp\", \"--bind\", root, root)",
+    "after": "arguments = append(arguments, \"--bind\", root, root, \"--tmpfs\", \"/tmp\")",
+    "test": "^TestRunnerCommand_BuildsSandboxInvocation$"
   }
 ]

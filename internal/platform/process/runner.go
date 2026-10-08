@@ -168,7 +168,7 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 	if request.Mode != ModeHost && !within(root, cwd) || temporary != "" && !within(root, temporary) {
 		return Result{}, ErrInvalidConfig
 	}
-	path, args, err := runner.command(root, cwd, temporary, request)
+	path, args, err := runner.command(root, cwd, request)
 	if err != nil {
 		return Result{}, err
 	}
@@ -260,7 +260,7 @@ func runnerSpawnFailure(err error, path, cwd string) bool {
 	return statErr == nil && info.IsDir() && canEnter(cwd)
 }
 
-func (runner *Runner) command(root, cwd, temporary string, request Request) (string, []string, error) {
+func (runner *Runner) command(root, cwd string, request Request) (string, []string, error) {
 	if request.Mode == ModeHost {
 		return request.Path, request.Args, nil
 	}
@@ -279,7 +279,9 @@ func (runner *Runner) command(root, cwd, temporary string, request Request) (str
 			"--die-with-parent", "--unshare-pid", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
 		}
 		if request.Mode == ModeWorkspace {
-			arguments = append(arguments, "--bind", root, root, "--bind", temporary, "/tmp")
+			// The private /tmp is mounted first so a workspace beneath it
+			// stays visible; TMPDIR keeps naming the owned directory.
+			arguments = append(arguments, "--tmpfs", "/tmp", "--bind", root, root)
 		}
 		arguments = append(arguments, "--chdir", cwd, "--", request.Path)
 		return runner.sandboxPath, append(arguments, request.Args...), nil
