@@ -3,6 +3,7 @@ package process
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -84,31 +85,40 @@ func TestRunnerCommand_SandboxModesShareNetwork(t *testing.T) {
 	}
 }
 
-// skipWithoutSandbox skips a real-backend test on a host without a usable
-// sandbox. NANO_HARNESS_REQUIRE_SANDBOX makes the backend a precondition
+// sandboxUnusable skips a real-backend test whose host precondition is
+// missing. NANO_HARNESS_REQUIRE_SANDBOX makes the precondition mandatory
 // instead, so CI cannot pass by skipping; see docs/testing.md.
-func skipWithoutSandbox(t *testing.T, err error) {
+func sandboxUnusable(t *testing.T, format string, args ...any) {
 	t.Helper()
 	if os.Getenv("NANO_HARNESS_REQUIRE_SANDBOX") != "" {
-		t.Fatalf("NANO_HARNESS_REQUIRE_SANDBOX is set but no sandbox backend is usable: %v", err)
+		t.Fatalf("NANO_HARNESS_REQUIRE_SANDBOX is set but "+format, args...)
 	}
-	t.Skipf("no usable sandbox backend: %v", err)
+	t.Skipf(format, args...)
 }
 
-// TestRunner_RealSandboxConfinesWrites runs the host backend with the
-// workspace under the platform temporary directory, where tests and many
-// users keep it, and observes every file effect from the host.
-func TestRunner_RealSandboxConfinesWrites(t *testing.T) {
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
+// requireSandbox runs the smallest invocation of the host backend, outside
+// the runner's profile, so a runner defect fails the test rather than
+// passing for a missing backend.
+func requireSandbox(t *testing.T) {
+	t.Helper()
+	probe := map[string][]string{
+		"linux":  {"bwrap", "--ro-bind", "/", "/", "--", "true"},
+		"darwin": {"sandbox-exec", "-p", "(version 1)(allow default)", "true"},
+	}[runtime.GOOS]
+	if probe == nil {
+		sandboxUnusable(t, "no sandbox backend exists for %s", runtime.GOOS)
 	}
-	temporary := filepath.Join(root, "tmp")
-	if err := os.Mkdir(temporary, 0o700); err != nil {
-		t.Fatal(err)
+	if output, err := exec.CommandContext(t.Context(), probe[0], probe[1:]...).CombinedOutput(); err != nil {
+		sandboxUnusable(t, "the sandbox backend probe failed: %v: %s", err, output)
 	}
-	// Linux gives each command a private /tmp, so a denial target must lie
-	// outside both the workspace and the host's temporary directory.
+}
+
+// deniedTarget returns a directory confined commands see read-only. Linux
+// gives each command a private /tmp, so the target must lie outside both the
+// workspace and the host /tmp; the package directory qualifies unless the
+// checkout itself is under /tmp.
+func deniedTarget(t *testing.T) string {
+	t.Helper()
 	outside, err := os.MkdirTemp(".", ".sandbox-outside-") //nolint:usetesting // t.TempDir lies under the host /tmp, which confined Linux commands cannot see
 	if err != nil {
 		t.Fatal(err)
@@ -117,13 +127,38 @@ func TestRunner_RealSandboxConfinesWrites(t *testing.T) {
 	if outside, err = filepath.Abs(outside); err != nil {
 		t.Fatal(err)
 	}
+	if runtime.GOOS == "linux" && strings.HasPrefix(outside, "/tmp/") {
+		sandboxUnusable(t, "the checkout %s is under /tmp, which confined Linux commands see as a private tmpfs", outside)
+	}
+	return outside
+}
+
+// TestRunner_RealSandboxConfinesWrites runs the host backend and observes
+// every file effect from the host. On Linux the workspace sits under the
+// host /tmp, the layout the private /tmp mount once hid.
+func TestRunner_RealSandboxConfinesWrites(t *testing.T) {
+	requireSandbox(t)
+	root := t.TempDir()
+	if runtime.GOOS == "linux" {
+		var err error
+		if root, err = os.MkdirTemp("/tmp", "nano-harness-sandbox-"); err != nil { //nolint:usetesting // the regression needs /tmp itself, wherever TMPDIR points
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(root) })
+	}
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporary := filepath.Join(root, "tmp")
+	if err := os.Mkdir(temporary, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := deniedTarget(t)
 	runner := New()
 	run := func(mode Mode, script string) Result {
 		t.Helper()
 		result, err := runner.Run(t.Context(), Request{Path: "/bin/sh", Args: []string{"-c", script}, Root: root, Cwd: root, TempDir: temporary, Mode: mode, Timeout: 10 * time.Second})
-		if errors.Is(err, ErrSandboxUnavailable) {
-			skipWithoutSandbox(t, err)
-		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -157,6 +192,9 @@ func TestRunner_RealSandboxConfinesWrites(t *testing.T) {
 		}
 		if _, err := os.Stat(private); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("private /tmp reached the host: %v", err)
+		}
+		if result := run(ModeWorkspace, "test ! -e "+private); result.ExitCode != 0 {
+			t.Fatalf("private /tmp outlived its command: %+v", result)
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -629,30 +630,45 @@ func TestBash_RunsRealHostProcess(t *testing.T) {
 	}
 }
 
-// skipWithoutSandbox skips a real-backend test when the tool reported the
-// stable SANDBOX_UNAVAILABLE classification. NANO_HARNESS_REQUIRE_SANDBOX
-// makes the backend a precondition instead, so CI cannot pass by skipping;
-// see docs/testing.md.
-func skipWithoutSandbox(t *testing.T, result session.ToolResult) {
+// sandboxUnusable skips a real-backend test whose host precondition is
+// missing. NANO_HARNESS_REQUIRE_SANDBOX makes the precondition mandatory
+// instead, so CI cannot pass by skipping; see docs/testing.md.
+func sandboxUnusable(t *testing.T, format string, args ...any) {
 	t.Helper()
-	if result.Error == nil || result.Error.Code != "SANDBOX_UNAVAILABLE" {
-		return
-	}
 	if os.Getenv("NANO_HARNESS_REQUIRE_SANDBOX") != "" {
-		t.Fatalf("NANO_HARNESS_REQUIRE_SANDBOX is set but no sandbox backend is usable: %s", result.Output)
+		t.Fatalf("NANO_HARNESS_REQUIRE_SANDBOX is set but "+format, args...)
 	}
-	t.Skipf("no usable sandbox backend: %s", result.Output)
+	t.Skipf(format, args...)
+}
+
+// requireSandbox runs the smallest invocation of the host backend, outside
+// the runner's profile, so a runner defect fails the test rather than
+// passing for a missing backend.
+func requireSandbox(t *testing.T) {
+	t.Helper()
+	probe := map[string][]string{
+		"linux":  {"bwrap", "--ro-bind", "/", "/", "--", "true"},
+		"darwin": {"sandbox-exec", "-p", "(version 1)(allow default)", "true"},
+	}[runtime.GOOS]
+	if probe == nil {
+		sandboxUnusable(t, "no sandbox backend exists for %s", runtime.GOOS)
+	}
+	if output, err := exec.CommandContext(t.Context(), probe[0], probe[1:]...).CombinedOutput(); err != nil {
+		sandboxUnusable(t, "the sandbox backend probe failed: %v: %s", err, output)
+	}
 }
 
 // TestBash_WorkspaceSandboxAllowsInsideAndDeniesOutside runs the real OS
 // sandbox where one is installed and checks the model-facing denial marker.
 func TestBash_WorkspaceSandboxAllowsInsideAndDeniesOutside(t *testing.T) {
+	requireSandbox(t)
 	h := newHarness(t, platformProcess.New())
 	if h.provider.bashPath == "" {
 		t.Skip("bash is not installed")
 	}
 	// Linux gives each command a private /tmp, so a denial target must lie
-	// outside both the workspace and the host's temporary directory.
+	// outside both the workspace and the host /tmp; the package directory
+	// qualifies unless the checkout itself is under /tmp.
 	outside, err := os.MkdirTemp(".", ".sandbox-outside-") //nolint:usetesting // t.TempDir lies under the host /tmp, which confined Linux commands cannot see
 	if err != nil {
 		t.Fatal(err)
@@ -661,8 +677,10 @@ func TestBash_WorkspaceSandboxAllowsInsideAndDeniesOutside(t *testing.T) {
 	if outside, err = filepath.Abs(outside); err != nil {
 		t.Fatal(err)
 	}
+	if runtime.GOOS == "linux" && strings.HasPrefix(outside, "/tmp/") {
+		sandboxUnusable(t, "the checkout %s is under /tmp, which confined Linux commands see as a private tmpfs", outside)
+	}
 	result := h.call(t, map[string]any{"description": "Write inside", "command": "printf inside > inside.txt"})
-	skipWithoutSandbox(t, result)
 	if result.IsError || result.Output != "(no output)" {
 		t.Fatalf("inside write = %#v", result)
 	}

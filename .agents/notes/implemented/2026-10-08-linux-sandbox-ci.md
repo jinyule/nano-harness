@@ -14,8 +14,8 @@ PR #18 的 GitHub CI 在 ubuntu-latest（Ubuntu 24.04 镜像 `20260927.320`）�
 ## Decision
 
 - Linux workspace-write profile 改为 `--tmpfs /tmp --bind <workspace> <workspace>`，与上游相同。`/tmp` 对每条命令私有、退出即丢弃，不再映射到 owned temp；owned temp 位于 workspace 内，`TMPDIR` 仍指向它，跨命令保留。read-only profile 不变。`Runner.command` 不再接收 temp 参数。
-- 真实后端测试的 skip 只认稳定分类：runner 层 `errors.Is(err, process.ErrSandboxUnavailable)`，shell 与 composition 层用结果的 `SANDBOX_UNAVAILABLE` 错误码。`NANO_HARNESS_REQUIRE_SANDBOX` 非空时同一分类改为失败。三个包各自保留一个几行的 helper，没有为测试另建共享包。
-- 新增 `TestRunner_RealSandboxConfinesWrites`：workspace 在宿主临时目录下，验证 workspace 与 `TMPDIR` 可写、workspace 外和 read-only 写入被拒并带 denial 标记；Linux 另验证 `/tmp` 可写且宿主不可见。shell 测试的拒绝目标改到测试包目录，因为宿主 `/tmp` 下的路径在 Linux 私有 `/tmp` 中不存在，只会得到 ENOENT。composition 测试读取已提交的 bash 结果，read-only 必须带 read-only denial 标记，workspace-write 不得是错误。
+- 真实后端测试先运行与 runner profile 无关的最小探针（Linux `bwrap --ro-bind / / -- true`，macOS `sandbox-exec -p '(version 1)(allow default)' true`），只有探针失败才 skip；探针成功后 runner 的任何失败，包括 `SANDBOX_UNAVAILABLE` 的 runner failure，都是测试失败。这样不改产品的错误分类，本地也不会把 argv 缺陷当作后端缺失。`NANO_HARNESS_REQUIRE_SANDBOX` 非空时所有 skip 条件改为失败。三个包各自保留几行 helper，没有为测试另建共享包。
+- 新增 `TestRunner_RealSandboxConfinesWrites`：Linux 上 workspace 显式建在宿主 `/tmp` 下，不依赖 `TMPDIR`；验证 workspace 与 `TMPDIR` 可写、workspace 外和 read-only 写入被拒并带 denial 标记；Linux 另验证 `/tmp` 可写、宿主不可见、下一条命令也看不到。shell 与 runner 测试的拒绝目标改到测试包目录，因为宿主 `/tmp` 下的路径在 Linux 私有 `/tmp` 中不存在，只会得到 ENOENT；检出位于 `/tmp` 下时这两项测试按同一规则 skip 或在 require 模式下失败，不误报 denial 缺失。composition 测试读取已提交的 bash 结果，read-only 必须带 read-only denial 标记，workspace-write 不得是错误。
 - 新增 mutation 用例 `sandbox-linux-private-tmp-order`，把挂载顺序换回旧顺序时 `TestRunnerCommand_BuildsSandboxInvocation` 必须失败。
 - CI 的 `test`、`coverage` 与 release 源门禁运行 `scripts/setup-linux-sandbox.sh`：apt 安装 bubblewrap；sysctl 为 1 时为 `bwrap` 加载 `flags=(unconfined)` 且只增加 `userns,` 的 AppArmor profile（Ubuntu 文档给出的单程序做法，形状与 apparmor 4.0.1 包自带的 `chrome` profile 相同），不全局关闭限制；最后用 runner 的 workspace-write 挂载执行 `true` 作为探针。测试步骤设置 `NANO_HARNESS_REQUIRE_SANDBOX=1`。`mutation` 的定向用例使用替身 runner，不需要宿主后端。
 
@@ -23,9 +23,7 @@ PR #18 的 GitHub CI 在 ubuntu-latest（Ubuntu 24.04 镜像 `20260927.320`）�
 
 ## Consequences
 
-Linux 的 confined bash 与上游一样可以在 `/tmp` 下的 workspace 中运行；命令写到 `/tmp` 的文件不再出现在宿主 owned temp 中，需要跨命令保留的临时文件应写到 `TMPDIR`。CI 的 race 与 coverage 现在真正执行 bwrap 路径，后端缺失或损坏会让 CI 失败。开发机缺少或无法运行 `bwrap` 时这些测试仍 skip，并在 skip 信息中给出原始错误。
-
-后端缺失和 runner 失败（例如 AppArmor 拒绝 namespace）属于同一稳定分类，本地都按 skip 处理，所以本地 skip 也可能掩盖 runner 缺陷，例如本次的挂载顺序问题。CI 的 require 模式负责发现这类问题。bubblewrap 版本随 runner 镜像的 Ubuntu 仓库变化，没有固定。
+Linux 的 confined bash 与上游一样可以在 `/tmp` 下的 workspace 中运行；命令写到 `/tmp` 的文件不再出现在宿主 owned temp 中，需要跨命令保留的临时文件应写到 `TMPDIR`。私有 `/tmp` 是内存 tmpfs，bubblewrap 0.9.0 无法限制大小，上限约为内存的一半，以前落盘到 workspace 的大临时文件现在占用内存，应改写到 `TMPDIR`。workspace 为 `/tmp` 或 `/` 时 bind 覆盖私有 tmpfs，`/tmp` 就是宿主 `/tmp`，可写且跨命令保留，这符合 workspace 的授权。CI 的 race 与 coverage 现在真正执行 bwrap 路径，后端缺失或损坏会让 CI 失败。开发机缺少或无法运行 `bwrap` 时这些测试仍 skip，并在 skip 信息中给出探针的原始错误；探针只覆盖建立 namespace 与只读 root，`--proc`、tmpfs 或 bind 在某台主机上单独失败时测试会失败而不是 skip。bubblewrap 版本随 runner 镜像的 Ubuntu 仓库变化，没有固定。
 
 CI 的 AppArmor 步骤只能在 GitHub runner 上验证：OrbStack 内核没有 AppArmor，本地只验证了 profile 语法和 sysctl 不存在时的跳过路径。如果 runner 上的 profile 方案无效，探针会失败并报告。备选方案是在一次性 runner 上执行 `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`，需要另行决定。
 
@@ -37,4 +35,5 @@ CI 的 AppArmor 步骤只能在 GitHub runner 上验证：OrbStack 内核没有 
 - `scripts/setup-linux-sandbox.sh` 在 OrbStack 机器上运行成功（sysctl 不存在，跳过 profile）。安装 apparmor 4.0.1 后，`apparmor_parser -Q -K` 解析通过 profile，拼错规则的对照样例被拒。
 - `python3 scripts/mutation-check.py --manifest <仅含新用例>`：`sandbox-linux-private-tmp-order` 被 killed。
 - macOS：`GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check` 与 `AGENT_NOTE_BASE_REF=feat/upstream-tool-parity make agent-notes` 通过。
+- 复审修复（S1–S3、S5、S6）后，在新的 OrbStack Ubuntu 24.04 arm64 机器上：require 模式下三项真实测试与两个 confined 子测试 PASS；把挂载顺序手工改回旧顺序、不设变量时，三项测试全部 FAIL（composition 的 workspace-write、shell 与 runner），不再 SKIP；仓库副本放在 `/tmp` 下时，shell 与 runner 测试带检出说明 SKIP，require 模式下 FAIL，composition 仍 PASS；`NANO_HARNESS_REQUIRE_SANDBOX=1 go test -race -count=1 ./...` 与 `make coverage`（100.0%）通过，包目录与 `/tmp` 没有残留。macOS 上把 `sandbox-exec` 移出 PATH 后，runner 与 shell 测试 SKIP，设置变量后 FAIL。
 - 尚未获得：GitHub ubuntu-24.04 runner（带 AppArmor 限制）上的 profile 与真实 bwrap 运行证据，需要以 PR CI 为准；Linux x86_64 上的本地运行。

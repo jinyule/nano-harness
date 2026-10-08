@@ -46,7 +46,7 @@ confined runner 的启动与致命诊断失败优先于文件 denial；不可用
 
 ### Linux 与 macOS
 
-Linux 使用只读 root bind、独立 PID namespace（`--unshare-pid`）、`--dev /dev`、`--proc /proc` 与 `--die-with-parent`；workspace profile 另外先挂载私有 `--tmpfs /tmp`、再 bind workspace（owned temp 在其中并作为 `TMPDIR`），与上游 `bwrapProfileArgs` 的顺序相同，使宿主 `/tmp` 下的 workspace 不被私有 `/tmp` 遮住；可读 profile 不增加这些可写挂载。删除 `--unshare-all`，共享宿主网络。macOS 保留 `allow default`，按档位限制文件写入。两个平台现在都允许 shell 联网，均不提供网络 sandbox；Linux 仍保留 PID namespace 的后代回收边界。联网风险与文件/进程边界由[安全规则](../security.md#approvalshell-与进程)拥有。
+Linux 使用只读 root bind、独立 PID namespace（`--unshare-pid`）、`--dev /dev`、`--proc /proc` 与 `--die-with-parent`；workspace profile 另外先挂载私有 `--tmpfs /tmp`、再 bind workspace（owned temp 在其中并作为 `TMPDIR`），与上游 `bwrapProfileArgs` 的顺序相同，使宿主 `/tmp` 下的 workspace 不被私有 `/tmp` 遮住。私有 `/tmp` 由内存支撑，bubblewrap 0.9.0 没有大小参数，上限约为内存的一半，大的临时文件应写到 `TMPDIR`；workspace 为 `/tmp` 或 `/` 时，workspace bind 覆盖私有 tmpfs，`/tmp` 就是宿主 `/tmp`，可写且跨命令保留。可读 profile 不增加这些可写挂载。删除 `--unshare-all`，共享宿主网络。macOS 保留 `allow default`，按档位限制文件写入。两个平台现在都允许 shell 联网，均不提供网络 sandbox；Linux 仍保留 PID namespace 的后代回收边界。联网风险与文件/进程边界由[安全规则](../security.md#approvalshell-与进程)拥有。
 
 ### 版本识别、拒绝与保留
 

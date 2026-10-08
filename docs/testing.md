@@ -146,9 +146,11 @@ file/shell 的 `SandboxApprovalMatrix` 覆盖 standing mode × 单次升级 × a
 
 ## 真实 OS sandbox
 
-`TestRunner_RealSandboxConfinesWrites`、`TestBash_WorkspaceSandboxAllowsInsideAndDeniesOutside` 与 `TestComposition_SandboxModesAndSwitch` 的 read-only/workspace-write 子测试使用宿主真实后端（macOS `sandbox-exec`、Linux `bwrap`），workspace 位于平台临时目录下。它们从宿主文件证明 workspace 与 `TMPDIR` 可写、workspace 外和 read-only 写入被拒绝并带 denial 标记；Linux 另证明 `/tmp` 可写但仅对该命令可见。拒绝目标建在测试包目录下，因为 Linux 的 `/tmp` 是私有 tmpfs，写入宿主临时目录下的路径不会得到 denial。
+`TestRunner_RealSandboxConfinesWrites`、`TestBash_WorkspaceSandboxAllowsInsideAndDeniesOutside` 与 `TestComposition_SandboxModesAndSwitch` 的 read-only/workspace-write 子测试使用宿主真实后端（macOS `sandbox-exec`、Linux `bwrap`）。它们从宿主文件证明 workspace 与 `TMPDIR` 可写、workspace 外和 read-only 写入被拒绝并带 denial 标记。Linux 上 runner 测试把 workspace 显式建在宿主 `/tmp` 下（不依赖 `TMPDIR`），这正是私有 `/tmp` 曾遮住 workspace 的布局；它另证明 `/tmp` 可写、宿主看不到、下一条命令也看不到。私有 `/tmp` 是内存 tmpfs、不可限制大小，以及 workspace 为 `/tmp` 或 `/` 时的例外，见[安全规则](security.md#approvalshell-与进程)；测试不覆盖这两种 workspace。
 
-skip 只认稳定分类：runner 层用 `errors.Is(err, process.ErrSandboxUnavailable)`，工具与 composition 层用结果的 `SANDBOX_UNAVAILABLE` 错误码，不匹配文案。后端缺失和 runner 失败同属这一分类，所以开发机上缺少或无法运行 `bwrap` 时这些测试 skip，并在 skip 信息中保留原始错误。环境变量 `NANO_HARNESS_REQUIRE_SANDBOX` 非空时（CI 设为 `1`），同一分类改为测试失败；CI 的 `test`、`coverage` 与 release 源门禁都设置它，Linux 前置条件见[开发规范](development.md#linux-sandbox)。在缺少 `bwrap` 的 Linux 上，不设该变量时三项测试 skip，设置后全部失败。
+拒绝目标建在测试包目录下，因为 Linux 的 `/tmp` 是私有 tmpfs，宿主临时目录下的路径在命令中不存在，只会得到 ENOENT 而不是 denial。因此这两项拒绝测试要求仓库检出不在 `/tmp` 下：Linux 上检出位于 `/tmp` 下时它们按下述规则 skip（或在 require 模式下失败），而不是误报 denial 缺失。
+
+是否 skip 由测试先行的最小探针决定，不看被测 runner 的结果：Linux 执行 `bwrap --ro-bind / / -- true`，macOS 执行 `sandbox-exec -p '(version 1)(allow default)' true`。探针失败（后端缺失、无法建立 namespace 等）时测试 skip，并在信息中保留原始错误；探针成功后，runner 的任何失败，包括带 `SANDBOX_UNAVAILABLE` 的 runner failure，都是测试失败，所以 runner 的 argv 缺陷不会被当作“后端不可用”。环境变量 `NANO_HARNESS_REQUIRE_SANDBOX` 非空时（CI 设为 `1`），上述 skip 条件全部改为测试失败；CI 的 `test`、`coverage` 与 release 源门禁都设置它，Linux 前置条件见[开发规范](development.md#linux-sandbox)。在缺少 `bwrap` 的 Linux 上，不设该变量时三项测试 skip，设置后全部失败。
 
 ## TUI 与真实 cmd
 

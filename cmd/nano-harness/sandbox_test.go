@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -29,24 +31,40 @@ func allowSandboxCalls(t *testing.T, assembled *assembledApp, broker approval.Br
 	t.Cleanup(func() { _ = scope.Close(context.Background()) })
 }
 
-// skipWithoutSandbox skips a real-backend test when bash reported the stable
-// SANDBOX_UNAVAILABLE classification. NANO_HARNESS_REQUIRE_SANDBOX makes the
-// backend a precondition instead, so CI cannot pass by skipping; see
-// docs/testing.md.
-func skipWithoutSandbox(t *testing.T, result session.ToolResult) {
+// sandboxUnusable skips a real-backend test whose host precondition is
+// missing. NANO_HARNESS_REQUIRE_SANDBOX makes the precondition mandatory
+// instead, so CI cannot pass by skipping; see docs/testing.md.
+func sandboxUnusable(t *testing.T, format string, args ...any) {
 	t.Helper()
-	if result.Error == nil || result.Error.Code != "SANDBOX_UNAVAILABLE" {
-		return
-	}
 	if os.Getenv("NANO_HARNESS_REQUIRE_SANDBOX") != "" {
-		t.Fatalf("NANO_HARNESS_REQUIRE_SANDBOX is set but no sandbox backend is usable: %s", result.Output)
+		t.Fatalf("NANO_HARNESS_REQUIRE_SANDBOX is set but "+format, args...)
 	}
-	t.Skipf("no usable sandbox backend: %s", result.Output)
+	t.Skipf(format, args...)
+}
+
+// requireSandbox runs the smallest invocation of the host backend, outside
+// the runner's profile, so a runner defect fails the test rather than
+// passing for a missing backend.
+func requireSandbox(t *testing.T) {
+	t.Helper()
+	probe := map[string][]string{
+		"linux":  {"bwrap", "--ro-bind", "/", "/", "--", "true"},
+		"darwin": {"sandbox-exec", "-p", "(version 1)(allow default)", "true"},
+	}[runtime.GOOS]
+	if probe == nil {
+		sandboxUnusable(t, "no sandbox backend exists for %s", runtime.GOOS)
+	}
+	if output, err := exec.CommandContext(t.Context(), probe[0], probe[1:]...).CombinedOutput(); err != nil {
+		sandboxUnusable(t, "the sandbox backend probe failed: %v: %s", err, output)
+	}
 }
 
 func TestComposition_SandboxModesAndSwitch(t *testing.T) {
 	for _, mode := range []session.SandboxMode{session.SandboxReadOnly, session.SandboxWorkspaceWrite, session.SandboxDangerFullAccess} {
 		t.Run(string(mode), func(t *testing.T) {
+			if mode != session.SandboxDangerFullAccess {
+				requireSandbox(t)
+			}
 			outside, err := filepath.EvalSymlinks(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
@@ -94,9 +112,6 @@ func TestComposition_SandboxModesAndSwitch(t *testing.T) {
 			}
 			// The fourth committed result is bash, run under the real host backend.
 			shell := orderedToolResults(transcriptRecords(t, assembled.transcript))[3]
-			if mode != session.SandboxDangerFullAccess {
-				skipWithoutSandbox(t, shell)
-			}
 			if denied := strings.Contains(shell.Output, "[sandbox: file access denied under read-only mode]"); shell.IsError || denied != (mode == session.SandboxReadOnly) {
 				t.Fatalf("shell result mode=%s: %+v", mode, shell)
 			}
