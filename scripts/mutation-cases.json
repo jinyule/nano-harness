@@ -1678,5 +1678,12 @@
     "before": "arguments = append(arguments, \"--tmpfs\", \"/tmp\", \"--bind\", root, root)",
     "after": "arguments = append(arguments, \"--bind\", root, root, \"--tmpfs\", \"/tmp\")",
     "test": "^TestRunnerCommand_BuildsSandboxInvocation$"
+  },
+  {
+    "id": "goal-model-pause-interrupt",
+    "file": "internal/app/goal/driver.go",
+    "before": "if change.Operation == session.GoalOpPause && change.Actor == ActorHost {",
+    "after": "if change.Operation == session.GoalOpPause {",
+    "test": "^TestDriver_ModelPauseDoesNotInterrupt$"
   }
 ]
