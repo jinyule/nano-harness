@@ -121,6 +121,7 @@ ADR 编号预先分配，避免并行分支冲突；审查修复期间追加 001
 | 第四轮 | `d7d199d..005a3a8`，opus | C1：同一结算窗口中暂停被后续取消覆盖（`5866270`），“取消后重新授权再取消”保留为有意偏差；`Maybe` 返回值与 fork surface 措辞（`7799a5e`）；shell 与 job 文案、排空窗口对齐上游（`7667d02`）；subagent 随时序变化的覆盖路径（`52d3715`）；取消改写错误结果，与上游只替换成功结果不一致（`7c60a92`） |
 | 第五轮 | `005a3a8..3e1d726`，Codex | approval 决定落盘期间关闭仍授权执行（`287e199`）；sandbox 与委派两份局部快照各自声明取代、策略路径转义与上游不同（`91aef9e`） |
 | 最终联合评审 | `3e1d726..289e970`，Codex 与 opus（wiring 视角）独立评审 | opus 侧没有 Blocker。Codex 侧确认 4 个 Blocker：FB1 edit diff 把整个替换块当作变化；FB2 普通 I/O 错误被过度分类；FB3 目录发布冲突被误分类；FB4 broker 故障被误分类为 `NO_PROVIDER`。修复：`0e4d084`（FB1–FB3），diff 工作预算与取消 `e60f095`，`de1a12a`（FB4，同时去掉 `BAD_ANSWER`）。Suggestion 由 `168aa92` 处理：context 段落按 order 排序、web cleanup 取消有界测试、版本号文档改为引用 `compositionID`。参考分析由 `a1cd3c9` 收敛为当前事实 |
+| PR #18 CI | `96fc18b`，GitHub ubuntu-latest 的 race（Go 1.26/1.27）与 coverage | runner 未安装 `bwrap`，shell 测试的 skip 仍匹配旧文案，composition 没有 skip；在 Linux 实机复现时另发现挂载顺序缺陷：私有 `/tmp` 遮住位于宿主 `/tmp` 下的 workspace。`e0fdfb3` 改为先 `--tmpfs /tmp` 再 bind workspace，skip 改认稳定分类，CI 安装 bubblewrap 与 AppArmor userns profile 并以 `NANO_HARNESS_REQUIRE_SANDBOX=1` 运行，见 [Linux sandbox CI Note](2026-10-08-linux-sandbox-ci.md) |
 
 ### 第七轮交叉评审
 

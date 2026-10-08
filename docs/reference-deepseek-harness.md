@@ -298,7 +298,7 @@ Webhook、Agent Teams、schedule、slots、Web Client 和多 SDK 是上游新增
 
 ### 证据缺口
 
-- 原生 Linux：bwrap 的 PID namespace、root/dev/proc 挂载与共享网络只有 argv 与 profile 测试，没有在 Linux 主机上实际执行联网与隔离的证据；实施主机为 macOS。
+- 原生 Linux：CI 的 race 与 coverage lane 以真实 `bwrap` 执行文件写入、拒绝与私有 `/tmp` 测试，后端不可用即失败（见[测试策略](testing.md#真实-os-sandbox)）；PID namespace 的后代回收与共享网络仍只有 argv 测试，没有实机证据。Linux 只有 `bwrap`，上游的 Landlock 后备后端未实现。
 - Windows：CI 只做本机 build/version。逐段路径解析、spill 私有性不按权限位判断、非 Unix runner 只终止直接子进程，都没有原生运行证据；Windows sandbox 后端未实现。平台证据范围见[测试策略](testing.md#平台与发布证据范围)。
 - live provider：三个 provider 的检索请求与工具结果图片只有 loopback 协议证据；Codex Responses 对 `web_search` 工具和数组形态 `function_call_output` 的接受度未经 live 验证。
 - 首次发布迁移：新增记录与 composition token 提升都依靠 composition mismatch 拒绝旧会话。本仓尚无发布 tag；首次向用户发布会话数据前，必须按[根规则](../AGENTS.md#当前阶段)由 ADR 决定版本识别、拒绝或迁移策略，以及数据保留和恢复路径。
