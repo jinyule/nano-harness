@@ -25,7 +25,7 @@ PR #18 的 GitHub CI 在 ubuntu-latest（Ubuntu 24.04 镜像 `20260927.320`）�
 
 Linux 的 confined bash 与上游一样可以在 `/tmp` 下的 workspace 中运行；命令写到 `/tmp` 的文件不再出现在宿主 owned temp 中，需要跨命令保留的临时文件应写到 `TMPDIR`。私有 `/tmp` 是内存 tmpfs，bubblewrap 0.9.0 无法限制大小，上限约为内存的一半，以前落盘到 workspace 的大临时文件现在占用内存，应改写到 `TMPDIR`。workspace 为 `/tmp` 或 `/` 时 bind 覆盖私有 tmpfs，`/tmp` 就是宿主 `/tmp`，可写且跨命令保留，这符合 workspace 的授权。CI 的 race 与 coverage 现在真正执行 bwrap 路径，后端缺失或损坏会让 CI 失败。开发机缺少或无法运行 `bwrap` 时这些测试仍 skip，并在 skip 信息中给出探针的原始错误；探针只覆盖建立 namespace 与只读 root，`--proc`、tmpfs 或 bind 在某台主机上单独失败时测试会失败而不是 skip。bubblewrap 版本随 runner 镜像的 Ubuntu 仓库变化，没有固定。
 
-CI 的 AppArmor 步骤只能在 GitHub runner 上验证：OrbStack 内核没有 AppArmor，本地只验证了 profile 语法和 sysctl 不存在时的跳过路径。如果 runner 上的 profile 方案无效，探针会失败并报告。备选方案是在一次性 runner 上执行 `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`，需要另行决定。
+CI 的 AppArmor 步骤只能在 GitHub runner 上验证，OrbStack 内核没有 AppArmor；run 37733240682 已证明单程序 profile 在 ubuntu-latest 上有效。若将来的 runner 镜像使该方案失效，setup 探针会先失败；备选方案是在一次性 runner 上执行 `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`，需要另行决定。
 
 ## Verification
 
@@ -36,4 +36,5 @@ CI 的 AppArmor 步骤只能在 GitHub runner 上验证：OrbStack 内核没有 
 - `python3 scripts/mutation-check.py --manifest <仅含新用例>`：`sandbox-linux-private-tmp-order` 被 killed。
 - macOS：`GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check` 与 `AGENT_NOTE_BASE_REF=feat/upstream-tool-parity make agent-notes` 通过。
 - 复审修复（S1–S3、S5、S6）后，在新的 OrbStack Ubuntu 24.04 arm64 机器上：require 模式下三项真实测试与两个 confined 子测试 PASS；把挂载顺序手工改回旧顺序、不设变量时，三项测试全部 FAIL（composition 的 workspace-write、shell 与 runner），不再 SKIP；仓库副本放在 `/tmp` 下时，shell 与 runner 测试带检出说明 SKIP，require 模式下 FAIL，composition 仍 PASS；`NANO_HARNESS_REQUIRE_SANDBOX=1 go test -race -count=1 ./...` 与 `make coverage`（100.0%）通过，包目录与 `/tmp` 没有残留。macOS 上把 `sandbox-exec` 移出 PATH 后，runner 与 shell 测试 SKIP，设置变量后 FAIL。
-- 尚未获得：GitHub ubuntu-24.04 runner（带 AppArmor 限制）上的 profile 与真实 bwrap 运行证据，需要以 PR CI 为准；Linux x86_64 上的本地运行。
+- GitHub CI：PR #18 在 `bbabd36` 上的 run 37733240682 全部通过。setup 步骤打印 `granted user namespaces to /usr/bin/bwrap through AppArmor` 与 `bubblewrap 0.9.0`，说明 runner 开启了 `apparmor_restrict_unprivileged_userns`，单程序 profile 生效；Go 1.26/1.27 race 与 Coverage 在 `NANO_HARNESS_REQUIRE_SANDBOX=1` 下通过。
+- 尚未获得：Linux x86_64 上的本地运行；`4883e39` 的探针与测试调整在 GitHub runner 上的运行结果。
