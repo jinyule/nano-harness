@@ -381,14 +381,29 @@ func TestDriver_CancelledRoundPausesAndHostPauseInterrupts(t *testing.T) {
 }
 
 func TestDriver_ModelPauseDoesNotInterrupt(t *testing.T) {
-	test := startDriver(t, nil)
+	test := startDriver(t, func(test *driverFixture) { test.root.idle = make(chan chan struct{}, 1) })
 	view := test.create(t, "ship", nil)
+	close(<-test.root.idle)
 	call := test.next(t)
 	test.play(t, call, session.OutcomeCompleted, func() {
 		if _, err := test.service.Pause(context.Background(), "root", view.Goal.Ref(), ActorModel); err != nil {
 			t.Error(err)
 		}
 	})
+	// The driver waits for idle again only after it took the round's result,
+	// so stopping it later cannot interrupt a round it still holds.
+	close(<-test.root.idle)
+	select {
+	case continued := <-test.root.calls:
+		t.Fatalf("driver continued the paused goal with %+v", continued.message.Source)
+	case <-test.root.idle:
+		// A whole scheduling pass saw the paused goal and queued nothing.
+	case <-time.After(5 * time.Second):
+		t.Fatal("driver never finished the scheduling pass")
+	}
+	if test.root.interrupted() != 0 {
+		t.Fatalf("model pause interrupts = %d", test.root.interrupted())
+	}
 	test.stop(t)
 	if test.root.interrupted() != 0 || len(test.root.calls) != 0 {
 		t.Fatalf("interrupts=%d calls=%d", test.root.interrupted(), len(test.root.calls))

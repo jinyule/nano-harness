@@ -40,6 +40,8 @@
 
 空白、Unicode 边界与交互补充的实施证据见[交互与会话状态对齐](2026-10-06-interaction-state-upstream-alignment.md)；本 Note 保留各能力的初始组装、生命周期和持久化决定。
 
+模型 pause 不中断的 driver 单元测试的偶发失败调查与屏障修复见[模型 pause 测试偶发失败](2026-10-08-goal-model-pause-flake.md)；driver 行为与本 Note 的决定不变。
+
 ## Consequences
 
 模型看到的工具定义、`tool:goal` 段落、轮次提示、收尾指令、结果 JSON 和错误文本与上游一致；目标事实可从日志重建，恢复后目标保留且 disarmed。轮次是普通 turn，规划模式、approval 与打断不需要专门分支。
