@@ -44,6 +44,7 @@
 - 判定只改写 `error` 结局。已提交的 `completed`、`max_tokens`、`step_limit` 和已判为 `canceled` 的结局都不变。panic 仍记为 `error`。返回的错误保留原始失败与收尾错误，未准入（`ErrNotAdmitted`）的 turn 不受影响。
 - context-window 错误之后用 `WithoutCancel` 关闭 step 时失败，不是取消造成的，turn 仍有效时记为 `error`；同时 turn 已被中断时，按上面的规则记为 `canceled`。
 - 中断若在 `turn/end` 追加期间才到达，该追加不受取消影响、可能阻塞在 fsync 上，已经写入的结局（例如 `error`）不再改写，因为失败确实先发生了。agent 在 `runTurn` 返回时记下 turn 的 context 是否已结束；已结束时，与 `canceled` 一样不为中断前排队的通知开启新 turn。剩下的窗口只在 `runTurn` 返回到 agent 结算之间，只有内存操作，没有 I/O。
+- continuable 子代理是否继续驻留，由 agent 是否仍持有已接受的通知（`Status().Queued`）决定，与结局无关，见 [ADR-0013](0013-background-continuable-subagents.md)。因此 `error` 但被中断、不唤醒的 child 会保持驻留，下一次投递一并处理先前的消息，不会被结算释放而丢失消息。
 - 唤醒规则：以 `error` 结束且未被中断的 turn 仍按既有规则唤醒待投递通知，后台子代理消息、job 完成通知不会因 provider 超时而滞留。被取消或被中断的 turn 不唤醒中断前排队的通知；中断生效后新到达的通知仍可唤醒下一 turn。
 - session 格式、composition ID 和 wire 请求都不变。只有新写入的 `turn/end` 结局不同：turn 仍有效时的 provider 内部期限以前写 `canceled`，现在写 `error`；被中断但以前写成 `error` 的 turn，现在写 `canceled`。旧日志中已写入的结局不改写，恢复时也不重新解释。
 

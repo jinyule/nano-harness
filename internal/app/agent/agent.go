@@ -439,7 +439,7 @@ func (agent *Agent) Subscribe(buffer int) (<-chan session.Event, func(), error) 
 func (agent *Agent) Status() Status {
 	agent.mu.Lock()
 	defer agent.mu.Unlock()
-	return Status{SessionID: agent.journal.Header().SessionID, ParentID: agent.parentID, Label: agent.label, Mode: agent.mode, Depth: agent.depth, Busy: agent.busy, Pending: agent.pending, Last: agent.last}
+	return Status{SessionID: agent.journal.Header().SessionID, ParentID: agent.parentID, Label: agent.label, Mode: agent.mode, Depth: agent.depth, Busy: agent.busy, Pending: agent.pending, Queued: len(agent.notices), Last: agent.last}
 }
 
 // Surface returns a detached current model-visible transcript for explicit forks.

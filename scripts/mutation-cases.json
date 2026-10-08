@@ -1783,5 +1783,26 @@
     "before": "result.interrupted = turnContext.Err() != nil",
     "after": "result.interrupted = false",
     "test": "^TestAgent_InterruptDuringCloseoutDoesNotWake$"
+  },
+  {
+    "id": "subagent-residency-outcome",
+    "file": "internal/app/subagent/service.go",
+    "before": "queued := committed < current.delivered && held",
+    "after": "queued := committed < current.delivered && held && outcome == session.OutcomeCanceled",
+    "test": "^TestService_ChildInterruptedWhileClosingKeepsDeliveredMessages$"
+  },
+  {
+    "id": "subagent-residency-held",
+    "file": "internal/app/subagent/service.go",
+    "before": "queued := committed < current.delivered && held",
+    "after": "queued := committed < current.delivered && held || committed < current.delivered",
+    "test": "^TestService_ResidencyWithoutTurnSettlesAsFinished$"
+  },
+  {
+    "id": "agent-status-queued",
+    "file": "internal/app/agent/agent.go",
+    "before": "Queued: len(agent.notices)",
+    "after": "Queued: 0",
+    "test": "^TestAgent_InterruptDuringCloseoutDoesNotWake$"
   }
 ]

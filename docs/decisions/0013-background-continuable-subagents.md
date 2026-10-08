@@ -102,7 +102,7 @@ You are a delegated subagent: your permission scope was fixed when you were star
 
 已知限制：
 
-- 只有中断前已接受但尚未提交的消息，且中断后没有新的唤醒输入时，child 才继续等待下一次投递。服务按本次驻留投递的消息与结算通知计数，与日志中已提交的 `agent-message`/`subagent-settled` 比较；最后一个 turn 以取消结束且仍有差额时，child 保持驻留（`list_agents` 显示 `inactive`）。中断后新接受的消息在旧 turn 退出后自动唤醒下一 turn，一并提交此前排队的消息。parent 不再发送新输入时，中断前的待投递消息与池名额保留到服务关闭。
+- 只有中断前已接受但尚未提交的消息，且中断后没有新的唤醒输入时，child 才继续等待下一次投递。服务按本次驻留投递的消息与结算通知计数，与日志中已提交的 `agent-message`/`subagent-settled` 比较；仍有差额、且 agent 报告自己仍持有已接受的通知（`Status().Queued > 0`）时，child 保持驻留（`list_agents` 显示 `inactive`）。这一判定与最后一个 turn 的结局无关：以取消结束的 turn，以及失败后在追加 `turn/end` 期间被中断、结局保留 `error` 的 turn（[ADR-0024](0024-provider-stream-idle-timeout.md)），都会留下通知而不开启新 turn。agent 已停止、内存中的通知已清空时，`Queued` 为 0，差额不再阻止结算，child 不会永久驻留。中断后新接受的消息在旧 turn 退出后自动唤醒下一 turn，一并提交此前排队的消息。parent 不再发送新输入时，中断前的待投递消息与池名额保留到服务关闭。
 - 后台任务通知不经过 subagent 服务；它与 child 结算并发到达时可能落在正在关闭的 agent 上而丢失，被释放的 job 本身已经结束。
 - 待投递消息与驻留状态只在内存中；进程崩溃会丢失已接受但尚未写入 child 日志的消息。
 - 目录的读不到状态只报告 `unavailable`，不区分上游的 `corrupt`。

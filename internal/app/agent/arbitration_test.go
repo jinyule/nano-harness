@@ -226,8 +226,8 @@ func TestAgent_InterruptDuringCloseoutDoesNotWake(t *testing.T) {
 			if err := root.WhenIdle(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			if last := root.Status().Last; last.Turn != 1 {
-				t.Fatalf("the interrupt woke a notice turn: %+v", last)
+			if status := root.Status(); status.Last.Turn != 1 || status.Queued != 1 {
+				t.Fatalf("the interrupt woke a notice turn or dropped it: %+v", status)
 			}
 			events, _ := root.Events(context.Background())
 			if outcomes := turnOutcomes(events); !slices.Equal(outcomes, []session.TurnOutcome{test.outcome}) {
@@ -238,8 +238,8 @@ func TestAgent_InterruptDuringCloseoutDoesNotWake(t *testing.T) {
 				t.Fatalf("next turn = %+v", result)
 			}
 			events, _ = root.Events(context.Background())
-			if texts := userTexts(events); !slices.Contains(texts, "2:pending") {
-				t.Fatalf("pending notice not delivered by the next turn: %q", texts)
+			if texts := userTexts(events); !slices.Contains(texts, "2:pending") || root.Status().Queued != 0 {
+				t.Fatalf("pending notice not delivered by the next turn: %q, %+v", texts, root.Status())
 			}
 		})
 	}

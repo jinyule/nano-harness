@@ -26,6 +26,8 @@
 
 第二个提交（`6293cec`）复审后，两边确认又一个窗口：结局在 defer 一开始就确定了，而随后的读日志、补写结果、追加 `step/end` 与 `turn/end` 都不受取消影响，并且会 fsync，可能阻塞。用户在这段时间里中断时，写入的是 `turn/end error`，中断前排队的通知又被唤醒。Fable 在 `step/end` 与 `turn/end` 追加处注入“先 Notify 再 Interrupt”，持久化结局为 `[error completed]`。此外还有两点：非 2xx 取消测试的固定 200 ms 取消可能早于响应头到达；assembled 测试在等待 `notice/queued` 期间，看门狗仍在计时。
 
+第三个提交（`f94c75a`，已随 PR #21 推送）复审时，astra 指出、Fable 实测确认了一个由它引入的回归。continuable 子代理的结算 watcher 用“结局为 `canceled`”推断 agent 仍留着已接受的消息。`error` 但被中断、不唤醒的新状态不满足这个推断：child 被结算释放，worker 退出时清空了内存中的通知，`send_message` 已接受、尚未写入日志的消息永久丢失，违反 ADR-0013 的结算条件。在 `6293cec` 上，同一场景下 error 结局会唤醒 child，不丢消息。
+
 参考实现（`5badb15009ae`）的 `llm-pi-ai` 与 `llm-deepseek` 使用 `idleWatchdog`：默认 300 s 的空闲间隔，从第一次读取开始计时，报 `TIMEOUT`；normal retry 策略把 `TIMEOUT` 视为可重试。
 
 ## Decision
@@ -50,6 +52,10 @@
   - `agent.turn` 在 `runTurn` 返回后、`cancel()` 之前记下 `turnContext.Err() != nil`，存入 `TurnResult.interrupted`；`finishTurn` 计算 woken 时把它与 `canceled` 同样对待。
   - 因此 `turn/end` 追加期间才到达的中断：已写入的 `error` 保留（失败先发生），但不唤醒中断前排队的通知。
   - `error` 且未被中断的 turn 照常唤醒；中断生效后新到达的通知仍可唤醒（`agent.go` 的 `NotifyContext`）。
+- **子代理驻留：** `agent.Status` 增加 `Queued`，即 `len(notices)`，在 agent 锁内读取。subagent watcher 改为 `committed < delivered && Queued > 0` 才保持驻留，直接询问 agent 是否仍持有已接受的通知，不再从结局推断。
+  - 只看 `committed < delivered` 会让已停止的 agent 永久驻留，因此不采用。
+  - 把 `interrupted` 导出给 watcher，仍把判定绑在结局分类上，以后新增不唤醒的状态还会漏，因此也不采用。
+  - 其他按 `canceled` 判断的消费者已由 Fable 逐个核对，不受影响：未开场 turn 归还通知、结算文案、`jobOutcome`、goal 的 `Settle` 与 driver、TUI。
 - **retry：** 策略不变，`timeout` 原本就是可重试类别；流内容已提交时不重试。
 
 本 Note 拥有失败 turn 的结局判定与看门狗。[通知开场 Note](2026-10-06-wake-turn-opening.md) 和[后台任务 Note](2026-10-04-background-jobs.md) 中关于取消边界的记述仍然成立，不归档。
@@ -101,11 +107,16 @@
   - assembled 测试在等待期间写 SSE 注释心跳。
   - agent、subagent、goal、cmd 四个包在 `-race` 下通过。
   - 新增 mutation `agent-interrupted-no-wake` 与 `agent-interrupted-recorded`。与收尾和错误正文相关的 6 项单独运行 `python3 scripts/mutation-check.py --manifest /tmp/st3-mutations.json --report /tmp/st3-mutations-report.json`，全部 killed。
+- 第四个提交修复前（产品代码为 `f94c75a`）：`TestService_ChildInterruptedWhileClosingKeepsDeliveredMessages` 失败，报 `child "session-…" settled with an accepted message still queued`；canceled 版本 `TestService_InterruptedChildKeepsDeliveredMessages` 仍通过。
+- 第四个提交修复后：
+  - child 驻留，下一次 `send_message` 一并提交 `QUEUED` 与 `AGAIN`，之后正常结算，root 收到 `handled both` 的结算通知。
+  - agent、subagent、goal、job、`adapter/tool/subagent`、cmd 在 `-race` 下通过。
+  - 新增 mutation `subagent-residency-outcome`（恢复按结局判断）、`subagent-residency-held`（去掉 `Queued` 条件，由 `TestService_ResidencyWithoutTurnSettlesAsFinished` 拒绝）和 `agent-status-queued`（`Queued` 恒为 0）。3 项单独运行 `python3 scripts/mutation-check.py --manifest /tmp/st4-mutations.json --report /tmp/st4-mutations-report.json`，全部 killed。
 - 新二进制运行 repro：`elapsed_s 140.6`，`turn/end: ['completed']`，屏幕显示 `turn> completed`。审查修正后的二进制复跑，结果相同（140.6 s，completed）。
 - 定向 mutation：
   - 第一版新增 7 项；本轮更新其中 2 项（`provider-idle-rearm`、`agent-outcome-internal-deadline`，原文已随实现变化），新增 5 项：`provider-watchdog-join`、`provider-error-body-watched`、`provider-error-body-cancel`、`agent-outcome-turn-cancel`、`agent-outcome-settled-before-end`。
   - 本轮受影响的 7 项单独运行 `python3 scripts/mutation-check.py --manifest /tmp/st2-mutations.json --report /tmp/st2-mutations-report.json`，全部 killed。
-- 门禁：`GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check` 通过，覆盖 race 全量测试、lint 0 issues、架构、submodule、每个产品源文件 100% coverage、255 个定向 mutation 全部 killed 和 binary smoke（第三个提交；第二个提交时为 253 个）。`AGENT_NOTE_BASE_REF=main make agent-notes` 与 `git diff --check` 通过。
+- 门禁：`GOLANGCI_LINT_CACHE=$PWD/.cache/golangci-lint make check` 通过，覆盖 race 全量测试、lint 0 issues、架构、submodule、每个产品源文件 100% coverage、258 个定向 mutation 全部 killed 和 binary smoke（第四个提交；第三个提交时为 255 个，第二个提交时为 253 个）。`AGENT_NOTE_BASE_REF=main make agent-notes` 与 `git diff --check` 通过。
 - 第一版首次运行 `make check` 时，lint 报新测试中 `switch` 不穷举（exhaustive），改为 `if` 后通过。
 - 仓库外证据目录中，早期单独运行得到的 mutation 报告清单已过期，其中有一项 `build-error`。它已原样移入 `superseded/`，由最终 `make check` 生成的完整报告替代。
 

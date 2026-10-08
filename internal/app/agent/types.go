@@ -45,7 +45,10 @@ type Status struct {
 	Depth     int
 	Busy      bool
 	Pending   int
-	Last      TurnResult
+	// Queued counts accepted notices the agent holds in memory and has not
+	// yet committed to a turn.
+	Queued int
+	Last   TurnResult
 }
 
 // CreateRequest defines a root or delegated agent. A created delegated
