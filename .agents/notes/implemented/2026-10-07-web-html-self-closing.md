@@ -27,8 +27,8 @@ astra 复审合入的 `4c8d690` 时报告 B1：512 层开放元素上限不约�
   - 上述 x/net template 偏差。
   - 深度计数方式不同。
   - 误嵌套产生的空格式包装（上游输出 `~~~~`、`[](/a)`）不输出，归入等价排版。
-- 建树前，`conversionCost` 做一次纯字节扫描，按「1 + 属性数」的权重过估计建树量，因为 x/net 的 clone 复制整份属性切片。扫描不解释注释、CDATA、raw text 与 foreign 上下文：这些区段的起止取决于解析器上下文，任何不依赖上下文的词法选择都会在某个方向低估。每个 `<字母`、`</字母` 和每段其他字节都是插入点，计当前活动格式权重 F\* 加它自身建出的部分；表格标签另加 `impliedElements`（2），格式元素的非栈顶结束标签与活动列表中已有 a/nobr 时的 `<a>`、`<nobr>` 开始标签另加 `adoptionClones`（32）乘当时最大格式权重。F\* 只在结束标签等于词法栈顶时扣除；同一签名最多计 3 次（Noah's Ark）；签名按标签语法求出，无法忠实比较的标签按唯一身份计，且扫描绝不消费过 `<`。累计超过 `maxConversionCost`（2^18）时输出省略标记，不建树。上界论证与取舍写在 ADR-0011。
-- 渲染器在输出预算处停止：写入量达到 `maxRenderBytes`（200,000 个 UTF-16 单元对应的字节上限）时停止拼接、不切断 rune，并追加同一省略标记；捕获内容在写回上层时再次计入，所以嵌套的可见格式元素不能无界复制。
+- 建树前，`conversionCost` 按「1 + 属性数」的权重过估计建树量，因为 x/net 的 clone 复制整份属性切片。HTML 内容用一个复用的 x/net tokenizer 计价：解析器只经 5 处回馈改变 tokenizer（`parse.go:645`、`748`、`1096`、`2122` 的 `NextIsNotRawText` 与 `2233` 的 `AllowCDATA`），HTML 内容里只有 noscript 一处，扫描同样处理，所以 token 流与解析器一致，名字、属性、注释、raw text 与引号值都精确，F\* 只在结束标签关闭最内层开放元素时扣除。非自闭合的 `<svg>`/`<math>` 子树内改为按字节计价，权重只增不减；`foreignEnd` 找恢复点时越过注释、CDATA、伪注释、引号属性值与 raw-text 内容的最远终点，SVG/MathML 根分别配平，只会晚恢复。每个子树新建一个 tokenizer，最多 256 个。表格标签另加 `impliedElements`（2），adoption 计 `adoptionClones`（32）乘最大格式权重。累计超过 `maxConversionCost`（2^18）时输出省略标记，不建树。上界论证与取舍写在 ADR-0011。
+- 渲染器在输出预算处停止：根层写入达到 `maxRenderBytes` 时停止，不切断 rune。捕获层不消耗这个预算，但任何捕获都不超过根层剩余的预算，所有捕获合计不超过 `maxCapturedBytes`。`renderHTML` 返回是否丢弃，`formatFetch` 把它与其他截断原因取或，所以出现省略标记时 `truncated` 一定为真。
 - 运行时 composition、插件 effect、session 格式和工具定义都不变。依赖仍是已有的 `golang.org/x/net` v0.59.0，未改变 `go.mod`。
 
 ## Consequences
@@ -99,4 +99,15 @@ Codex 指出按 tokenizer 默认 raw text 扫描会低估（SVG `title` 内的�
 
 局限：上界论证依据 HTML 规范与 x/net/html v0.59.0 的源码（8 轮上限、重建路径、clone 的属性复制），没有形式化证明；升级 x/net 时必须重新核对，ADR-0011 已把它列入复审触发条件。签名各不相同的格式元素特别多的页面会被省略，这是已记录的取舍。
 
-未获得的证据：没有对真实网页做批量差分；差分覆盖测试表、复审向量与生成语料。费用校准用 8 个保存的真实页面、3 个 Go 文档页面和复审者的合成页面，没有大规模网页语料。生成样本只覆盖所列标记组合，不构成对全部 HTML 输入的上界证明。
+### 混合路线：HTML 内容精确、foreign 子树内保守（astra 四项 Blocker 与 Fable 复审）
+
+astra 复审 `3339104` 报出四项，Fable 独立确认并扩展：字节扫描的扣减会被注释、伪注释、`</` 后接非字母、doctype、引号属性值与 raw-text 结束形式骗过（80 KB 可放大到约 552 MB）；自写的标签名与属性语法与 x/net 不一致；渲染预算在捕获层之间重复计费，且整页省略时 `truncated` 为 false（后者 `633844b` 就存在）。Fable 指出"可能不是标签"的区段方案要照 x/net 状态机实现并维护单调地平线，实现量接近自写 tokenizer，而逐标签新建 tokenizer 分配过多（2 万个标签约 88 MB）。
+
+- 按协调者转达的 Fable 方案改为混合路线：HTML 内容用一个复用的精确 tokenizer，foreign 内容用字节扫描。第一版"第一个 svg/math 之后整页只增不减"在 11 个真实页面中误省略 4 个（MDN、Python 文档、GitHub、pkg.go.dev，均因靠前的小 SVG 图标），按要求停手回报；维护者选定只在 SVG/MathML 子树内按字节计价，恢复点必须保守。
+- 恢复点：`foreignEnd` 在子树内对每个 `<` 求所有读法的最远终点（注释到 `-->`、CDATA 到 `]]>`、伪注释到 `>`、标签按引号值读到结尾、raw-text 内容到合法结束标签，script 含注释开启符或 plaintext 时到输入结尾），只有越过这些区段且 SVG、MathML 根都配平的结束标签才作为恢复点；开始标签不论位置都计入深度。breakout 只会让恢复更晚。
+- 渲染：捕获受根层剩余预算约束（克隆长链接的形态由 23 MB 降到约 6.8 MB），捕获合计另有上限；`renderHTML` 返回是否丢弃，`formatFetch` 取或，整页省略时 `truncated` 为真。
+- 证据：Fable 列出的 23 种结束形式、astra 的四项反例与放大版、子树内用注释/CDATA/引号值/raw text 藏 `</svg>`、嵌套 svg/math、breakout、未闭合 svg 全部 sound 或被省略；差分 fuzz 216 万个样本（含 svg 前缀、长尾、链接尾）0 违反，最紧比 0.995。常见页面：11 个真实页面费用 2,050–120,161 全部转换（数据与 SHA-256 前缀见测试策略）；SVG 图标后接 900 个链接 8,105；1,000 个小 svg 后接链接 114,374，扫描分配 1.1 MB。移植的标签读取器经 20,000 个生成标签对照 x/net 从不少计属性。
+- mutation：现为 23 项，含预算比较三种变异、属性与元素权重、文本插入点、两处 adoption、栈顶、noscript、foreign 切换、子树权重不可释放、恢复点的地平线/raw text/深度/注释、子树数上限、子树内属性计数、渲染停止点、捕获合计上限、捕获剩余预算与丢弃即截断，单独运行均被杀死。
+- `make check`（私有 `GOLANGCI_LINT_CACHE`）：通过；逐产品文件 coverage 100.0%，lint `0 issues`，清单中 239 个 mutation 全部 killed，build smoke 输出 `nano-harness dev`。期间修掉三处 lint（两处 token 类型 switch 补全 exhaustive、一处空循环体），并把随重构失配的三项 mutation 重新对准。
+
+未获得的证据：没有对真实网页做批量差分；差分覆盖测试表、复审向量与生成语料。费用校准用 11 个页面快照（快照不入库，测试策略记录 SHA-256 前缀），没有大规模网页语料。上界论证依据 x/net/html v0.59.0 源码中的 5 处回馈，没有形式化证明；生成样本只覆盖所列标记组合，不构成对全部 HTML 输入的上界证明。

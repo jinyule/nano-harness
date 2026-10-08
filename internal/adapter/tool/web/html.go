@@ -34,25 +34,20 @@ const impliedElements = 2
 // and clones at most three more.
 const adoptionClones = 32
 
-// Elements whose start tag the parser may precede with implied table elements.
-var tableElements = map[string]bool{
-	"caption": true, "col": true, "colgroup": true, "tbody": true, "td": true,
-	"tfoot": true, "th": true, "thead": true, "tr": true,
-}
-
 // noahsArkLimit is how many identical formatting elements the parser keeps in
 // the list of active formatting elements.
 const noahsArkLimit = 3
-
-// maxTagScan bounds how far scanTag reads for one tag, so a tag with an
-// unterminated quote cannot make the scan quadratic. Past it the remaining
-// input bounds the attributes the tag could still carry.
-const maxTagScan = 4096
 
 // Elements the parser keeps in the list of active formatting elements.
 var formattingElements = map[string]bool{
 	"a": true, "b": true, "big": true, "code": true, "em": true, "font": true, "i": true, "nobr": true,
 	"s": true, "small": true, "strike": true, "strong": true, "tt": true, "u": true,
+}
+
+// Elements whose start tag the parser may precede with implied table elements.
+var tableElements = map[string]bool{
+	"caption": true, "col": true, "colgroup": true, "tbody": true, "td": true,
+	"tfoot": true, "th": true, "thead": true, "tr": true,
 }
 
 // Elements removed with their content, matching the reference converter.
@@ -139,32 +134,59 @@ func (current *buffer) write(value string) {
 	}
 }
 
-// maxRenderBytes stops the walk once the text written, captured content
-// included, cannot fit the fetch output budget. Nested visible formatting makes
-// each level copy the level below it, so rendering has to stop at the budget
-// rather than format everything and truncate afterwards. One UTF-16 unit is at
-// most three UTF-8 bytes, so this never cuts output the budget would keep.
+// maxRenderBytes stops the walk once the output cannot fit the fetch output
+// budget. Rendering has to stop there rather than format everything and
+// truncate afterwards. One UTF-16 unit is at most three UTF-8 bytes, so this
+// never cuts output the budget would keep.
 const maxRenderBytes = 3 * maxFetchOutputUnits
 
-// write records the text, stopping at maxRenderBytes. Captured content is
-// counted again when its level writes it out, so nested formatting cannot copy
-// without bound.
+// maxCapturedBytes bounds the text held in capture levels. A capture does not
+// spend the output budget, because its content is written out again at the
+// level above and must stay available in full; but nested visible formatting
+// makes each level copy the level below it, so the total is bounded too. Pages
+// that fit the output budget stay far below this: the calibration pages hold at
+// most 58 KB in captures, and a body wrapped in eight levels of visible
+// formatting still fits.
+const maxCapturedBytes = 8 * maxRenderBytes
+
+// write records value in the current level, stopping at the output budget.
+// The root level holds what the model receives and spends the budget once. A
+// capture level does not spend it, because its content is written out again
+// at the level above; but no capture may grow past what the root can still
+// take, since that excess could never be shown, and all captures together stay
+// within maxCapturedBytes, because nested visible formatting makes each level
+// copy the level below it. state.stopped carries the result.
 func (state *renderer) write(value string) {
 	remaining := maxRenderBytes - state.written
+	if len(state.captures) > 1 {
+		remaining -= state.current().text.Len()
+		state.captured += len(value)
+		if state.captured > maxCapturedBytes {
+			state.stopped = true
+			return
+		}
+	}
 	if remaining <= 0 {
-		state.written = maxRenderBytes + 1
+		state.stopped = true
 		return
 	}
 	if len(value) > remaining {
-		// Never split a rune: the result has to stay valid UTF-8.
-		for remaining > 0 && value[remaining]&0xC0 == 0x80 {
-			remaining--
-		}
-		value = value[:remaining]
-		state.written = maxRenderBytes + 1
+		value = cutUTF8(value, remaining)
+		state.stopped = true
 	}
-	state.written += len(value)
+	if len(state.captures) == 1 {
+		state.written += len(value)
+	}
 	state.current().write(value)
+}
+
+// cutUTF8 returns the longest prefix of value within limit bytes that does not
+// split a rune, so the result stays valid UTF-8.
+func cutUTF8(value string, limit int) string {
+	for limit > 0 && value[limit]&0xC0 == 0x80 {
+		limit--
+	}
+	return value[:limit]
 }
 
 // renderer converts a token stream to Markdown-like text in one linear pass.
@@ -176,6 +198,8 @@ type renderer struct {
 	rows     []*row
 	hidden   int
 	written  int
+	captured int
+	stopped  bool
 	pre      int
 	code     int
 	newlines int
@@ -188,14 +212,16 @@ type renderer struct {
 // formatting-element reconstruction and adoption, foreign content), in the
 // reference converter's body context and with scripting disabled as in its
 // parser; the renderer then removes non-visible content while walking it.
-func renderHTML(source string) string {
+// dropped reports that the omission marker replaced the input or part of it,
+// which the fetch output reports as truncation.
+func renderHTML(source string) (text string, dropped bool) {
 	if conversionCost(source) > maxConversionCost {
-		return omittedHTML
+		return omittedHTML, true
 	}
 	// The reader is in memory, so the only parse error is the depth limit.
 	nodes, err := html.ParseFragmentWithOptions(strings.NewReader(source), &html.Node{Type: html.ElementNode, Data: "body", DataAtom: atom.Body}, html.ParseOptionEnableScripting(false))
 	if err != nil {
-		return omittedHTML
+		return omittedHTML, true
 	}
 	state := &renderer{captures: []*buffer{{}}}
 	parsed := 0
@@ -203,22 +229,19 @@ func renderHTML(source string) string {
 		state.walk(node)
 		parsed += countTemplates(node)
 	}
-	text := strings.TrimSpace(state.captures[0].text.String())
-	if state.written > maxRenderBytes {
-		// Rendering stopped at the output budget; mark what it dropped.
-		return strings.TrimSpace(text + "\n\n" + omittedHTML)
+	text = strings.TrimSpace(state.captures[0].text.String())
+	// Rendering stopped at the output budget, or x/net/html ignored the rest of
+	// the input at a template start tag processed while SVG or MathML was open;
+	// mark what was dropped.
+	if state.stopped || templateStartTags(source) > parsed {
+		return strings.TrimSpace(text + "\n\n" + omittedHTML), true
 	}
-	if templateStartTags(source) > parsed {
-		// x/net/html ignores the rest of the input at a template start tag
-		// processed while SVG or MathML is open; mark what was dropped.
-		return strings.TrimSpace(text + "\n\n" + omittedHTML)
-	}
-	return text
+	return text, false
 }
 
 // walk renders one parsed node and its subtree, stopping at the output budget.
 func (state *renderer) walk(node *html.Node) {
-	if state.written > maxRenderBytes {
+	if state.stopped {
 		return
 	}
 	switch node.Type {
@@ -242,232 +265,429 @@ func (state *renderer) walk(node *html.Node) {
 // conversionCost reports an upper bound on the weight tree construction may
 // create: every element counts one plus its attributes, because x/net/html
 // copies the whole attribute slice whenever it clones a node, and every text
-// node counts one.
+// node counts one. Above maxConversionCost the caller omits the input.
 //
-// The scan reads bytes only. It never interprets comments, CDATA sections, raw
-// text or foreign content, because the parser's context decides where those
-// begin and end: a comment opened inside script is text to the parser, while
-// the same bytes hide markup from a tokenizer. Every `<name` and `</name` is an
-// insertion point, as is every run of other bytes, and the parser's own tag
-// tokens must start the same way, so the scan never sees fewer insertion points
-// than the parser.
-//
-// Each insertion point costs the active formatting weight plus impliedElements,
-// which covers reconstruction before inserting a node, the node itself and the
-// elements it implies. `</br>` is an insertion point like the `<br>` the parser
-// substitutes, and text insertion reconstructs before inserting, so both are
-// covered. Every end tag of a formatting element, and every `<a>` or `<nobr>`
-// start tag, also costs adoptionClones times the heaviest formatting weight,
-// which bounds one run of the adoption agency.
-//
-// The active formatting weight only grows, except where an end tag matches the
-// top of the lexical element stack. That exception is conservative: the parser
-// removes the entry when it closes an element that is both in scope and
-// innermost, and an end tag the parser ignores or reads as text is not on top
-// of this stack either. Identical start tags stop adding weight after
-// noahsArkLimit, matching the clause that keeps at most three of them.
+// HTML content is priced from an x/net tokenizer, whose token stream there is
+// exactly the parser's: the parser changes the tokenizer only through
+// NextIsNotRawText (parse.go:645, 748 and 1096 for noscript, which this does
+// too because scripting is disabled, and 2122 when it inserts a foreign
+// element) and AllowCDATA (parse.go:2233, foreign content only). Names,
+// attributes, comments, raw text and quoted values are therefore exact, and
+// weight is released only when an end tag closes the innermost open element.
+// Inside an SVG or MathML subtree the two diverge, so that stretch is priced by
+// bytes and its weight is never released; see foreignEnd for where the exact
+// tokenizer resumes.
 func conversionCost(source string) int {
-	var open []openElement
-	signatures := map[string]int{}
-	cost, weight, heaviest, anchors := 0, 0, 0, 0
-	for index := 0; index < len(source); {
-		start := strings.IndexByte(source[index:], '<')
-		if start != 0 {
-			// One run of text inserts one text node.
-			cost += weight + 1
-			if start < 0 {
-				return cost
-			}
-			index += start
+	state := &costState{signatures: map[string]int{}}
+	for start, regions := 0, 0; start < len(source) && state.cost <= maxConversionCost; regions++ {
+		begin := state.scanHTML(source, start)
+		if begin >= len(source) {
+			break
 		}
-		closing := index+1 < len(source) && source[index+1] == '/'
-		nameStart := index + 1
-		if closing {
-			nameStart++
+		resume := len(source)
+		if regions < maxForeignRegions {
+			resume = foreignEnd(source, begin)
 		}
-		name, nameEnd := scanTagName(source, nameStart)
-		if name == "" {
-			// Not a tag: the parser reads "<" as text.
-			cost += weight + 1
-			index++
-			continue
-		}
-		index = nameEnd
-		if closing {
-			// An end tag inserts nothing of its own; one element covers the
-			// paragraph an unmatched `</p>` opens and the `<br>` `</br>` becomes.
-			cost += weight + 1
-			_, _, length := scanTag(source[index:], false)
-			index += length
-			if formattingElements[name] && !matchesTop(open, name) {
-				// A formatting end tag the parser does not close directly runs
-				// the adoption agency, which clones.
-				cost += adoptionClones * (heaviest + 1)
-			}
-			popMatching(&open, name, &weight, signatures, &anchors)
-			continue
-		}
-		signature, attributes, length := scanTag(source[index:], formattingElements[name])
-		if signature == "" {
-			// A tag whose bytes the parser may read differently counts as a
-			// formatting element of its own.
-			signature = "\x01" + strconv.Itoa(index)
-		} else {
-			signature = name + "\x00" + signature
-		}
-		index += length
-		// The element itself weighs one plus its attributes, because a clone
-		// copies the whole attribute slice.
-		cost += weight + 1 + attributes
-		if tableElements[name] {
-			cost += impliedElements
-		}
-		switch {
-		case !formattingElements[name]:
-		case voidElements[name]:
-		default:
-			if (name == "a" || name == "nobr") && anchors > 0 {
-				// An a or nobr already in the list makes the start tag run the
-				// adoption agency before the new element joins it.
-				cost += adoptionClones * (heaviest + 1)
-			}
-			element := openElement{tag: name, signature: signature}
-			if signatures[signature] < noahsArkLimit {
-				element.weight = 1 + attributes
-				signatures[signature]++
-				weight += element.weight
-				heaviest = max(heaviest, element.weight)
-				if name == "a" || name == "nobr" {
-					anchors++
-				}
-			}
-			open = append(open, element)
-			continue
-		}
-		if !voidElements[name] {
-			open = append(open, openElement{tag: name})
-		}
-		if cost > maxConversionCost {
-			return cost
-		}
+		state.scanForeign(source[begin:resume])
+		start = resume
 	}
-	return cost
+	return state.cost
 }
 
-// openElement is one entry on conversionCost's lexical element stack.
+// maxForeignRegions bounds how many SVG or MathML subtrees get their own
+// resumed tokenizer, each of which allocates a read buffer. Past it the rest of
+// the input is priced by bytes, which only adds.
+const maxForeignRegions = 256
+
+// scanHTML prices HTML content from start with one tokenizer and returns the
+// offset just after the first svg or math start tag that opens foreign content,
+// or the input length. A self-closing svg or math closes at once, so the
+// parser and tokenizer stay in step past it.
+func (state *costState) scanHTML(source string, start int) int {
+	tokenizer := html.NewTokenizer(strings.NewReader(source[start:]))
+	offset := start
+	for state.cost <= maxConversionCost {
+		kind := tokenizer.Next()
+		raw := tokenizer.Raw()
+		offset += len(raw)
+		switch kind {
+		case html.ErrorToken:
+			return len(source)
+		case html.StartTagToken, html.SelfClosingTagToken:
+			token := tokenizer.Token()
+			if token.Data == "noscript" {
+				tokenizer.NextIsNotRawText()
+			}
+			state.startTag(token.Data, len(token.Attr), string(raw))
+			if (token.Data == "svg" || token.Data == "math") && kind == html.StartTagToken {
+				return offset
+			}
+		case html.EndTagToken:
+			name, _ := tokenizer.TagName()
+			state.endTag(string(name))
+		case html.TextToken, html.CommentToken, html.DoctypeToken:
+			state.text()
+		}
+	}
+	return len(source)
+}
+
+// costState accumulates conversionCost's running weight and total.
+type costState struct {
+	open       []openElement
+	signatures map[string]int
+	cost       int
+	weight     int
+	heaviest   int
+	anchors    int
+	// foreign is set while a foreign subtree is priced by bytes.
+	foreign bool
+}
+
+// openElement is one entry on costState's lexical element stack. sticky marks
+// an element opened inside a foreign subtree: its weight is never released,
+// because nothing there is certain to be a tag.
 type openElement struct {
 	tag       string
 	signature string
 	weight    int
+	sticky    bool
 }
 
-func matchesTop(open []openElement, name string) bool {
-	return len(open) > 0 && open[len(open)-1].tag == name
+func (state *costState) text() { state.cost += state.weight + 1 }
+
+// startTag charges the element and the clones its start may trigger, and tracks
+// the formatting weight it adds.
+func (state *costState) startTag(name string, attributes int, raw string) {
+	state.cost += state.weight + 1 + attributes
+	if tableElements[name] {
+		state.cost += impliedElements
+	}
+	element := openElement{tag: name, sticky: state.foreign}
+	if formattingElements[name] {
+		if (name == "a" || name == "nobr") && state.anchors > 0 {
+			// An a or nobr already in the list makes the start tag run the
+			// adoption agency before the new element joins it.
+			state.cost += adoptionClones * (state.heaviest + 1)
+		}
+		signature := name + "\x00" + raw
+		if state.signatures[signature] < noahsArkLimit {
+			element.signature = signature
+			element.weight = 1 + attributes
+			state.signatures[signature]++
+			state.weight += element.weight
+			state.heaviest = max(state.heaviest, element.weight)
+			if name == "a" || name == "nobr" {
+				state.anchors++
+			}
+		}
+	}
+	// HTML ignores a self-closing slash on non-void elements, so only void
+	// elements leave nothing open.
+	if !voidElements[name] {
+		state.open = append(state.open, element)
+	}
 }
 
-// popMatching releases an element only when the end tag closes the innermost
-// open element. The parser removes an entry from the list of active formatting
-// elements when it closes an element that is both innermost and in scope; an
-// end tag it ignores, or reads as text inside raw text or foreign content, does
-// not match here either, so the entry keeps its weight.
-func popMatching(open *[]openElement, name string, weight *int, signatures map[string]int, anchors *int) {
-	if !matchesTop(*open, name) {
+// endTag charges the node and any adoption-agency clones. It releases weight
+// only in HTML content, only for an element opened there, and only when the tag
+// closes the innermost open element, which is exactly when the parser removes
+// that entry from the list of active formatting elements.
+func (state *costState) endTag(name string) {
+	state.cost += state.weight + 1
+	top := len(state.open) > 0 && state.open[len(state.open)-1].tag == name
+	if formattingElements[name] && !top {
+		state.cost += adoptionClones * (state.heaviest + 1)
+	}
+	if !top {
 		return
 	}
-	last := len(*open) - 1
-	element := (*open)[last]
-	*open = (*open)[:last]
-	if element.weight == 0 {
+	element := state.open[len(state.open)-1]
+	state.open = state.open[:len(state.open)-1]
+	if state.foreign || element.sticky || element.weight == 0 {
 		return
 	}
-	*weight -= element.weight
-	signatures[element.signature]--
+	state.weight -= element.weight
+	state.signatures[element.signature]--
 	if element.tag == "a" || element.tag == "nobr" {
-		*anchors--
+		state.anchors--
 	}
 }
 
-// scanTagName reads the tag name starting at index and returns it lower-cased
-// with the offset after it, or "" when no name follows.
-func scanTagName(source string, index int) (name string, end int) {
+// scanForeign prices a foreign subtree by bytes: every "<name"/"</name" is a
+// tag and every other run is text, and weight added here is never released.
+// The scan never consumes past a nested "<", so markup a quoted value might hide
+// is still read.
+func (state *costState) scanForeign(source string) {
+	state.foreign = true
+	defer func() { state.foreign = false }()
+	for index := 0; index < len(source) && state.cost <= maxConversionCost; {
+		if next := strings.IndexByte(source[index:], '<'); next != 0 {
+			state.text()
+			if next < 0 {
+				return
+			}
+			index += next
+		}
+		name, attributes, consumed := scanForeignTag(source[index:])
+		switch {
+		case name == "":
+			state.text()
+		case name[0] == '/':
+			state.endTag(name[1:])
+		default:
+			state.startTag(name, attributes, source[index:index+consumed])
+		}
+		index += consumed
+	}
+}
+
+// foreignEnd returns where the exact tokenizer may resume after the foreign
+// subtree whose root start tag ends at from: just past the end tag that closes
+// it, or the input length. Resuming early would be unsound, because the parser
+// may still be in foreign content, where CDATA exists and raw text does not.
+// Resuming late only prices more by bytes. So the end tag only counts when it
+// lies beyond every stretch some reading takes as non-markup: comment and CDATA
+// interiors, bogus comments, quoted attribute values and raw-text content, each
+// to its farthest possible end. SVG and MathML roots are counted apart, any
+// start tag counts toward the depth wherever it lies, and an end tag only
+// counts outside those stretches. The parser may leave earlier, at a breakout
+// tag; that makes this later, never earlier.
+func foreignEnd(source string, from int) int {
+	depth := map[string]int{"svg": 0, "math": 0}
+	root := strings.ToLower(source[strings.LastIndexByte(source[:from], '<')+1 : from])
+	if strings.HasPrefix(root, "math") {
+		depth["math"] = 1
+	} else {
+		depth["svg"] = 1
+	}
+	horizon := from
+	for index := from; index < len(source); index++ {
+		next := strings.IndexByte(source[index:], '<')
+		if next < 0 {
+			break
+		}
+		index += next
+		rest := source[index:]
+		switch {
+		case strings.HasPrefix(rest, "<!--"):
+			horizon = max(horizon, farthestEnd(source, index+len("<!--"), "-->"))
+		case strings.HasPrefix(rest, "<![CDATA["):
+			horizon = max(horizon, farthestEnd(source, index+len("<![CDATA["), "]]>"))
+		case strings.HasPrefix(rest, "<!"), strings.HasPrefix(rest, "<?"):
+			horizon = max(horizon, farthestEnd(source, index+2, ">"))
+		case len(rest) > 2 && rest[1] == '/' && isASCIILetter(rest[2]), len(rest) > 1 && isASCIILetter(rest[1]):
+			name, closing, selfClosing, end := readTagExtent(source, index)
+			if closing && index >= horizon && depth[name] > 0 {
+				depth[name]--
+				if depth["svg"] == 0 && depth["math"] == 0 {
+					return end
+				}
+			}
+			horizon = max(horizon, end)
+			if !closing {
+				if _, root := depth[name]; root && !selfClosing {
+					depth[name]++
+				}
+				if rawTextNames[name] {
+					horizon = max(horizon, rawTextExtent(source, name, end))
+				}
+			}
+		case len(rest) > 1 && rest[1] == '/':
+			// "</" not followed by a letter opens a bogus comment.
+			horizon = max(horizon, farthestEnd(source, index+2, ">"))
+		}
+	}
+	return len(source)
+}
+
+// Elements whose content x/net's tokenizer reads as raw text or RCDATA.
+var rawTextNames = map[string]bool{
+	"iframe": true, "noembed": true, "noframes": true, "noscript": true, "plaintext": true,
+	"script": true, "style": true, "textarea": true, "title": true, "xmp": true,
+}
+
+// farthestEnd returns the offset just past terminator after from, or the input
+// length when it never appears.
+func farthestEnd(source string, from int, terminator string) int {
+	if end := strings.Index(source[from:], terminator); end >= 0 {
+		return from + end + len(terminator)
+	}
+	return len(source)
+}
+
+// readTagExtent reads the tag at index with x/net's grammar, quoted values
+// included, and returns its lower-cased name, whether it is an end tag, whether
+// x/net reports it self-closing, and the offset just past it (the input length
+// when it never closes).
+func readTagExtent(source string, index int) (name string, closing, selfClosing bool, end int) {
+	position := index + 1
+	if closing = source[position] == '/'; closing {
+		position++
+	}
+	start := position
+	for position < len(source) && !isASCIISpace(source[position]) && source[position] != '/' && source[position] != '>' {
+		position++
+	}
+	name = strings.ToLower(source[start:position])
+	quote := byte(0)
+	for ; position < len(source); position++ {
+		char := source[position]
+		switch {
+		case quote != 0:
+			if char == quote {
+				quote = 0
+			}
+		case (char == '"' || char == '\'') && afterEquals(source, start, position):
+			quote = char
+		case char == '>':
+			return name, closing, source[position-1] == '/' && position-1 > index, position + 1
+		}
+	}
+	return name, closing, false, len(source)
+}
+
+// afterEquals reports whether the quote at position opens an attribute value:
+// x/net only treats a quote as a delimiter right after "=" and optional
+// whitespace.
+func afterEquals(source string, start, position int) bool {
+	position--
+	for position > start && isASCIISpace(source[position]) {
+		position--
+	}
+	return position > start && source[position] == '='
+}
+
+// rawTextExtent returns where the raw-text content of name, which starts at
+// from, may end: just past the earliest end tag x/net accepts, "</name"
+// followed by whitespace, "/" or ">". script can also stay open past such a tag
+// in its double-escaped state, so script content holding a comment opener is
+// taken to run to the end of the input; plaintext has no end.
+func rawTextExtent(source, name string, from int) int {
+	if name == "plaintext" {
+		return len(source)
+	}
+	lower := strings.ToLower(source[from:])
+	for offset := 0; ; {
+		found := strings.Index(lower[offset:], "</"+name)
+		if found < 0 {
+			return len(source)
+		}
+		position := offset + found + len("</"+name)
+		if position >= len(lower) || isASCIISpace(lower[position]) || lower[position] == '/' || lower[position] == '>' {
+			if name == "script" && strings.Contains(lower[:offset+found], "<!--") {
+				return len(source)
+			}
+			_, _, _, end := readTagExtent(source, from+offset+found)
+			return end
+		}
+		offset = position
+	}
+}
+
+// scanForeignTag reads one tag at the start of source with x/net's tag grammar,
+// stopping at any nested "<". It returns the lower-cased name (with a leading
+// "/" for an end tag, empty when the bytes are not a tag), an upper bound on the
+// attributes and the bytes consumed.
+func scanForeignTag(source string) (name string, attributes, consumed int) {
+	index := 1
+	closing := index < len(source) && source[index] == '/'
+	if closing {
+		index++
+	}
 	if index >= len(source) || !isASCIILetter(source[index]) {
-		return "", index
+		return "", 0, 1
 	}
-	end = index
-	for end < len(source) && (isASCIILetter(source[end]) || isASCIIDigit(source[end]) || source[end] == '-') {
-		end++
+	start := index
+	for index < len(source) && !isTagNameEnd(source[index]) {
+		index++
 	}
-	return strings.ToLower(source[index:end]), end
+	name = strings.ToLower(source[start:index])
+	for index < len(source) && source[index] != '>' && source[index] != '<' {
+		for index < len(source) && isASCIISpace(source[index]) {
+			index++
+		}
+		if index >= len(source) || source[index] == '>' || source[index] == '<' {
+			break
+		}
+		if source[index] == '/' {
+			index++
+			continue
+		}
+		attributes++
+		index = skipAttribute(source, index)
+	}
+	if index < len(source) && source[index] == '>' {
+		index++
+	}
+	if closing {
+		name = "/" + name
+	}
+	return name, attributes, index
+}
+
+// skipAttribute advances past one attribute's name and optional value, matching
+// x/net's reader but never consuming past a nested "<".
+func skipAttribute(source string, index int) int {
+	// Attribute name: an "=" that opens the name is part of it; otherwise the
+	// name ends at "=", whitespace, "/" or ">".
+	if source[index] == '=' {
+		index++
+	}
+	for index < len(source) {
+		c := source[index]
+		if c == '=' || c == '>' || c == '<' || c == '/' || isASCIISpace(c) {
+			break
+		}
+		index++
+	}
+	for index < len(source) && isASCIISpace(source[index]) {
+		index++
+	}
+	if index >= len(source) || source[index] != '=' {
+		return index
+	}
+	index++
+	for index < len(source) && isASCIISpace(source[index]) {
+		index++
+	}
+	if index >= len(source) {
+		return index
+	}
+	switch source[index] {
+	case '>', '<':
+		return index
+	case '\'', '"':
+		quote := source[index]
+		index++
+		for index < len(source) {
+			if source[index] == quote {
+				return index + 1
+			}
+			if source[index] == '<' {
+				return index
+			}
+			index++
+		}
+		return index
+	default:
+		for index < len(source) && source[index] != '>' && source[index] != '<' && !isASCIISpace(source[index]) {
+			index++
+		}
+		return index
+	}
+}
+
+func isTagNameEnd(char byte) bool {
+	return isASCIISpace(char) || char == '/' || char == '>' || char == '<'
+}
+
+func isASCIISpace(char byte) bool {
+	return char == ' ' || char == '\t' || char == '\n' || char == '\r' || char == '\f'
 }
 
 func isASCIILetter(char byte) bool {
 	return 'a' <= char|0x20 && char|0x20 <= 'z'
-}
-
-func isASCIIDigit(char byte) bool {
-	return '0' <= char && char <= '9'
-}
-
-// scanTag reads the rest of one start tag, whose name already ended at source's
-// start, and reports an upper bound on its attributes, the signature the Noah's
-// Ark clause compares and how far the scan may consume.
-//
-// A quoted ">" belongs to the tag, so the scan tracks quotes when looking for
-// the tag's end. It never consumes past a "<" even so: whether these bytes are
-// a tag at all depends on the parser's context, and inside raw text the same
-// bytes are text followed by real tags. Attributes are still counted across the
-// whole tag, so a tag the parser does parse is never under-counted. A signature
-// is only faithful when the tag ended at its own ">" with no "<" inside and
-// within maxTagScan; otherwise the element counts as unique, which only adds
-// weight, and an over-long tag is bounded by the input it could still cover.
-func scanTag(source string, formatting bool) (signature string, attributes, consumed int) {
-	quote, boundary, cut, length := byte(0), true, -1, 0
-	for length < len(source) {
-		if length >= maxTagScan {
-			return "", max(len(source)/2, 1), max(cut, 1)
-		}
-		char := source[length]
-		length++
-		if char == '<' && cut < 0 {
-			// Quoting cannot protect this: the parser may read the bytes before
-			// it as text and these as a tag of its own.
-			cut = length - 1
-		}
-		switch {
-		case quote != 0:
-			if char == quote {
-				quote, boundary = 0, true
-			}
-		case char == '"' || char == '\'':
-			quote, boundary = char, false
-		case char == '>':
-			if cut >= 0 {
-				return "", attributes, cut
-			}
-			if !formatting {
-				return "", attributes, length
-			}
-			return source[:length], attributes, length
-		case char == ' ' || char == '\t' || char == '\n' || char == '\r' || char == '\f' || char == '/':
-			// Whitespace, a solidus or a closed value ends the previous name.
-			boundary = true
-		case char == '=':
-			boundary = false
-		default:
-			// Any other character starts an attribute name. Duplicate names
-			// collapse in the parser, so this can only over-count.
-			if boundary {
-				attributes++
-			}
-			boundary = false
-		}
-	}
-	// An unterminated tag: the parser reads the rest of the input as this tag
-	// and drops it at EOF, so the bytes scanned bound anything it could create.
-	if cut >= 0 {
-		return "", attributes, cut
-	}
-	return "", attributes, length
 }
 
 // countTemplates counts template elements, in any namespace, in a subtree.
@@ -513,13 +733,24 @@ func (state *renderer) flush() {
 		if state.pre == 0 {
 			current.trimLineSpace()
 		}
-		state.written += state.newlines
 		current.write(strings.Repeat("\n", state.newlines))
+		state.count(state.newlines)
 	case state.space && current.last != ' ' && current.last != '\n':
-		state.written++
 		current.write(" ")
+		state.count(1)
 	}
 	state.newlines, state.space, state.marker = 0, false, false
+}
+
+// count charges separators written straight to the current level.
+func (state *renderer) count(bytes int) {
+	if len(state.captures) > 1 {
+		state.captured += bytes
+		state.stopped = state.stopped || state.captured > maxCapturedBytes
+		return
+	}
+	state.written += bytes
+	state.stopped = state.stopped || state.written > maxRenderBytes
 }
 
 func (state *renderer) emit(value string) {

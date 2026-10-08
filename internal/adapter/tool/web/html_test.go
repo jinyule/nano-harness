@@ -15,6 +15,12 @@ import (
 	appWeb "github.com/jinyule/nano-harness/internal/app/web"
 )
 
+// rendered returns renderHTML's text for tests that only compare output.
+func rendered(source string) string {
+	text, _ := renderHTML(source)
+	return text
+}
+
 // Expected semantics come from Turndown 7.2.4 with @joplin/turndown-plugin-gfm
 // 1.0.67 and tool-web/src/fetch.ts at upstream 5badb15009ae. The upstream
 // column records its exact output; want differs only in equivalent spacing
@@ -180,7 +186,7 @@ func TestRenderHTML_MatchesUpstreamSemantics(t *testing.T) {
 		{"implicit table cells and rows", "<table><thead><tr><th>A<th>B<tbody><tr><td>1<td>2<tr><td>3<td>4</table>", "| A   | B   |\n| --- | --- |\n| 1   | 2   |\n| 3   | 4   |", "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := renderHTML(test.source); got != test.want {
+			if got := rendered(test.source); got != test.want {
 				t.Fatalf("got=%q\nwant=%q\nupstream=%q", got, test.want, test.upstream)
 			}
 		})
@@ -211,7 +217,7 @@ func TestRenderHTML_ConvertsVisibleContent(t *testing.T) {
 		{"comments", "a<!-- hidden -->b", "ab"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := renderHTML(test.source); got != test.want {
+			if got := rendered(test.source); got != test.want {
 				t.Fatalf("got=%q\nwant=%q", got, test.want)
 			}
 		})
@@ -240,7 +246,7 @@ func TestRenderHTML_FollowsHTMLStandardWhereReferenceDiverges(t *testing.T) {
 		{"foreign end br", `<svg><g hidden></br>visible</svg>`, "", "visible"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := renderHTML(test.source); got != test.want {
+			if got := rendered(test.source); got != test.want {
 				t.Fatalf("got=%q\nwant=%q\nupstream=%q", got, test.want, test.upstream)
 			}
 		})
@@ -263,7 +269,7 @@ func TestRenderHTML_MarksTemplateDroppedInForeignContent(t *testing.T) {
 		{"svg title is not detected", `<p>before</p><svg><title><template>x</template></title></svg><p>POST</p>`, "before\n\nPOST", "before"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := renderHTML(test.source); got != test.want {
+			if got := rendered(test.source); got != test.want {
 				t.Fatalf("got=%q\nwant=%q\nupstream=%q", got, test.want, test.upstream)
 			}
 		})
@@ -282,7 +288,7 @@ func TestRenderHTML_RemovesForeignScriptAndStyle(t *testing.T) {
 		{"mathml style", `<math><style>m</style></math><p>after</p>`, "m\n\nafter", "after"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := renderHTML(test.source); got != test.want {
+			if got := rendered(test.source); got != test.want {
 				t.Fatalf("got=%q\nwant=%q\nupstream=%q", got, test.want, test.upstream)
 			}
 		})
@@ -385,6 +391,62 @@ func reviewVectors() map[string]string {
 	}
 	cut.WriteString("x</p>" + strings.Repeat("<p>x</p>", 1000))
 	vectors["markup inside distinct attribute values"] = cut.String()
+	// An end tag inside a comment, a CDATA section or a raw-text element may
+	// close nothing, so it must not release weight.
+	var hidden strings.Builder
+	hidden.WriteString("<p>")
+	for index := range 500 {
+		hidden.WriteString(`<b x="` + strconv.Itoa(index) + `">`)
+	}
+	ends := strings.Repeat("</b>", 500)
+	paragraphs := strings.Repeat("<p>x</p>", 1000)
+	for name, region := range map[string][2]string{
+		"a comment":         {"<!--", "-->"},
+		"a CDATA section":   {"<![CDATA[", "]]>"},
+		"a bogus comment":   {"<!", ">"},
+		"a processing hint": {"<?", ">"},
+	} {
+		vectors["end tags hidden by "+name] = hidden.String() + region[0] + ends + region[1] + paragraphs
+	}
+	for _, raw := range []string{"script", "style", "title", "textarea", "xmp", "iframe", "noembed", "noframes", "noscript", "plaintext"} {
+		vectors["end tags hidden by "+raw] = hidden.String() + "<" + raw + ">" + ends + "</" + raw + ">" + paragraphs
+	}
+	// A quoted value that spans an end tag hides whatever follows from a scan
+	// that trusts it: here the parser reads the quote as text in raw content and
+	// keeps every formatting element after it.
+	var swallowed strings.Builder
+	swallowed.WriteString(`<xmp><b x='</xmp>`)
+	for index := range 100 {
+		swallowed.WriteString(`<b y="` + strconv.Itoa(index) + `">`)
+	}
+	swallowed.WriteString("'>x" + paragraphs)
+	vectors["a quoted value spanning raw text"] = swallowed.String()
+
+	// Tag names run to whitespace, a solidus or ">", and attribute names may
+	// start with a quote or an equals sign.
+	var bang, quoted, equalled strings.Builder
+	for index := range 500 {
+		bang.WriteString(`<b x="` + strconv.Itoa(index) + `">`)
+		quoted.WriteString(`<b '` + strconv.Itoa(index) + `>`)
+		equalled.WriteString(`<b =` + strconv.Itoa(index) + `>`)
+	}
+	vectors["end tag names with trailing punctuation"] = "<p>" + bang.String() + strings.Repeat("</b!>", 500) + paragraphs
+	vectors["attribute names starting with a quote"] = "<p>" + quoted.String() + "x</p>" + paragraphs
+	vectors["attribute names starting with an equals sign"] = "<p>" + equalled.String() + "x</p>" + paragraphs
+	// Inside an SVG or MathML subtree nothing is certain, so the exact
+	// tokenizer must not resume at an end tag that a comment, a CDATA section,
+	// a quoted value or raw-text content may hide.
+	for name, region := range map[string][2]string{
+		"a comment":       {"<svg><!--", "</svg>--></svg>"},
+		"a CDATA section": {"<svg><![CDATA[", "</svg>]]></svg>"},
+		"a quoted value":  {`<svg><g a="`, `</svg>"></g></svg>`},
+		"raw text":        {"<svg><p><style>", "</svg></style></svg>"},
+	} {
+		vectors["svg end hidden by "+region[0][5:]+" in "+name] = hidden.String() + region[0] + ends + region[1] + paragraphs
+	}
+	vectors["svg end hidden in nested foreign roots"] = hidden.String() + "<svg><math><svg>" + ends + "</svg></math></svg>" + paragraphs
+	vectors["svg left by a breakout"] = hidden.String() + "<svg><p>" + ends + "</svg>" + paragraphs
+	vectors["unterminated svg"] = "<svg>" + hidden.String() + paragraphs
 	return vectors
 }
 
@@ -401,6 +463,11 @@ func ordinaryPages() map[string]string {
 		"stray end tags": strings.Repeat("x</p>", 1000),
 		"implied tables": strings.Repeat("<table><td>x</table>", 200),
 		"quoted markup":  strings.Repeat(`<div title="<b x=1>">text</div>`, 1000),
+		// An icon must not push the rest of the page into byte pricing.
+		"icon then links":     `<svg viewBox="0 0 16 16"><path d="M0 0h16v16H0z"/></svg>` + strings.Repeat(`<a href="/x">link</a> `, 900),
+		"icons between links": strings.Repeat(`<a href="/x"><svg><use href="#i"/></svg>link</a> `, 900),
+		"many small icons":    strings.Repeat("<svg></svg>", 1000) + strings.Repeat(`<a href="/x">link</a> `, 900),
+		"inline math":         strings.Repeat("<p>Let <math><mi>x</mi><mo>=</mo><mn>1</mn></math> hold.</p>", 500),
 	}
 }
 
@@ -410,8 +477,8 @@ func ordinaryPages() map[string]string {
 func TestRenderHTML_OmitsAmplifiedTreeConstruction(t *testing.T) {
 	for name, source := range reviewVectors() {
 		t.Run(name, func(t *testing.T) {
-			if got := renderHTML(source); got != omittedHTML {
-				t.Fatalf("%d bytes scored %d and converted to %.60q…", len(source), conversionCost(source), got)
+			if got, dropped := renderHTML(source); got != omittedHTML || !dropped {
+				t.Fatalf("%d bytes scored %d and converted to %.60q… (dropped=%v)", len(source), conversionCost(source), got, dropped)
 			}
 		})
 	}
@@ -419,6 +486,9 @@ func TestRenderHTML_OmitsAmplifiedTreeConstruction(t *testing.T) {
 		t.Run("ordinary/"+name, func(t *testing.T) {
 			if cost := conversionCost(source); cost > maxConversionCost {
 				t.Fatalf("%d bytes scored %d, over the %d budget", len(source), cost, maxConversionCost)
+			}
+			if _, dropped := renderHTML(source); dropped {
+				t.Fatal("an ordinary page must convert without dropping content")
 			}
 		})
 	}
@@ -429,16 +499,100 @@ func TestRenderHTML_OmitsAmplifiedTreeConstruction(t *testing.T) {
 		if cost := conversionCost(source); cost != maxConversionCost {
 			t.Fatalf("got=%d want=%d", cost, maxConversionCost)
 		}
-		if got := renderHTML(source); got == omittedHTML {
+		if got := rendered(source); got == omittedHTML {
 			t.Fatal("input at the budget must convert")
 		}
 	})
 	t.Run("one insertion point past the budget", func(t *testing.T) {
 		source := strings.Repeat("<p>x", maxConversionCost/2) + "<p>"
-		if got := renderHTML(source); got != omittedHTML {
+		if got := rendered(source); got != omittedHTML {
 			t.Fatalf("got=%.60q… want the omission marker", got)
 		}
 	})
+}
+
+// Inside a foreign subtree attributes are counted by scanForeignTag's port of
+// x/net's tag reader, which must never count fewer than the tokenizer reads
+// from the same bytes. It stops at a nested "<" on purpose, so tags holding one
+// are left to TestConversionCost_BoundsParsedWeight.
+func TestScanForeignTag_NeverUndercountsAttributes(t *testing.T) {
+	parts := []string{" ", "  ", "a", "b", "=", "'", `"`, "/", "x", "=v", `="v"`, "='v'", "= v", `= "v"`, "=>", ">", "\t", "a=1/", "=a"}
+	sources := []string{"<g>", "<g  >", "<g a= \"v\">", "<g a=>", "<g a= ", "<g a= x", "<g a='v", "<g/a>", "</g a b>"}
+	// Samples only need to be varied and reproducible, not unpredictable.
+	random := rand.New(rand.NewSource(2)) //nolint:gosec // deterministic test input, not a security decision
+	for range 20000 {
+		var tag strings.Builder
+		tag.WriteString("<g")
+		for range random.Intn(8) {
+			tag.WriteString(parts[random.Intn(len(parts))])
+		}
+		sources = append(sources, tag.String())
+	}
+	for _, source := range sources {
+		if strings.Contains(source[1:], "<") {
+			continue
+		}
+		tokenizer := html.NewTokenizer(strings.NewReader(source))
+		want := 0
+		switch tokenizer.Next() {
+		case html.StartTagToken, html.SelfClosingTagToken, html.EndTagToken:
+			want = len(tokenizer.Token().Attr)
+		case html.ErrorToken, html.TextToken, html.CommentToken, html.DoctypeToken:
+		}
+		if _, got, _ := scanForeignTag(source); got < want {
+			t.Fatalf("%q: counted %d attributes, x/net reads %d", source, got, want)
+		}
+	}
+}
+
+// The exact tokenizer may only resume once the parser is certainly back in
+// HTML content: past every stretch some reading takes as non-markup, with the
+// SVG and MathML roots balanced. Resuming later is merely conservative.
+func TestForeignEnd_ResumesOnlyPastEveryUncertainStretch(t *testing.T) {
+	for _, test := range []struct {
+		name, source, resumeAfter string
+	}{
+		{"the closing root tag", "<svg><g></g></svg><p>", "</svg>"},
+		{"a nested root", "<svg><svg></svg></svg><p>", "</svg></svg>"},
+		{"math inside svg", "<svg><math></math></svg><p>", "</svg>"},
+		{"a self-closing nested root", "<svg><svg/></svg><p>", "</svg>"},
+		{"raw-text content", "<svg><style></svg></style></svg><p>", "</style></svg>"},
+		{"a comment", "<svg><!--</svg>--></svg><p>", "--></svg>"},
+		{"a CDATA section", "<svg><![CDATA[</svg>]]></svg><p>", "]]></svg>"},
+		{"a quoted value", `<svg><g a="</svg>"></g></svg><p>`, `</g></svg>`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			begin := strings.Index(test.source, ">") + 1
+			want := strings.Index(test.source, test.resumeAfter) + len(test.resumeAfter)
+			if got := foreignEnd(test.source, begin); got != want {
+				t.Fatalf("resumed at %d (%q), want %d", got, test.source[:got], want)
+			}
+		})
+	}
+	t.Run("never closed", func(t *testing.T) {
+		source := "<svg><style></svg><p>"
+		if got := foreignEnd(source, len("<svg>")); got != len(source) {
+			t.Fatalf("resumed at %d, want the input end", got)
+		}
+	})
+}
+
+// Each SVG or MathML subtree resumes the exact tokenizer with a new read
+// buffer, so many small subtrees are capped by maxForeignRegions.
+func TestConversionCost_BoundsForeignRegionAllocation(t *testing.T) {
+	const maxBytes = 4 << 20
+	source := strings.Repeat("<svg></svg>", 4*maxForeignRegions) + "<p>x</p>"
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	cost := conversionCost(source)
+	runtime.ReadMemStats(&after)
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > maxBytes {
+		t.Fatalf("scanning %d subtrees allocated %d bytes, want at most %d", 4*maxForeignRegions, allocated, maxBytes)
+	}
+	if cost > maxConversionCost {
+		t.Fatalf("scored %d, over the budget", cost)
+	}
 }
 
 // The budget bounds allocation, not elapsed time: the reviewer's 8 KB sample
@@ -450,7 +604,7 @@ func TestRenderHTML_BoundsAmplifiedAllocation(t *testing.T) {
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	text := renderHTML(source)
+	text := rendered(source)
 	runtime.ReadMemStats(&after)
 	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > maxBytes {
 		t.Fatalf("converting %d bytes allocated %d bytes, want at most %d", len(source), allocated, maxBytes)
@@ -460,17 +614,29 @@ func TestRenderHTML_BoundsAmplifiedAllocation(t *testing.T) {
 	}
 }
 
-// Nested visible formatting makes every level copy the level below it, so the
-// renderer stops at the output budget instead of formatting everything and
-// truncating afterwards.
+// The renderer stops at the output budget instead of formatting everything and
+// truncating afterwards, but a capture level does not spend that budget: its
+// content is written out again at the level above, so charging it there would
+// drop text the budget can hold.
 func TestRenderHTML_StopsAtTheOutputBudget(t *testing.T) {
+	t.Run("keeps everything inside the budget", func(t *testing.T) {
+		const characters = 99900
+		source := "<b><i>" + strings.Repeat("\u6f22", characters) + "</i></b>"
+		text, truncated := formatFetch(appWeb.FetchResult{URL: "https://example.test/", StatusCode: 200, Kind: appWeb.FetchHTML, Content: source}, maxFetchOutputUnits)
+		if truncated {
+			t.Fatal("content inside the output budget must not be truncated")
+		}
+		if got := strings.Count(text, "\u6f22"); got != characters {
+			t.Fatalf("delivered %d characters, want %d", got, characters)
+		}
+	})
 	for _, test := range []struct{ name, source string }{
 		{"ascii", "<p>" + strings.Repeat("x", 4*maxRenderBytes) + "</p>"},
 		{"closing markup after the budget", "<p><b>" + strings.Repeat("x", 4*maxRenderBytes) + "</b></p>"},
 		{"a cut between bytes of one rune", "<p>x" + strings.Repeat("\u4e2d", maxRenderBytes) + "</p>"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			text := renderHTML(test.source)
+			text := rendered(test.source)
 			if len(text) > maxRenderBytes+len(omittedHTML)+2 {
 				t.Fatalf("rendered %d bytes, want at most %d", len(text), maxRenderBytes)
 			}
@@ -482,11 +648,10 @@ func TestRenderHTML_StopsAtTheOutputBudget(t *testing.T) {
 			}
 		})
 	}
-	// Once the budget is spent the walk stops: later siblings are not rendered
-	// and nothing more is written.
-	t.Run("drops what follows", func(t *testing.T) {
-		source := "<p>" + strings.Repeat("x", 2*maxRenderBytes) + "</p>" + strings.Repeat("<p>tail</p>", 3)
-		text := renderHTML(source)
+	// Text that lands exactly on the budget leaves nothing for the next write.
+	t.Run("exactly at the budget", func(t *testing.T) {
+		source := "<p>" + strings.Repeat("x", maxRenderBytes) + "</p><p>tail</p>"
+		text := rendered(source)
 		if strings.Contains(text, "tail") {
 			t.Fatal("rendering continued past the output budget")
 		}
@@ -495,16 +660,80 @@ func TestRenderHTML_StopsAtTheOutputBudget(t *testing.T) {
 		}
 	})
 
-	// The budget is counted in bytes, so the widest text still fills the whole
-	// UTF-16 output budget.
-	t.Run("keeps the whole output budget", func(t *testing.T) {
-		source := "<p>" + strings.Repeat("\u4e2d", maxFetchOutputUnits) + "</p>"
+	// Once the budget is spent the walk stops: later siblings are not rendered
+	// and nothing more is written.
+	t.Run("drops what follows", func(t *testing.T) {
+		source := "<p>" + strings.Repeat("x", 2*maxRenderBytes) + "</p>" + strings.Repeat("<p>tail</p>", 3)
+		text := rendered(source)
+		if strings.Contains(text, "tail") {
+			t.Fatal("rendering continued past the output budget")
+		}
+		if !strings.HasSuffix(text, omittedHTML) {
+			t.Fatalf("got=%.40q…, want the omission marker at the end", text)
+		}
+	})
+	// Past the budget the fetch output reports the cut, so the model is never
+	// shown a silently shortened page.
+	t.Run("reports truncation", func(t *testing.T) {
+		source := "<p>" + strings.Repeat("\u6f22", 2*maxFetchOutputUnits) + "</p>"
 		text, truncated := formatFetch(appWeb.FetchResult{URL: "https://example.test/", StatusCode: 200, Kind: appWeb.FetchHTML, Content: source}, maxFetchOutputUnits)
 		if !truncated {
 			t.Fatal("want truncated")
 		}
-		if units := len(utf16.Encode([]rune(text))); units < maxFetchOutputUnits-len(fetchFooter) {
-			t.Fatalf("delivered %d units, want the output budget", units)
+		if units := len(utf16.Encode([]rune(text))); units != maxFetchOutputUnits {
+			t.Fatalf("delivered %d units, want the whole output budget", units)
+		}
+	})
+	// A capture cannot grow past what the root can still take: a cloned link
+	// writes its whole URL at every paragraph, far beyond its scan weight.
+	t.Run("bounds a capture by the remaining budget", func(t *testing.T) {
+		const maxBytes = 12 << 20
+		source := `<h1><p><a href="` + strings.Repeat("u", 30000) + `">x</p>` + strings.Repeat("<p>x", 100)
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		text, dropped := renderHTML(source)
+		runtime.ReadMemStats(&after)
+		if allocated := after.TotalAlloc - before.TotalAlloc; allocated > maxBytes {
+			t.Fatalf("rendering %d bytes allocated %d bytes, want at most %d", len(source), allocated, maxBytes)
+		}
+		if !dropped || !strings.HasSuffix(text, omittedHTML) {
+			t.Fatalf("got %d bytes (dropped=%v), want the omission marker", len(text), dropped)
+		}
+		if len(text) > maxRenderBytes+len(omittedHTML)+2 {
+			t.Fatalf("rendered %d bytes, want at most %d", len(text), maxRenderBytes)
+		}
+	})
+	// The fetch output reports any omission as truncation, so the model and the
+	// metadata never see a silently shortened page.
+	t.Run("reports omitted content as truncated", func(t *testing.T) {
+		for _, test := range []struct {
+			source string
+			want   bool
+		}{
+			{amplifiedHTML("<p><b hidden>", "", 499, 1000), true},
+			{"<p>visible</p>", false},
+		} {
+			if _, truncated := formatFetch(appWeb.FetchResult{URL: "https://example.test/", StatusCode: 200, Kind: appWeb.FetchHTML, Content: test.source}, maxFetchOutputUnits); truncated != test.want {
+				t.Fatalf("%.40q…: truncated=%v want %v", test.source, truncated, test.want)
+			}
+		}
+	})
+	// Identical formatting elements cost little, so deep nesting over a long
+	// text is bounded by the capture limit rather than by the scan.
+	t.Run("bounds captured text", func(t *testing.T) {
+		const maxBytes = 48 << 20
+		source := "<p>" + strings.Repeat("<b>", 400) + strings.Repeat("x", 300_000)
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		text := rendered(source)
+		runtime.ReadMemStats(&after)
+		if allocated := after.TotalAlloc - before.TotalAlloc; allocated > maxBytes {
+			t.Fatalf("rendering %d bytes allocated %d bytes, want at most %d", len(source), allocated, maxBytes)
+		}
+		if !strings.HasSuffix(text, omittedHTML) {
+			t.Fatalf("got=%.40q…, want the omission marker at the end", text)
 		}
 	})
 }
@@ -533,30 +762,61 @@ func TestConversionCost_BoundsParsedWeight(t *testing.T) {
 		t.Run("ordinary/"+name, func(t *testing.T) { assert(t, source) })
 	}
 	for name, source := range map[string]string{
-		"quoted greater-than in a signature": "<p>" + strings.Repeat(`<b x=">" y=k>`, 500) + "x</p>" + strings.Repeat("<p>x</p>", 1000),
-		"unterminated quote":                 `<p><b x='` + strings.Repeat("<p>x</p>", 100),
-		"unterminated quote inside raw text": `<xmp><b x='</xmp><em><b x="1">` + strings.Repeat("<p>x</p>", 100),
-		"markup inside an attribute value":   `<div title="<b x=1>">` + strings.Repeat("<p>x</p>", 100),
-		"bare attribute names":               "<b a b c d e>x",
-		"solidus between attributes":         "<b x='v'</div>x",
-		"unterminated tag":                   "<b x",
-		"not a tag":                          "<3 < <!",
+		"quoted greater-than in a signature":       "<p>" + strings.Repeat(`<b x=">" y=k>`, 500) + "x</p>" + strings.Repeat("<p>x</p>", 1000),
+		"unterminated quote":                       `<p><b x='` + strings.Repeat("<p>x</p>", 100),
+		"unterminated quote inside raw text":       `<xmp><b x='</xmp><em><b x="1">` + strings.Repeat("<p>x</p>", 100),
+		"markup inside an attribute value":         `<div title="<b x=1>">` + strings.Repeat("<p>x</p>", 100),
+		"bare attribute names":                     "<b a b c d e>x",
+		"an end tag inside a comment":              "<p><b><!--</b>--><p>x",
+		"an end tag inside raw text":               "<p><b><style></b></style><p>x",
+		"an end tag name with a bang":              "</b!>x",
+		"an end tag name with an underscore":       "</b_>x",
+		"an attribute name that is a quote":        "<b '>x",
+		"an attribute name that is an equals sign": "<b =>x",
+		"an unterminated comment":                  "<p><b><!--</b>" + strings.Repeat("<p>x</p>", 50),
+		"an unterminated raw-text element":         "<p><b><style></b>" + strings.Repeat("<p>x</p>", 50),
+		"solidus between attributes":               "<b x='v'</div>x",
+		"an attribute value with an inner quote":   "<p><b x=a' c d e '>" + strings.Repeat("<p>x", 12),
+		"foreign tag with trailing whitespace":     `<svg><b x="1"  >` + strings.Repeat("<p>x", 12),
+		"foreign value after whitespace":           `<svg><b x= "1">` + strings.Repeat("<p>x", 12),
+		"foreign empty value":                      `<svg><b x=>` + strings.Repeat("<p>x", 12),
+		"foreign value cut by the input end":       `<svg><b x= `,
+		"unterminated tag":                         "<b x",
+		"not a tag":                                "<3 < <!",
 	} {
 		t.Run(name, func(t *testing.T) { assert(t, source) })
+	}
+	// Every way x/net/html ends, or fails to end, a comment, a bogus comment, a
+	// raw-text element or a quoted value, between an open element and a tail.
+	for _, middle := range []string{
+		"<!--></b>", "<!---></b>", "<!-- --!></b>", "<!-- ---></b>", "<!-- -- ></b> -->", "<!-- --!-></b> -->",
+		"</ </b>>", "<?</b>>", "<!doctype </b>>", "<style></style!></b></style>", "<style></STYLE ></b>",
+		"<title></title/></b>", "<script/></b></script>", "<!--<script></script></b></script>",
+		`<style></style x="</b>">`, `<br title="</b>">`, "<![CDATA[ > <!-- ]]> </b> -->",
+		`<noscript><br title="</noscript></b>"></noscript>`, `<b title="</b>">`, "<b x=a'b c d e>", "</b!>", "</b_>", "</b<i>",
+	} {
+		t.Run("boundary/"+middle, func(t *testing.T) { assert(t, "<p><b>"+middle+strings.Repeat("<p>x", 12)) })
 	}
 	pieces := []string{
 		`<b x="1">`, `<b x="2">`, `<b x=">" y=k>`, "<b a b c d e>", `<b x='`, "</b>", `<i x="1">`, "</i>",
 		`<a href="/1">`, `<a href="/2">`, "</a>", "<nobr>", "</nobr>", `<font color="">`, "</font>", "<em>", "</em>",
 		"<code>", "</code>", "<u>", "</u>", "<s>", "</s>", "<p>", "</p>", "</br>", "<div>", "</div>",
-		"x", " ", "y", "<!-- c -->", "<!--", "-->", "<br>", "<hr>", "<img src=x>", `<div title="<b x=1>">`,
+		"x", " ", "y", "<!-- c -->", "<!--", "-->", "<!", "<?", "<![CDATA[", "]]>", "</b!>", "</b_>", "<b '>", "<b =>",
+		"<br>", "<hr>", "<img src=x>", `<div title="<b x=1>">`,
 		"<table>", "</table>", "<tr>", "<td>", "</td>", "<th>", "</th>", "<caption>", "</caption>", "<tbody>", "<col>",
 		"<template>", "</template>", "<object>", "</object>", "<applet>", "</applet>", "<marquee>", "</marquee>",
 		"<select>", "</select>", "<option>", "<svg>", "</svg>", "<math>", "</math>", "<title>", "</title>",
 		"<style>", "</style>", "<script>", "</script>", "<textarea>", "</textarea>", "<noscript>", "</noscript>",
-		"<plaintext>", "<xmp>", "</xmp>", "<iframe>", "</iframe>", "<noembed>", "<foreignObject>", "</foreignObject>",
+		"<plaintext>", "<xmp>", "</xmp>", "<iframe>", "</iframe>", "<noembed>", "<noframes>", "<foreignObject>", "</foreignObject>",
 		"<mi>", "</mi>", `<annotation-xml encoding="text/html">`, "<![CDATA[z]]>", "<li>", "<ul>", "</ul>",
 		"<h1>", "</h1>", "<b/>", "<svg/>", "<", "<!", "</>", "<3",
+		"<!-->", "--!>", "<!doctype html>", "</b<i>", `<b x=a'b>`, `<b title="</b>">`, "</style!>", "</title/>",
+		"<math/>", "</svg x='>'>", `<svg title="</svg>">`, "<![CDATA[</svg>]]>", "<!--</svg>-->", `<g a="</svg>">`,
+		"<svg><svg>", "</svg></svg>", "<math><svg>", "<svg><math>", "<!--<script>",
 	}
+	// An amplification only shows after a long tail of insertion points, so
+	// some samples end with one.
+	tails := []string{"", "", strings.Repeat("<p>x", 100), strings.Repeat(`<a href="/x">l</a>`, 300), strings.Repeat("<p>x</p>", 1000)}
 	// Samples only need to be varied and reproducible, not unpredictable.
 	random := rand.New(rand.NewSource(1)) //nolint:gosec // deterministic test input, not a security decision
 	for sample := range 4000 {
@@ -564,6 +824,7 @@ func TestConversionCost_BoundsParsedWeight(t *testing.T) {
 		for range 1 + random.Intn(60) {
 			source.WriteString(pieces[random.Intn(len(pieces))])
 		}
+		source.WriteString(tails[random.Intn(len(tails))])
 		t.Run("generated/"+strconv.Itoa(sample), func(t *testing.T) { assert(t, source.String()) })
 	}
 }
@@ -584,10 +845,16 @@ func TestConversionCost_ChargesWeightedFormatting(t *testing.T) {
 		{"an open element is charged at every later point", `<b x="1">` + strings.Repeat("<p>x</p>", 10), 92},
 		{"a closed element stops being charged", `<b x="1">y</b>` + strings.Repeat("<p>x</p>", 10), 38},
 		{"Noah's Ark caps identical elements", strings.Repeat(`<b x="1">`, 10) + "y", 75},
-		{"raw text is scanned", "<style>" + strings.Repeat(`<b x="1">`, 3) + "</style>y", 27},
+		{"raw text is text before the first foreign tag", "<style>" + strings.Repeat(`<b x="1">`, 3) + "</style>y", 4},
 		{"an end tag off the stack top runs the adoption agency", `<b x="1"><p></b>`, 104},
 		{"a repeated anchor runs it too", `<a href="/1"><a href="/2">`, 102},
 		{"stray end tags never go negative", strings.Repeat("</b>", 10) + "x", 331},
+		{"a comment hides its end tag", "<p><b><!--</b>--><p>x", 8},
+		{"a tag name runs past punctuation", "</b!>x", 2},
+		{"an attribute name may be a quote", "<b '>x", 5},
+		{"weight opened inside foreign content stays", `<svg><b x="1"></b></svg>` + strings.Repeat("<p>x</p>", 10), 99},
+		{"the exact tokenizer resumes after the subtree", `<b x="1">y</b><svg></svg>` + strings.Repeat("<p>x</p>", 10), 40},
+		{"a self-closing svg opens no subtree", `<svg/><b x="1">y</b>` + strings.Repeat("<p>x</p>", 10), 39},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if cost := conversionCost(test.source); cost != test.want {
@@ -611,7 +878,7 @@ func TestRenderHTML_OmitsPathologicalNesting(t *testing.T) {
 		{"foreign self-closing beyond limit", strings.Repeat("<span>", 510) + "<svg><g/>x", omittedHTML},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := renderHTML(test.source); got != test.want {
+			if got := rendered(test.source); got != test.want {
 				t.Fatalf("got=%q want=%q", got, test.want)
 			}
 		})

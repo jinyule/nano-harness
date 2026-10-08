@@ -185,17 +185,19 @@ func sourceLabel(rawURL, title string) string {
 // formatFetch renders a header, the converted body, and a truncation footer,
 // bounding both conversion input and complete output to limit UTF-16 units.
 // Cuts preserve UTF-8 and never split a supplementary character. truncated
-// reports the effective cut: by the provider, of the conversion input, or of
-// the complete output, which is exactly when the footer is added.
+// reports the effective cut: by the provider, of the conversion input, by the
+// converter's omission marker, or of the complete output, which is exactly when
+// the footer is added.
 func formatFetch(result appWeb.FetchResult, limit int) (text string, truncated bool) {
 	header := fmt.Sprintf("Fetched %s (HTTP %d)\n\n%s\n\n", result.URL, result.StatusCode, externalNotice)
 	body, sourceTruncated := utf16Prefix(result.Content, limit)
+	dropped := false
 	if result.Kind == appWeb.FetchHTML {
-		body = renderHTML(body)
+		body, dropped = renderHTML(body)
 	}
 	prefix := header + body
 	_, outputTruncated := utf16Prefix(prefix, limit)
-	if !result.Truncated && !sourceTruncated && !outputTruncated {
+	if !result.Truncated && !sourceTruncated && !outputTruncated && !dropped {
 		return prefix, false
 	}
 	if limit < len(fetchFooter) {

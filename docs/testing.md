@@ -154,7 +154,23 @@ TUI 测试覆盖 alternate-screen Bubble Tea v2 启停、初始 replay、event f
 
 `TestComposition_WebSearchAndFetchEndToEnd` 经真实 CLI config、settings 文件和 composition，让 loopback 模型在一步内调用 `web_search` 与 `web_fetch`：检索请求打到同一 Responses endpoint，抓取经注入 resolver 映射到 loopback 页面且只拨号已校验 IP；测试从磁盘 transcript 断言冻结的 schema、system prompt 指引、检索来源与 HTML 转换结果。`TestComposition_WebSearchUnconfiguredFailsClosed` 证明默认未配置时 `web_search` 返回 `WEB_PROVIDER_UNAVAILABLE` 且不联系 provider。
 
-`TestRenderHTML_MatchesUpstreamSemantics` 用表驱动 fixture 保存参考 `5badb15009ae` 的 Turndown/GFM 预期输出，覆盖删除线、任务状态、代码语言/围栏/空白、Markdown 字面量、隐式闭合与自闭合的隐藏元素、foreign content 与 integration point，以及误嵌套格式元素的重建；只归一化 ADR-0011 中的等价排版。与参考有意不同的样本分表记录参考的实际输出。`TestRenderHTML_OmitsAmplifiedTreeConstruction` 固定建树成本上限的两侧边界（恰好等于上限的输入必须转换），并要求四轮复审找到的全部放大向量输出省略标记：未闭合与显式闭合的格式元素、自闭合、noscript、单元格与 select 内被忽略的结束标签、raw text 内的注释吞并（含 breakout 后）、9 种 foreign raw-text 包装与 MathML title、adoption agency 的 8 轮残留与 `<a>` 克隆残留、属性复制放大，以及属性值内含 `<` 的不同签名；同一测试要求常见页面（3,000 个链接、文章、文档、表格、密集标记、宽字符文本、散落结束标签、隐式表格、属性值内含标记）全部在预算内。`TestConversionCost_BoundsParsedWeight` 是差分性质测试：对上述向量、常见页面、词法边界样本和 4,000 个生成样本断言「估算 ≥ 生产解析器实际建出的权重（元素计 1 加属性数，其他节点计 1）」，因此 `golang.org/x/net` 升级后若建树细节变化、上界不再成立，这个断言会失败。`TestConversionCost_ChargesWeightedFormatting` 固定模型各项的精确费用。`TestRenderHTML_StopsAtTheOutputBudget` 证明渲染在输出预算处停止、不切断 rune、丢弃其后内容并追加省略标记，且宽字符文本仍能填满 200,000 单元的输出预算；`TestRenderHTML_BoundsAmplifiedAllocation` 以分配字节数而非耗时断言放大样本在 4 MiB 内完成，修复前同一输入分配约 80 MB、其可见变体经渲染约 18.9 GiB。
+`TestRenderHTML_MatchesUpstreamSemantics` 用表驱动 fixture 保存参考 `5badb15009ae` 的 Turndown/GFM 预期输出，覆盖删除线、任务状态、代码语言/围栏/空白、Markdown 字面量、隐式闭合与自闭合的隐藏元素、foreign content 与 integration point，以及误嵌套格式元素的重建；只归一化 ADR-0011 中的等价排版。与参考有意不同的样本分表记录参考的实际输出。`TestRenderHTML_OmitsAmplifiedTreeConstruction` 固定建树成本上限的两侧边界（恰好等于上限的输入必须转换），要求四轮复审找到的全部放大向量输出省略标记并报告丢弃，包括在 SVG 子树内用注释、CDATA、引号属性值或 raw-text 内容藏起 `</svg>`、嵌套的 svg/math、breakout 与未闭合的 svg；同一测试要求常见页面（含 SVG 图标后接大量链接、链接间穿插图标、上千个小 svg、行内 MathML）全部在预算内且不丢弃正文。`TestConversionCost_BoundsParsedWeight` 是差分性质测试：对上述向量、常见页面、Fable 列出的 23 种注释／伪注释／raw text／引号值的结束形式和 4,000 个生成样本断言「估算 ≥ 生产解析器实际建出的权重（元素计 1 加属性数，其他节点计 1）」；生成样本会随机接上 100–1,000 个段落或 300 个链接的长尾，因为放大只在长尾之后显现。`golang.org/x/net` 升级后若解析器对 tokenizer 的回馈或建树细节变化、上界不再成立，这个断言会失败，但它只覆盖生成器能产生的形态，不能替代 ADR-0011 要求的 5 处调用点复核。`TestForeignEnd_ResumesOnlyPastEveryUncertainStretch` 固定精确 tokenizer 的恢复点：嵌套根、自闭合根、raw-text 内容、注释、CDATA 与引号值都只会把恢复点推后，找不到时按字节计价到结尾。`TestScanForeignTag_NeverUndercountsAttributes` 用 20,000 个生成标签对照 x/net tokenizer，证明子树内移植的标签读取器从不少计属性。`TestConversionCost_BoundsForeignRegionAllocation` 断言 1,024 个 svg 子树的扫描分配在 4 MiB 内，`TestConversionCost_ChargesWeightedFormatting` 固定模型各项的精确费用。`TestRenderHTML_StopsAtTheOutputBudget` 证明预算之内的正文完整保留且不报截断、超限时报告截断并追加省略标记、不切断 rune、丢弃其后内容，宽字符文本仍能填满 200,000 单元的输出预算，克隆长链接的捕获受剩余预算约束（分配上限 12 MiB，实测约 6.8 MB，不加约束约 23 MB），签名相同而嵌套很深的输入由捕获上限兜住，整页省略经 `formatFetch` 报告为截断；`TestRenderHTML_BoundsAmplifiedAllocation` 以分配字节数而非耗时断言放大样本在 4 MiB 内完成，修复前同一输入分配约 80 MB、其可见变体经渲染约 18.9 GiB。
+
+建树成本上限用下列页面快照标定，均按 200,000 个 UTF-16 单元截取后计算（快照不入库，SHA-256 前缀用于复现）。费用均在上限 262,144 之内，没有误省略；括号内为在"foreign 之后整页只增不减"方案下的结果。
+
+| 页面快照 | SHA-256 前缀 | 字节 | svg | 费用 | 实际权重 |
+|---|---|---:|---:|---:|---:|
+| developer.mozilla.org 的 table 元素文档 | `98ae23b3ce362936` | 247,443 | 8 | 120,161（262,567 省略） | 5,022 |
+| docs.python.org 的内置函数文档 | `2f0230656923fed1` | 318,871 | 1 | 33,227（262,720 省略） | 13,045 |
+| en.wikipedia.org 的 HTML 条目 | `6753bc58b865b586` | 798,587 | 0 | 22,024 | 8,296 |
+| github.com 的 golang/go 仓库页 | `7aa858248587e43c` | 303,460 | 61 | 8,417（262,182 省略） | 3,894 |
+| go.dev 的语言规范 | `7a0e32461098566b` | 341,470 | 0 | 18,996 | 9,749 |
+| news.ycombinator.com 首页 | `0d9da613f101608c` | 34,638 | 0 | 4,962 | 2,376 |
+| pkg.go.dev 的 net/http | `cb7706719c40cde2` | 482,331 | 1 | 17,524（262,860 省略） | 9,594 |
+| rfc-editor.org 的 RFC 9110 | `d431760660ea44e1` | 1,187,554 | 0 | 17,572 | 9,353 |
+| Go 1.27 发行版 doc/go_spec.html | `a249c493e0ad58cc` | 296,253 | 0 | 15,575 | 8,447 |
+| Go 1.27 发行版 doc/go_mem.html | `a7372b4f36c9525e` | 27,268 | 0 | 2,050 | 1,169 |
+| Go 1.27 发行版 doc/asm.html | `b9e2477834a9fdce` | 37,346 | 0 | 3,054 | 1,690 |
 
 `TestFormatFetch_MatchesUpstreamUTF16Budget` 固定 ASCII、汉字、emoji 和 provider footer 的完整预算边界。`TestProvider_FetchSpillsCompleteFormattedOutput` 组装真实 tool runtime、spill store 与 web tools，替换网络结果边界；从磁盘读取预览定位的文件，独立比较 100,000 个汉字的 300,119 字节结果和 Markdown 展开后达到/超过 200,000 单元的结果，证明保存发生在内联截断之前。
 
