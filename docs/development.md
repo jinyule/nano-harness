@@ -3,7 +3,7 @@
 ## 工具链基线
 
 - `go.mod` 声明最低兼容版本 Go 1.26。
-- `.go-version` / `.tool-versions` 固定主开发和 CI 工具链 Go 1.27.0。
+- `.go-version` / `.tool-versions` 固定主开发和 CI 工具链 Go 1.27.2。
 - golangci-lint 固定为 v2.12.2，GoReleaser 固定为 v2.17.1；工具升级使用独立依赖 PR。
 - 运行与测试需要 ripgrep 15.0.0 或更新版本，CI 固定 15.2.0，见 [ripgrep](#ripgrep)。
 - Linux 上的 confined bash 与其真实 sandbox 测试需要可用的 bubblewrap，见 [Linux sandbox](#linux-sandbox)。
