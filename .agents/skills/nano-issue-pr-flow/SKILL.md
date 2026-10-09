@@ -9,7 +9,7 @@ description: Use when taking a nano-harness defect, feature, or process change t
 
 ## 1. 开 issue
 
-先确认需要 issue：Dependabot 更新和维护者确认的纯机械变更可以免开，其余都开。
+先确认需要 issue：Dependabot 更新和维护者确认的纯机械变更可以免开，但纯机械变更要在 PR 中说明没开 issue 的原因；其余都开。
 
 `.github/ISSUE_TEMPLATE/` 下的模板是表单。用 `--body-file` 创建时，正文按模板字段写成 `### 字段名` 小节：
 
@@ -18,14 +18,15 @@ description: Use when taking a nano-harness defect, feature, or process change t
 - **research**：核心问题、证据标准、交付结论。
 
 ```bash
+gh label list
 gh issue create --title "fix: <现象>" --label bug --body-file <正文文件>
 ```
 
-标题沿用模板前缀（`fix: `、`feat: ` 等）。正文只写可复现的事实和验收条件，不写凭据、token 或本机账户信息。根因已经确认时一并写进去。
+用 `--body-file` 创建时不会自动套用模板的标签，要用 `--label` 自己加。标签以模板 `labels` 字段为准：bug 对应 `bug`，feature 对应 `enhancement`，research 对应 `research`。先用 `gh label list` 确认标签存在；不存在时不加 `--label`，并提醒维护者创建，不要临时换一个相近的标签。标题沿用模板前缀（`fix: `、`feat: ` 等）。正文只写可复现的事实和验收条件，不写凭据、token 或本机账户信息。根因已经确认时一并写进去。
 
 ## 2. 分支
 
-始终从最新的 main 开分支，不要在主仓库的 checkout 上开发：
+始终从最新的 main 开分支。推荐使用独立的 worktree，让主仓库的 checkout 保持在干净的 main 上：
 
 ```bash
 git fetch origin
@@ -74,6 +75,15 @@ CI 失败时：
 gh pr view <PR> --json headRefOid,mergeStateStatus
 gh pr checks <PR>
 ```
+
+分支保护要求 PR 基于最新的 main。`mergeStateStatus` 为 `BEHIND` 时，用不改写历史的方式把 main 合进分支，等 CI 重跑完，再读一次新的 `headRefOid`：
+
+```bash
+gh pr update-branch <PR>
+gh pr checks <PR> --watch --interval 60
+```
+
+不要为了追上 main 去 rebase 再 force push；改写历史仍然需要维护者授权，见第 4 步。有冲突时在本地合并 `origin/main` 解决，再按 fast-forward 推送。
 
 只有 `All checks passed` 为绿、`mergeStateStatus` 为 `CLEAN` 时才合并，并固定已验证的 head：
 
