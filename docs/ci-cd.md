@@ -35,7 +35,7 @@ Release build 也运行 `make mutation`，避免手动 tag 发布绕过已校准
 
 Go matrix 包含 `go.mod` 最低版本和 `.go-version` 主版本。最低版本使用 `GOTOOLCHAIN=local`，确保没有自动下载更高工具链掩盖兼容错误。
 
-golangci-lint v2.12.2 的 typechecker 不兼容 Go 1.27 标准库 `internal/poll` 的 `splicePipe` 定义，因此 lint lane 使用 Go 1.26.x；Go 1.27 的编译与 race tests 仍由独立 matrix lane 阻断。升级 lint 时必须先证明其可解析两个受支持工具链，再调整这一固定值。
+golangci-lint v2.12.2 的 typechecker 不兼容 Go 1.27 标准库 `internal/poll` 的 `splicePipe` 定义，也无法读取 Go 1.27.2 标准库的 export data（version 5，它最高支持 4），因此 lint lane 使用 Go 1.26.x；本地 `make lint` 与 `make quality` 通过 Makefile 的 `LINT_GOTOOLCHAIN`（当前 `go1.26.9`）在同一 Go 1.26 线上运行，首次运行时由 `GOTOOLCHAIN` 下载该工具链；Go 1.27 的编译与 race tests 仍由独立 matrix lane 阻断。升级 lint 时必须先证明其可解析两个受支持工具链，再调整这一固定值。
 
 ## Issue 与 PR 关联
 

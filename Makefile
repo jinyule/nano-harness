@@ -5,6 +5,8 @@ GOVULNCHECK_VERSION ?= v1.7.0
 GORELEASER_VERSION ?= v2.17.1
 LEFTHOOK_VERSION ?= v2.1.11
 DELVE_VERSION ?= v1.27.1
+# golangci-lint v2.12.2 cannot type-check the Go 1.27.2 standard library, so lint runs on the same Go 1.26 line as the CI lint lane.
+LINT_GOTOOLCHAIN ?= go1.26.9
 
 GO_FILES := $(shell find cmd internal -type f -name '*.go' 2>/dev/null)
 
@@ -40,7 +42,7 @@ vet: ## Run the Go vet analyzers.
 	$(GO) vet ./...
 
 lint: ## Run the pinned golangci-lint policy (requires make bootstrap).
-	golangci-lint run ./...
+	GOTOOLCHAIN=$(LINT_GOTOOLCHAIN) golangci-lint run ./...
 
 test: ## Run unit and package tests with the race detector.
 	$(GO) test -race -count=1 ./...
@@ -72,7 +74,7 @@ workflow-tools: ## Test deterministic repository workflow helpers.
 	python3 scripts/mutation-check_test.py
 
 quality: ## Report complexity and cross-package duplication (optional BASE_REF).
-	python3 scripts/quality-report.py $(if $(BASE_REF),--base "$(BASE_REF)")
+	GOTOOLCHAIN=$(LINT_GOTOOLCHAIN) python3 scripts/quality-report.py $(if $(BASE_REF),--base "$(BASE_REF)")
 
 quality-tests: ## Prove quality analyzer findings and infrastructure failures.
 	python3 scripts/quality-report_test.py
