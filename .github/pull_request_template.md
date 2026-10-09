@@ -1,4 +1,4 @@
-关联 Issue / ADR：
+关联 Issue / ADR（用 `Closes #N` 关联 issue）：
 
 ## 变更
 

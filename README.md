@@ -167,6 +167,7 @@ third_party/deepseek-harness/     固定提交的只读上游参考 submodule
 - `$nano-find-simplifications`：以生产调用点和 ownership 证据寻找可删除复杂度。
 - `$nano-doc-standards`：选择权威文档层级并保持代码事实同步。
 - `$nano-prose-standard`：保留完整契约并清理重复或视角不稳定的文字。
+- `$nano-issue-pr-flow`：开 issue，以 `Closes #N` 关联 PR，观察 CI，squash 合并并结案。
 
 例如：`使用 $nano-plugin-development 新增一个模型 provider`。各 skill 引用本仓真实脚本和规则；上游 submodule 中的 `dsh-*` skill 只用于研究。
 
