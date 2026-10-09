@@ -35,7 +35,7 @@ make build           # 从真实 cmd 入口构建并 smoke test
 
 ## 项目 Skills
 
-`.agents/skills/` 中的本地 skill 是以下任务的执行入口：运行时组件使用 `nano-plugin-development`；审查使用 `nano-code-review`；推送前使用 `nano-pre-push-checks`；非平凡改动记录使用 `nano-agent-notes`；简化调查使用 `nano-find-simplifications`；文档结构与文案分别使用 `nano-doc-standards` 和 `nano-prose-standard`。触发相关任务时先读对应 `SKILL.md`，但本文件和 `docs/` 仍是规则权威；skill 不得覆盖或放宽逐文件 100% coverage、Agent Note 和所有组件插件化要求。
+`.agents/skills/` 中的本地 skill 是以下任务的执行入口：运行时组件使用 `nano-plugin-development`；审查使用 `nano-code-review`；推送前使用 `nano-pre-push-checks`；非平凡改动记录使用 `nano-agent-notes`；简化调查使用 `nano-find-simplifications`；文档结构与文案分别使用 `nano-doc-standards` 和 `nano-prose-standard`；GitHub issue、PR、合并与结案使用 `nano-issue-pr-flow`。触发相关任务时先读对应 `SKILL.md`，但本文件和 `docs/` 仍是规则权威；skill 不得覆盖或放宽逐文件 100% coverage、Agent Note 和所有组件插件化要求。
 
 ## 架构
 
@@ -98,6 +98,7 @@ make build           # 从真实 cmd 入口构建并 smoke test
 - 构建阶段无发布凭据。发布仅允许从与版本匹配的 `v*` tag 手动触发，经 `github-release` Environment 审批后上传构建阶段产生且校验过哈希的同一批制品。
 - 解包或执行发布制品前校验完整文件集合与 SHA-256；上传前再次校验相同集合及 tag 版本。单纯检查文件数量或 checksum 列表不足以证明完整性。
 - 依赖、Action、Go 和工具版本由 Dependabot 或专门 PR 更新；更新必须通过完整 CI，不得用浮动 `latest` 作为发布输入。
+- 缺陷、功能和流程变更先开 issue，PR 以 `Closes #N` 关联，squash 合并后确认 issue 已关闭；规则见 [CI/CD](docs/ci-cd.md#issue-与-pr-关联)。
 
 ## 完成标准
 

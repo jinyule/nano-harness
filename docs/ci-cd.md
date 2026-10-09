@@ -37,6 +37,14 @@ Go matrix 包含 `go.mod` 最低版本和 `.go-version` 主版本。最低版本
 
 golangci-lint v2.12.2 的 typechecker 不兼容 Go 1.27 标准库 `internal/poll` 的 `splicePipe` 定义，也无法读取 Go 1.27.2 标准库的 export data（version 5，它最高支持 4），因此 lint lane 使用 Go 1.26.x；本地 `make lint` 与 `make quality` 通过 Makefile 的 `LINT_GOTOOLCHAIN`（当前 `go1.26.9`）在同一 Go 1.26 线上运行，首次运行时由 `GOTOOLCHAIN` 下载该工具链；Go 1.27 的编译与 race tests 仍由独立 matrix lane 阻断。升级 lint 时必须先证明其可解析两个受支持工具链，再调整这一固定值。
 
+## Issue 与 PR 关联
+
+- 缺陷、功能和流程变更都先开 GitHub issue，使用 `.github/ISSUE_TEMPLATE/` 中对应的 bug、feature 或 research 模板。issue 写明可观察现象或预期结果、复现或证据、验收条件，不包含凭据或 token。
+- PR 正文按 [PR 模板](../.github/pull_request_template.md) 填写，第一行用 `Closes #N` 关联 issue。审查和 CI 修复产生的新提交继续推到同一 PR，验证部分随之更新。
+- Dependabot 等自动依赖更新 PR 不需要 issue。维护者确认的纯机械变更可以不开 issue，但要在 PR 中说明。
+- 合并条件：`All checks passed` 为绿，review conversation 已解决，维护者同意合并。合并时固定已验证的 head：`gh pr merge <PR> --squash --match-head-commit <sha>`。squash subject 遵循 Conventional Commits 并带 PR 号。
+- 合并后：确认关联 issue 已关闭；关键字没有生效时手动关闭。在 issue 中补一条结案评论，写明合并提交和权威文档，然后观察 main 上的 CI。main 变红时开新 issue 和新 PR 修复，不在已合并的 PR 上追加。
+
 ## 分支保护
 
 `main-protection` repository ruleset 对默认分支强制：

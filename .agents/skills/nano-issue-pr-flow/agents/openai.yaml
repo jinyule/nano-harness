@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nano Issue 与 PR 流程"
+  short_description: "Open issues, link PRs, merge after CI, close issues"
+  default_prompt: "使用 $nano-issue-pr-flow 为当前缺陷开 issue，并完成 PR、合并与结案。"
